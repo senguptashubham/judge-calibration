@@ -1,0 +1,3 @@
+# Filled in at TASKS.md task 0.2. See CLAUDE.md sec 2 for the required keys
+# (temperature_canonical, temperature_sc, k_sc, logprobs, conditions, etc.)
+# and DECISIONS.md D6 for why temperature needs two keys, never one.

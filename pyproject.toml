@@ -1,0 +1,36 @@
+[project]
+name = "judge-calibration"
+version = "0.1.0"
+description = "Calibration and selective-evaluation study of Qwen2.5-7B-Instruct as an MT-Bench judge"
+requires-python = ">=3.11"
+dependencies = [
+    # TODO (task 0.1): these are intentionally unpinned right now. Run
+    # `pip install -e .` once in the `judge-calib` conda env, then `pip freeze`
+    # and copy the resolved versions back in here as exact `==` pins.
+    # CLAUDE.md sec 5 requires every dep pinned; a fabricated pin here would be
+    # worse than an honest TODO (same principle as DECISIONS.md D12).
+    "datasets",
+    "pandas",
+    "pyarrow",
+    "numpy",
+    "scikit-learn",
+    "matplotlib",
+    "pyyaml",
+    "pytest",
+]
+
+[project.optional-dependencies]
+# Colab only — never installed on the local dev machine (DECISIONS.md D17).
+# Pin the exact version the day you run task 1.2, per D11, and do not move it
+# again for the rest of the project.
+colab = [
+    "vllm",
+]
+
+[tool.setuptools]
+# src/ is imported as a flat package (`python -m src.data`, CLAUDE.md sec 7),
+# not a src/<package_name>/ layout.
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,22 @@
+# Project-specific: heavy/regenerable, and secrets (see CLAUDE.md sec 8, DECISIONS.md D17)
+runs/
+results/
+*.parquet
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# Environments
+.venv/
+venv/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
