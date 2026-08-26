@@ -4,19 +4,19 @@ version = "0.1.0"
 description = "Calibration and selective-evaluation study of Qwen2.5-7B-Instruct as an MT-Bench judge"
 requires-python = ">=3.11"
 dependencies = [
-    # TODO (task 0.1): these are intentionally unpinned right now. Run
-    # `pip install -e .` once in the `judge-calib` conda env, then `pip freeze`
-    # and copy the resolved versions back in here as exact `==` pins.
-    # CLAUDE.md sec 5 requires every dep pinned; a fabricated pin here would be
-    # worse than an honest TODO (same principle as DECISIONS.md D12).
-    "datasets",
-    "pandas",
-    "pyarrow",
-    "numpy",
-    "scikit-learn",
-    "matplotlib",
-    "pyyaml",
-    "pytest",
+    # Pinned from the first real `pip install -e .` resolve in the judge-calib
+    # conda env (2026-08-26). Only the 8 direct deps are pinned here, not the
+    # transitive closure pip freeze also reported (requests, tqdm, filelock,
+    # etc. come along automatically via datasets/pandas and don't need their
+    # own pins) — see CLAUDE.md sec 5 and DECISIONS.md D17.
+    "datasets==5.0.1",
+    "pandas==3.0.5",
+    "pyarrow==25.0.1",
+    "numpy==2.4.6",
+    "scikit-learn==1.9.0",
+    "matplotlib==3.11.1",
+    "pyyaml==6.0.3",
+    "pytest==9.1.1",
 ]
 
 [project.optional-dependencies]
