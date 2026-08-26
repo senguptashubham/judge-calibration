@@ -36,3 +36,8 @@ pip install -e ".[colab]"
 
 Not yet available. `TASKS.md` task 7.1 writes `REPRODUCE.md` with the exact
 commands and expected numbers once the study is complete.
+
+## License
+
+All rights reserved — see `LICENSE`. This is a private certification capstone,
+not an open-source release.
