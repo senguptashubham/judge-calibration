@@ -1,3 +1,29 @@
-# Filled in at TASKS.md task 0.2. See CLAUDE.md sec 2 for the required keys
-# (temperature_canonical, temperature_sc, k_sc, logprobs, conditions, etc.)
-# and DECISIONS.md D6 for why temperature needs two keys, never one.
+judge_model: Qwen/Qwen2.5-7B-Instruct
+dataset: lmsys/mt_bench_human_judgments
+
+# Provisional - this is preregistration decision D1, finalized in
+# PREREGISTRATION.md (task 0.10) after looking at the real vote-count
+# distribution at Gate 0. Not a considered methodological choice yet.
+tie_policy: drop_ties
+
+temperature_canonical: 0.0   # sample_idx = 0, greedy, reproducible (DECISIONS.md D6)
+temperature_sc: 0.7          # sample_idx = 1..k_sc (DECISIONS.md D6)
+k_sc: 4
+
+max_tokens: 512
+logprobs: 20                 # top-k logprobs per token; 20, not 5 (DECISIONS.md D4)
+
+conditions:                  # no 'swap' - order is orthogonal, not a condition (D5)
+  - clean
+  - verbose
+  - attribution
+
+seed: 1234
+n_bins: 10                   # default bin count for ece()'s auto strategy (D14)
+
+paths:
+  results_dir: results
+  runs_dir: runs
+  figures_dir: results/figures
+  calls_parquet: results/calls.parquet
+  items_parquet: results/items.parquet

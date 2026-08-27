@@ -9,13 +9,13 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 ## Week 0 · Aug 24–30 · 9h — Data reality check
 
-- [ ] **0.1 [C]** Init repo: `git init`, `.gitignore` (`runs/`, `results/`, `*.parquet`, `__pycache__`, `.env`, standard Python/editor entries), `pyproject.toml` (python ≥3.11), directory skeleton from `CLAUDE.md` §4.
+- [x] **0.1 [C]** Init repo: `git init`, `.gitignore` (`runs/`, `results/`, `*.parquet`, `__pycache__`, `.env`, standard Python/editor entries), `pyproject.toml` (python ≥3.11), directory skeleton from `CLAUDE.md` §4.
   **Dependencies split (D17):** base install — `datasets`, `pandas`, `pyarrow`, `numpy`, `scikit-learn`, `matplotlib`, `pyyaml`, `pytest` — has no `vllm`. An optional `colab` extra adds `vllm`, installed only on Colab (task 1.2). **All deps pinned to exact versions** (`==`, not `>=`) once resolved by a first `pip install`; `vllm`'s pin is chosen on Colab in task 1.2 per D11, not here.
   **Local environment (D17):** a dedicated conda env, `judge-calib` (`python=3.11`) — not the owner's general AI/ML conda env, so this project's pins can't be silently violated by an unrelated install.
   **Push to a GitHub remote** once the initial commit exists — this is how Colab gets the code in W1 (D17).
   **DoD:** `pytest` runs and collects 0 tests without error. `git log` has one commit, pushed to a GitHub remote. Every base-install dep in `pyproject.toml` has an `==` pin.
 
-- [ ] **0.2 [C]** `configs/run.yaml` + a `Config` dataclass loader in `src/config.py`.
+- [x] **0.2 [C]** `configs/run.yaml` + a `Config` dataclass loader in `src/config.py`.
   Keys: `judge_model`, `dataset`, `tie_policy`, **`temperature_canonical: 0.0`**, **`temperature_sc: 0.7`**, **`k_sc: 4`**, `max_tokens`, `logprobs: 20`, **`conditions: [clean, verbose, attribution]`** (no `swap` — D5), `seed`, `n_bins`, `paths`.
   ⚠️ There must be **no single `temperature` key**. One key would make all k draws identical and `conf_sc` a dead constant (D6).
   **DoD:** `Config.from_yaml()` round-trips. A test asserts `temperature_sc > 0` and that `"swap"` is not in `conditions`.
