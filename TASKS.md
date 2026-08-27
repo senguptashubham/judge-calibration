@@ -20,10 +20,10 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   ⚠️ There must be **no single `temperature` key**. One key would make all k draws identical and `conf_sc` a dead constant (D6).
   **DoD:** `Config.from_yaml()` round-trips. A test asserts `temperature_sc > 0` and that `"swap"` is not in `conditions`.
 
-- [ ] **0.3 [L]** Read Guo et al. §§1–4.2 (`LEARNING.md` A1).
+- [x] **0.3 [L]** Read Guo et al. §§1–4.2 (`LEARNING.md` A1).
   **DoD:** you can write the ECE formula from memory and say why temperature scaling can't change accuracy.
 
-- [ ] **0.4 [C]** Implement `src/metrics.py::ece(confidences, correct, n_bins, strategy)` supporting `strategy ∈ {"uniform", "quantile", "auto"}`, defaulting to `"auto"`. Docstring states the formula, why quantile beats uniform here, and why unique-value binning is **exact** for a discrete signal rather than a fallback.
+- [x] **0.4 [C]** Implement `src/metrics.py::ece(confidences, correct, n_bins, strategy)` supporting `strategy ∈ {"uniform", "quantile", "auto"}`, defaulting to `"auto"`. Docstring states the formula, why quantile beats uniform here, and why unique-value binning is **exact** for a discrete signal rather than a fallback.
   **`"auto"`:** if `n_unique(conf) <= n_bins` → bin by unique value; else quantile with duplicate edges dropped. **Returns `(ece, n_effective_bins)`** (D14).
   **DoD:** `test_ece_reference` passes on the hand-computed case in `CLAUDE.md` §5 (**0.222**, tol 1e-3). Plus `test_ece_discrete`: on a 5-level signal like `conf_sc` with `n_bins=10`, returns `n_effective_bins == 5` and does **not** raise on tied quantile edges.
 
