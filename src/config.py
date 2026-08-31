@@ -35,6 +35,7 @@ class Config:
     max_tokens: int
     logprobs: int
     conditions: list[str]
+    prompt_variants: list[str]
     seed: int
     n_bins: int
     paths: Paths
@@ -54,6 +55,19 @@ class Config:
                 "'swap' is not a valid condition - order (AB/BA) is an "
                 "orthogonal axis collected within every condition, not a "
                 "condition itself (DECISIONS.md D5)."
+            )
+        # attribution is cut entirely, not a drop-order contingency. See D18.
+        if "attribution" in self.conditions:
+            raise ValueError(
+                "'attribution' was dropped as a condition on 31 Aug 2026 "
+                "(DECISIONS.md D18) - it is not coming back via config."
+            )
+        # P1 is primary and RQ1-RQ4 use it alone; it must always be present.
+        # See DECISIONS.md D19, D20.
+        if "P1" not in self.prompt_variants:
+            raise ValueError(
+                "prompt_variants must include 'P1' - it is the primary "
+                "variant RQ1-RQ4 use alone (DECISIONS.md D19, D20)."
             )
 
     @classmethod

@@ -13,10 +13,14 @@ k_sc: 4
 max_tokens: 512
 logprobs: 20                 # top-k logprobs per token; 20, not 5 (DECISIONS.md D4)
 
-conditions:                  # no 'swap' - order is orthogonal, not a condition (D5)
+conditions:                  # no 'swap' (D5); no 'attribution' - cut entirely (D18)
   - clean
   - verbose
-  - attribution
+
+prompt_variants:              # orthogonal axis, like order (D19). P1 is primary -
+  - P1                        # RQ1-RQ4 use it alone. P2/P3 only exist for 'clean'.
+  - P2
+  - P3
 
 seed: 1234
 n_bins: 10                   # default bin count for ece()'s auto strategy (D14)

@@ -2,7 +2,7 @@
 
 Three lists. Everything has a **week**, a **time cost**, and an **extraction target** — what you must be able to do afterwards. If you can't do the extraction target, the item isn't done.
 
-Total: ~13h theory + ~5h courses ≈ **18h across 7 weeks**, interleaved with build work. Do not front-load it.
+Total: ~18h theory (was ~13h — 31 Aug 2026 professor feedback added Bayesian/NumPyro, hierarchical models, BALD, and distillation, `PLAN.md` §5) + ~5h courses ≈ **23h across 7 weeks**, interleaved with build work. Do not front-load it.
 
 ---
 
@@ -16,7 +16,7 @@ Total: ~13h theory + ~5h courses ≈ **18h across 7 weeks**, interleaved with bu
 
 **A2 · Zheng et al. 2023, *Judging LLM-as-a-Judge (MT-Bench)*** — §§3, 4 + Tables 2, 4, 5 · 1.5h · **W0**
 > **Memorise these numbers, you will be asked:** GPT-4 position-swap consistency **65%**; Claude-v1 **23.8%**; "repetitive list" verbosity attack fools Claude-v1/GPT-3.5 **91.3%** of the time, GPT-4 **8.7%**; GPT-4↔human agreement **85%** (non-tie), human↔human **81%**.
-> **Extract:** the S1/S2 setup distinction (with vs without ties) and which one your primary analysis matches. Note that they *could not* establish self-enhancement bias in a controlled study — that's why your self-preference probe became an attribution probe.
+> **Extract:** the S1/S2 setup distinction (with vs without ties) and which one your primary analysis matches. Note that they *could not* establish self-enhancement bias in a controlled study — that's why your self-preference probe became an attribution probe, and (31 Aug 2026, D18) why that probe was later cut from scope entirely. The historical reasoning is still worth knowing; the probe itself didn't survive.
 
 **A3 · Tian et al. 2023, *Just Ask for Calibration*** · 1h · **W1**
 > **Extract:** why verbalized confidence beats conditional logprobs for RLHF'd models — and that the effect is **much weaker for Llama-2-70B-Chat**, i.e. do not assume verbalized wins on your open-weight judge.
@@ -45,6 +45,14 @@ Total: ~13h theory + ~5h courses ≈ **18h across 7 weeks**, interleaved with bu
 
 **A10 · [Meta-Judges](https://arxiv.org/html/2504.17087v1), Apr 2025** · 20m · **W5** — rubric-based LLM meta-judging, trains nothing.
 > **Extract:** the gap your RQ4 sits in — the field reaches for another LLM, not a cheap supervised model.
+
+### RQ5 positioning (added 31 Aug 2026, professor feedback — D23)
+
+**A11 · Auto-Prompt Ensemble for LLM Judge, Oct 2025** · 30m · **W1** — same Qwen2.5-7B/MT-Bench setup as this project. Closest prior work to RQ5.
+> **Extract:** how they aggregate across prompt variants, and what's different about doing it through a Bayesian meta-model instead of a raw ensemble average — that gap is this project's contribution.
+
+**A12 · Calibrating MLLM-as-a-Judge via Multimodal Bayesian Prompt Ensembles, ICCV 2025** · 30m · **W1**
+> **Extract:** neither this paper nor A11 decomposes entropy into aleatoric/epistemic, and neither validates against real repeated human votes — that combination (D23) is RQ5's actual contribution. Be ready to say this precisely, not just cite the papers.
 
 ---
 
@@ -122,22 +130,43 @@ Each block ends in code, not notes. If there's no artifact, it didn't happen.
 **C8 · Conformal prediction** · 2h · **W6, optional**
 > Split conformal, exchangeability, marginal vs conditional coverage. **Enough to defend the extensions slide and discuss SCOPE intelligently. Do not start implementing it.**
 
+### Added 31 Aug 2026, professor feedback (D20, D22, D23) — PLAN.md §5 calls these Blocks I, J, K, L
+
+**C9 · Bayesian inference + NumPyro/NUTS basics** · 2h · **W1** · *(Block I, pairs with task 1.3b)*
+> **Build:** fit a toy hierarchical logistic regression in NumPyro on synthetic data with a known group effect; recover it from the posterior.
+> **Extract:** NUTS samples the posterior over parameters via Hamiltonian dynamics, not a point estimate. A hierarchical model's group-level intercepts shrink toward the population mean (partial pooling) — say in one sentence why that's exactly the right tool for ~80 groups, not a workaround forced on you by a small N.
+
+**C10 · Hierarchical / partial-pooling models, held-out marginalization** · 1h · **W5** · *(Block J, pairs with task 5.1b/5.9b)*
+> **Build:** extend C9's toy model — fit on groups 1–8, hold out groups 9–10, and show that predicting on the held-out groups using their *own* (never-seen) fitted intercept gives a different, optimistic answer than drawing from the population prior (`α_q_new ~ Normal(0, σ_q)`), which is correct.
+> **Extract:** why conditioning on a held-out group's own fitted intercept is a leak — structurally identical to `GroupKFold` leaking when it's not shuffled (D8). This is the single most likely way the Bayesian arm's numbers end up quietly too good.
+
+**C11 · BALD / mutual information (entropy decomposition)** · 1h · **W3** · *(Block K, pairs with task 3.4c/2.2b)*
+> **Build:** on a toy 3-member ensemble with known per-member probabilities, compute Total/Aleatoric/Epistemic by hand and verify Epistemic = Total − Aleatoric matches the mutual-information formula.
+> **Extract:** epistemic uncertainty is the mutual information between the prediction and *which ensemble member (or parameter draw) produced it* — high when members disagree with each other, zero when they're all confidently identical. A position-biased judge maximizing `conf_bpe`'s entropy is the same phenomenon in miniature (SCOPE, A5).
+
+**C12 · Distributional distillation** · 1h · **W5** · *(Block L, pairs with task 5.9d)*
+> **Build:** compare a synthetic teacher ensemble's predictive spread (mean *and* variance) against a cheap single-draw student's own spread — a two-moment comparison, not a formal KD loss fit; this project doesn't need the latter.
+> **Extract:** be precise about what "distillation" means in RQ5 specifically — whether the single-call Bayesian model's own posterior spread resembles the expensive ensemble's actual spread, not whether an LLM got fine-tuned (it doesn't). "Distillation" is used loosely across the literature; know exactly what you mean by it here.
+
 ---
 
 ## D. Progress tracker
 
 | | Item | Week | Time | Done |
 |---|---|---|---|---|
-| A1 | Guo et al. §§1–4.2 | W0 | 1.5h | ☐ |
-| A2 | MT-Bench §§3–4 + tables | W0 | 1.5h | ☐ |
-| C1 | `ece()` + reliability diagram | W0 | 3h | ☐ |
-| C2 | `cohens_kappa()` by hand | W0 | 1.5h | ☐ |
+| A1 | Guo et al. §§1–4.2 | W0 | 1.5h | ☑ |
+| A2 | MT-Bench §§3–4 + tables | W0 | 1.5h | ☑ |
+| C1 | `ece()` + reliability diagram | W0 | 3h | ☑ |
+| C2 | `cohens_kappa()` by hand | W0 | 1.5h | ☑ |
 | B5 | Claude Code course *(optional)* | W0 | 2h | ☐ |
 | B1 | Structured LLM Output | W1 | 1h21m | ☐ |
 | B2 | vLLM L3/6/7/8 + vLLM docs | W1 | 1h15m | ☐ |
 | A3 | Tian et al. | W1 | 1h | ☐ |
 | A4 | Xiong et al. | W1 | 1.5h | ☐ |
 | C3 | `signals.py` + docstrings | W1 | 2h | ☐ |
+| **A11** | **Auto-Prompt Ensemble for LLM Judge** | **W1** | **30m** | ☐ |
+| **A12** | **Bayesian Prompt Ensembles (ICCV 2025)** | **W1** | **30m** | ☐ |
+| **C9** | **Bayesian inference + NumPyro/NUTS basics** | **W1** | **2h** | ☐ |
 | A8 | Dark Current | W2 | 30m | ☐ |
 | A6 | Reliability without Validity | W2 | 30m | ☐ |
 | C4 | ECE⊥AUROC counterexample | W2 | 1h | ☐ |
@@ -146,8 +175,11 @@ Each block ends in code, not notes. If there's no artifact, it didn't happen.
 | A5 | SCOPE | W3 | 45m | ☐ |
 | C6 | `risk_coverage()` + oracle | W3 | 1.5h | ☐ |
 | C7 | human-disagreement split | W3 | 1h | ☐ |
+| **C11** | **BALD / mutual information** | **W3** | **1h** | ☐ |
 | A9 | Know When You're Wrong | W5 | 20m | ☐ |
 | A10 | Meta-Judges | W5 | 20m | ☐ |
+| **C10** | **Hierarchical models, held-out marginalization** | **W5** | **1h** | ☐ |
+| **C12** | **Distributional distillation** | **W5** | **1h** | ☐ |
 | B3 | Gradio | W6 | 59m | ☐ |
 | B4 | Evaluating AI Agents L2/11/13 *(opt)* | W6 | 18m | ☐ |
 | C8 | Conformal prediction *(opt)* | W6 | 2h | ☐ |

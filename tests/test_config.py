@@ -25,7 +25,8 @@ def _config(**overrides) -> Config:
         k_sc=4,
         max_tokens=512,
         logprobs=20,
-        conditions=["clean", "verbose", "attribution"],
+        conditions=["clean", "verbose"],
+        prompt_variants=["P1", "P2", "P3"],
         seed=1234,
         n_bins=10,
         paths=_paths(),
@@ -57,3 +58,13 @@ def test_temperature_sc_must_be_positive():
 def test_swap_condition_is_rejected():
     with pytest.raises(ValueError):
         _config(conditions=["clean", "swap"])
+
+
+def test_attribution_condition_is_rejected():
+    with pytest.raises(ValueError):
+        _config(conditions=["clean", "verbose", "attribution"])
+
+
+def test_prompt_variants_must_include_p1():
+    with pytest.raises(ValueError):
+        _config(prompt_variants=["P2", "P3"])

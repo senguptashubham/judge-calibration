@@ -17,6 +17,11 @@ dependencies = [
     "matplotlib==3.11.1",
     "pyyaml==6.0.3",
     "pytest==9.1.1",
+    # Added 31 Aug 2026 for the Bayesian hierarchical model (DECISIONS.md
+    # D22, D24). CPU-only - jax is numpyro's own dependency, no GPU/Colab
+    # extra needed since this runs as local analysis, not inference.
+    "numpyro==0.21.0",
+    "arviz==0.23.4",
 ]
 
 [project.optional-dependencies]

@@ -1,3 +1,4 @@
-# Filled in at TASKS.md task 0.2. Conditions: clean, verbose, attribution,
-# vacuum. No 'swap' condition — order (AB/BA) is an orthogonal axis, not a
-# condition. See DECISIONS.md D5.
+# Filled in at TASKS.md task 0.2. Conditions: clean, verbose, vacuum.
+# No 'swap' condition - order (AB/BA) is an orthogonal axis, not a
+# condition (DECISIONS.md D5). No 'attribution' - cut entirely, not a
+# drop-order contingency (DECISIONS.md D18, 31 Aug 2026).

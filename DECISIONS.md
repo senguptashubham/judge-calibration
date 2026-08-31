@@ -1,6 +1,6 @@
 # DECISIONS.md — resolutions from the Week-0 design review
 
-Fourteen decisions, D4–D17, resolving the review findings. Each is binding; copy the ones marked ⚑ into `PREREGISTRATION.md` before Gate 1.
+Twenty-one decisions, D4–D24, resolving the review findings and (D18 onward) integrating the professor's 31 Aug 2026 feedback (`PROFESSORFEEDBACK.md`). Each is binding; copy the ones marked ⚑ into `PREREGISTRATION.md` before Gate 1.
 
 Verdict on the review: **eight of ten findings were correct.** #1, #2 and #3 each would have cost a full re-run. #2 turned out to save GPU time rather than cost it. Two findings needed a stronger fix than proposed (#4, #5) and one revealed a second bug underneath it (#3). Nothing was wrong.
 
@@ -17,6 +17,7 @@ Verdict on the review: **eight of ten findings were correct.** #1, #2 and #3 eac
 2. **`SamplingParams(logprobs=20)`**, not 5. Entropy over top-5 is severely truncated.
 3. **A 10% raw sidecar.** For every call where `hash(item_id) % 10 == 0`, dump the full per-token top-20 logprobs to `runs/logprobs_sample/*.jsonl.gz`. Insurance against wanting a statistic you didn't anticipate; full capture for every call is not worth the storage.
    **Sizing, done properly:** ~350 CoT tokens × 20 pairs × ~20 bytes ≈ **140KB per call**; 10% of 18,000 calls = 1,800 calls ≈ **250MB raw, ~70MB gzipped**. **Write it gzipped** — `jsonl.gz`, not `jsonl`. (An earlier draft of this line said "well under 200MB" without doing the multiplication; raw is 250MB.)
+   **Updated 31 Aug 2026 (D19):** the total generation count dropped from 18,000 to 12,000. 10% is now 1,200 calls ≈ **170MB raw, ~48MB gzipped**. The policy (10% sample, gzipped) is unchanged — only the illustrative arithmetic moved with the new schedule.
 
 **Two caveats to preregister, not discover:**
 
@@ -235,4 +236,114 @@ Not a bug found in the design — a workflow question the owner raised before st
 - **Colab still gets its own fresh `venv`, per D11** — unrelated to the local conda env, since Colab's preinstalled `torch` conflicts with vLLM's pinned `torch`. Colab installs `pip install -e ".[colab]"` inside that fresh venv, never the system Python.
 - **A GitHub remote carries code between the two.** Commit and push locally; `git clone`/`git pull` in Colab at the start of each session. This is the only way Colab sees the latest `src/` changes.
 - **`runs/` and `results/` stay gitignored — git is never the bridge for generated data.** Move `calls.parquet` and checkpoint files back from Colab via a Drive-mounted folder or direct download, not by trying to commit them.
+
+---
+
+## D18 — `attribution` condition is dropped entirely *(professor feedback, 31 Aug 2026)*
+
+**Decision:** `attribution` is removed from the condition vocabulary. Conditions become **`clean`, `verbose`** (`vacuum` stays, untouched, as the separate small sanity check). This is not the drop-order contingency it used to be (`PLAN.md` sec 4 used to list it as item 4) — it is now unconditional, not something to cut only if behind schedule.
+
+**Consequences:**
+- `configs/run.yaml`'s `conditions` list drops `attribution`.
+- `src/perturb.py` (task 4.1) builds only `verbose_pad()`, not `attribution()`.
+- RQ3b (task 4.4) becomes verbosity-only.
+- Transfer test 1 (task 5.7) becomes clean→verbose only.
+- **D13 is superseded by this decision.** It resolved a naming problem for a condition that no longer exists. Left in place above, not deleted, for the audit trail — the same treatment every earlier decision that got overtaken has received.
+
+---
+
+## D19 — Prompt ensemble: new axis, new schedule *(professor feedback, point 3)*
+
+**Decision:** three frozen, hashed prompt variants — **`P1`** (the existing MT-Bench template, primary; RQ1–RQ4 use this alone), **`P2`** (correctness-first rubric), **`P3`** (helpfulness-first rubric). `prompt_variant` becomes a new axis in `calls.parquet`, orthogonal to `condition` and `order` — exactly the role `order` already plays after D5.
+
+**New per-item schedule, superseding D5's and D12's numbers:**
+
+| condition | variant | sampling | orders | calls |
+|---|---|---|---|---|
+| clean | P1 | greedy | AB, BA | 2 |
+| clean | P1 | sampled ×4 | AB only | 4 |
+| clean | P2, P3 | greedy | AB, BA | 4 |
+| verbose | P1 | greedy | AB, BA | 2 |
+
+**12 calls/item**, down from 18 under the old 3-condition × 6-call schedule (D5's arithmetic). At N=1000, that's **12,000 generations**, down from 18,000. `vacuum` (task 1.8) stays outside this table entirely — unchanged.
+
+Note where this actually lands in the week plan: rows 1+2+3 (clean, all variants — 10 calls/item) belong with the **existing Week 2 clean run** (task 2.1), since P2/P3 are a property of judging the *clean* comparison three ways, not a perturbation. Row 4 (verbose/P1 — 2 calls/item) stays in **Week 4** alongside `verbose_pad()`. Collecting P2/P3 in W4 instead of W2 would be a mistake — they have nothing to do with the verbose perturbation.
+
+D5 and D12's own *reasoning* (order is an axis, not a condition; budget the units, not the hours) stays correct — only the concrete numbers they computed are superseded here, because the schedule now has a third axis that didn't exist when D5/D12 were written.
+
+---
+
+## D20 — `conf_ens`, judge-level entropy decomposition, and the schema break it causes *(professor feedback, points 3, 4, 5)*
+
+**Decision — `conf_ens` and its decomposition.** Computed across the P1/P2/P3 ensemble's greedy `p_a` values for a `clean` item (uniform prior over the three variants):
+
+- **Total** = H[mean(p_a across P1, P2, P3)]
+- **Aleatoric** = mean(H[p_a] for each of P1, P2, P3)
+- **Epistemic** = Total − Aleatoric (mutual information / BALD)
+
+`conf_ens = 1 − Total`, matching `conf_bpe`'s existing `1 − entropy` convention (SCOPE, 2026) — but now all three quantities are stored, not just the scalar. **Never report "uncertainty" unqualified once this exists — always name which of the three.**
+
+**⚠️ This changes `items.parquet`'s grain.** It was one row per `(item_id, condition)`; it becomes one row per **`(item_id, condition, prompt_variant)`**, since P2/P3 have their own verdicts and confidences. **Every RQ1–RQ4 analysis script must add an explicit `prompt_variant == "P1"` filter wherever it reads `items.parquet`**, or P2/P3 rows silently inflate every sample size and every RQ1–RQ4 headline number is wrong. This gets its own numbered invariant in `CLAUDE.md` (not just a mention) — it is the single easiest thing to get wrong in this whole update.
+
+`conf_bpe` and `flipped`'s "within this condition" language extends to "within this `(condition, prompt_variant)` pair" — P2/P3 also get both orders at greedy (D19's schedule), so they technically support their own `conf_bpe` too, even though RQ1–RQ4 don't use it.
+
+**`conf_ens` (and its three components) exist only for `clean` items** — `verbose` never collects P2/P3, so there is nothing to decompose there. This matters again in D21.
+
+**Decision — threshold-sweep extension to `risk_coverage()` (point 5).** The existing `risk_coverage()`/`aurc()` machinery (built for RQ2, task 3.1) is extended to sweep **raw threshold values** of total/aleatoric/epistemic entropy separately, not just percentile-based coverage, and to report **ECE on the retained set** at every threshold, not just accuracy/κ — "reliability" is the calibration term in the Brier decomposition, so accuracy alone doesn't answer the question asked. **Preregistered prediction:** epistemic thresholding beats total thresholding, because epistemic is the reducible part; aleatoric reflects genuine task ambiguity that no amount of re-asking resolves.
+
+---
+
+## D21 — Two signals are clean-only: the transfer test and the verbose-shift check both need a fix *(found while resolving D19/D20)*
+
+Self-consistency sampling and the P2/P3 ensemble both only happen for `clean` under D19's schedule. Previously `verbose` had its own `conf_sc`; now it has neither `conf_sc` **nor** `conf_ens` (nor its total/aleatoric/epistemic components) — there is no ensemble to decompose with only one prompt variant present.
+
+**Consequences:**
+- RQ3b's paired clean→verbose comparison is dropped for `conf_sc` and for `conf_ens` specifically — no data exists for either on `verbose`. `conf_verb`, `conf_lp`, `conf_bpe` are unaffected (each only needs the greedy call, still collected for `verbose`).
+- **Transfer test 1 (task 5.7)** trains on `clean` (has both signals) and evaluates on `verbose` (has neither) — a feature-parity break, not just a missing comparison.
+- **The new verbose-shift validation** (professor feedback "consequences": train the Bayesian model on `clean`, check that epistemic uncertainty rises on `verbose` while aleatoric stays flat) hits the identical break, for the identical reason.
+
+**Decision:** both the transfer test and the verbose-shift validation use **Tier A minus `{conf_sc, conf_ens, conf_ens_total, conf_ens_aleatoric, conf_ens_epistemic}`** as their feature set — for every model (LogReg, HistGBM, and the Bayesian model alike), not a Bayesian-specific carve-out. Tier B and Tier C are untouched (they come from per-call data `verbose` does have). Document this exception explicitly in tasks 5.7 and the new verbose-shift task, and in `REPORT.md`'s limitations section — it must never be silently imputed or left to produce NaN.
+
+Note what this implies for the verbose-shift check specifically: the "epistemic rises under shift" prediction is tested via the **Bayesian meta-model's own posterior-based decomposition** (D22), not via `conf_ens` (which is undefined for `verbose`). This is exactly the distinction the two entropy-decomposition levels exist to support (D20 = judge-level, D22 = meta-model-level) — this check is inherently a meta-model-level one, since it's asking whether a *predictive model* correctly signals its own reduced confidence outside its training distribution.
+
+---
+
+## D22 — Bayesian hierarchical logistic regression joins RQ4 *(professor feedback, points 1, 4)*
+
+**Decision:** add a third model to RQ4, alongside the existing `LogisticRegression` (kept as the frequentist baseline) and `HistGradientBoostingClassifier` (kept — it tests nonlinearity, a different axis from what the Bayesian model tests; nothing in the feedback cuts it):
+
+```
+correct ~ Bernoulli(σ(α + α_q[question] + Xβ))
+α_q ~ Normal(0, σ_q),  σ_q ~ HalfNormal(1),  β ~ Normal(0, 1)
+```
+
+Fit with NumPyro/NUTS. **Fallback ladder, preregistered, not improvised mid-week:** NUTS → Laplace approximation (MAP via sklearn, Gaussian from the Hessian at the optimum) → bootstrap ensemble of logistic regressions. All three produce posterior-like samples; nothing downstream changes based on which rung is used, except that the rung actually used must be stated in `REPORT.md`.
+
+**Head-to-head table** (frequentist LogReg vs Bayesian): AUROC, ECE, Brier, NLL, 90% credible-interval coverage — the last two exist only for the Bayesian model, since the frequentist model has no native posterior. Computed under the **same `StratifiedGroupKFold(5)` × 10-seed protocol as the frequentist model (D8)** — the hierarchical structure does not replace that CV protocol, it lives alongside it.
+
+**⚠️ Held-out random-intercept marginalization is mandatory, not automatic.** In hierarchical-model cross-validation, a held-out question's `α_q` must be marginalized over the *population-level* prior (`α_q_new ~ Normal(0, σ_q)`), never the value that question would have fitted to had it been in the training fold. Getting this wrong leaks exactly the way plain `GroupKFold` leaks — precisely the failure D8 already exists to prevent for the frequentist model. **A test must assert this** (`test_bayesian.py`, or an addition to `test_predictor.py`), mirroring D8's "two seeds must produce different folds" test.
+
+**Mandatory convergence diagnostics.** A Bayesian result without R-hat, effective sample size, and a divergence count is unreportable — this is the Bayesian-model equivalent of invariant #12's permutation null: never optional, always printed alongside the headline number. **R-hat requires ≥2 chains to compute at all** — it compares between-chain to within-chain variance, so `MCMC(..., num_chains=1)` silently returns `NaN` for every parameter (confirmed empirically: `arviz.summary()` on a single-chain NumPyro fit returns `NaN` R-hat with no error or warning about *why*). Use `num_chains=2` at minimum for every fold-fit, not just a final "official" run.
+
+**Runtime, measured not guessed (same principle as D12):** the existing protocol is 5 folds × 10 seeds = 50 fits. Measure how long 50 NUTS runs actually take before committing to the full 10-seed repeat count for the Bayesian arm specifically; if it's too slow, reduce that arm's repeat count and preregister the reduction rather than discovering the problem mid-W5.
+
+**Invariant 11 is reworded, not overturned.** Its original justification — "~80 groups, indefensible at this N" — is exactly the problem hierarchical partial-pooling models exist to solve. The permitted model set becomes `LogisticRegression`, `HistGradientBoostingClassifier`, and the Bayesian hierarchical logistic regression above. "No neural nets, no hyperparameter tuning" still holds for all three.
+
+---
+
+## D23 — RQ5: prompt distillation and the human-disagreement validation *(professor feedback, points 2, 4; "consequences" section)*
+
+**New research question.** RQ5: does marginalizing over the prompt (the P1/P2/P3 ensemble) produce a better uncertainty estimate than any single prompt, and how much of that benefit survives distillation to single-call cost?
+
+**Decision — distillation framing.** The ensemble's **predictive distribution** (not just its mean) is the teacher; the Bayesian meta-model (D22), trained on **single-call, P1-only** features, is the student. No LLM fine-tuning — this is purely about whether the cheap single-call model's own posterior predictive spread resembles the expensive 3-call ensemble's actual spread. Headline metric: how much of the ensemble's benefit (in AUROC/ECE/entropy quality) survives at 1 call vs 3.
+
+**Decision — validate the decomposition against human disagreement.** MT-Bench's repeated human votes give a real, model-free measure of how contested each item genuinely is (`d_human`, D9). Test whether the **judge-level estimated aleatoric** signal (D20) is high specifically where humans actually disagreed, and epistemic is not. This reuses existing infrastructure (`d_human`/H4) rather than building new statistical machinery — it validates the *existing* aleatoric/epistemic vocabulary against an independent signal, which is stronger than either alone. This analysis runs on `clean`/P1 rows only (where `conf_ens`'s components exist), consistent with D20's P1-filter.
+
+**Positioning:** closest prior work is *Auto-Prompt Ensemble for LLM Judge* (Oct 2025, same Qwen2.5-7B/MT-Bench setup) and *Calibrating MLLM-as-a-Judge via Multimodal Bayesian Prompt Ensembles* (ICCV 2025) — neither decomposes entropy into aleatoric/epistemic, and neither validates against real human votes. That combination is RQ5's actual contribution.
+
+---
+
+## D24 — New dependencies: local, not Colab *(professor feedback, mechanical consequence of D22)*
+
+**Decision:** `numpyro` (+ its `jax` dependency, CPU-only — no GPU needed for a hierarchical logistic regression at this N) and `arviz` (for the convergence diagnostics D22 makes mandatory) go into `pyproject.toml`'s **base install**, not the `colab` extra. Fitting the Bayesian model is analysis work on already-collected data, consistent with the existing framing that RQ4 costs zero extra GPU time (`PLAN.md` sec 1) — it runs on the same local `judge-calib` conda env as everything else in `src/` except `judge.py` (D17).
 
