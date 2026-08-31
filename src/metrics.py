@@ -1,13 +1,12 @@
 """Calibration and agreement metrics. See TASKS.md tasks 0.4, 0.6, 2.5, 3.1."""
 
-from collections.abc import Sequence
-
 import numpy as np
+import numpy.typing as npt
 
 
 def ece(
-    confidences: Sequence[float],
-    correct: Sequence[bool],
+    confidences: npt.ArrayLike,
+    correct: npt.ArrayLike,
     n_bins: int,
     strategy: str = "auto",
 ) -> tuple[float, int]:
@@ -122,3 +121,52 @@ def _quantile_edges(confidences: np.ndarray, n_bins: int) -> np.ndarray:
     edges = np.unique(raw_edges)
     edges[-1] += 1e-9
     return edges
+
+
+def cohens_kappa(a: npt.ArrayLike, b: npt.ArrayLike) -> float:
+    """Cohen's kappa: chance-corrected agreement between two raters.
+
+    kappa = (p_o - p_e) / (1 - p_e)
+
+    p_o is raw observed agreement: the fraction of items where a and b give
+    the same label. p_e is the agreement expected by chance alone, computed
+    from each rater's own marginal label distribution, independently of the
+    other rater and independently of the joint agreement pattern:
+
+        p_e = sum over every label c seen in EITHER a or b of P_A(c) * P_B(c)
+
+    This is why kappa "deflates" raw agreement whenever both raters share a
+    labeling bias (e.g. both mostly say "A" regardless of the item): p_e
+    captures exactly that shared-bias inflation and removes it. This is the
+    mechanism behind CLAUDE.md invariant 5 - raw agreement overstates judge
+    ability by 33-41pp on MT-Bench, because judges and humans both lean
+    toward the same popular answers.
+
+    Args:
+        a: labels from rater A.
+        b: labels from rater B, same length as a. Any number of distinct
+            categories is supported, not just two.
+
+    Returns:
+        kappa, typically in [-1, 1]. 1 = perfect agreement beyond chance,
+        0 = no better than chance, negative = worse than chance.
+    """
+    a_arr = np.asarray(a)
+    b_arr = np.asarray(b)
+
+    p_o = float(np.mean(a_arr == b_arr))
+
+    labels = np.union1d(np.unique(a_arr), np.unique(b_arr))
+    p_e = 0.0
+    for label in labels:
+        p_a = np.mean(a_arr == label)
+        p_b = np.mean(b_arr == label)
+        p_e += float(p_a * p_b)
+
+    if p_e >= 1.0 - 1e-12:
+        # Every item is the same single label for both raters - there is no
+        # room for chance disagreement, so (p_o - p_e) / (1 - p_e) is 0/0.
+        # Not exercised by real MT-Bench data; guarded so this never raises.
+        return 0.0
+
+    return (p_o - p_e) / (1 - p_e)

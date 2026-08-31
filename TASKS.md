@@ -27,10 +27,10 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **`"auto"`:** if `n_unique(conf) <= n_bins` → bin by unique value; else quantile with duplicate edges dropped. **Returns `(ece, n_effective_bins)`** (D14).
   **DoD:** `test_ece_reference` passes on the hand-computed case in `CLAUDE.md` §5 (**0.222**, tol 1e-3). Plus `test_ece_discrete`: on a 5-level signal like `conf_sc` with `n_bins=10`, returns `n_effective_bins == 5` and does **not** raise on tied quantile edges.
 
-- [ ] **0.5 [L]** Read MT-Bench §§3–4 + Tables 2, 4, 5 (`LEARNING.md` A2).
+- [x] **0.5 [L]** Read MT-Bench §§3–4 + Tables 2, 4, 5 (`LEARNING.md` A2).
   **DoD:** the six numbers in A2 are in your notes, and you can state the S1/S2 distinction.
 
-- [ ] **0.6 [C]** `src/metrics.py::cohens_kappa(a, b)` implemented from first principles (p_o, p_e, κ).
+- [x] **0.6 [C]** `src/metrics.py::cohens_kappa(a, b)` implemented from first principles (p_o, p_e, κ).
   **DoD:** matches `sklearn.metrics.cohen_kappa_score` on 3 random arrays; `test_metrics.py::test_kappa_balanced` asserts p_o=0.85, p_e=0.5 → κ=0.70.
 
 - [ ] **0.7 [C]** `src/data.py::load_votes()` — pull `lmsys/mt_bench_human_judgments` split `human`, return a tidy DataFrame with the fields in `CLAUDE.md` §3.

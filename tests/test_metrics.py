@@ -5,8 +5,9 @@
 
 import numpy as np
 import pytest
+from sklearn.metrics import cohen_kappa_score
 
-from src.metrics import ece
+from src.metrics import cohens_kappa, ece
 
 
 def test_ece_reference():
@@ -60,3 +61,29 @@ def test_ece_auto_falls_back_to_quantile_for_many_unique_values():
     _, n_effective_bins = ece(confidences, correct, n_bins=10)
 
     assert n_effective_bins <= 10
+
+
+def test_kappa_balanced():
+    # CLAUDE.md sec 5's hand-computed case: p_o=0.85, p_e=0.5 -> kappa=0.70.
+    # p_e depends only on each rater's OWN marginal - if rater a's labels
+    # are an exact 50/50 split, p_e = 0.5*P_b(A) + 0.5*P_b(B) = 0.5*1 = 0.5
+    # regardless of what b's own marginal looks like. So: make a exactly
+    # 10 "A" + 10 "B", then flip 3 of the 20 labels to get b, which gives
+    # p_o = 17/20 = 0.85 directly, without needing b balanced too.
+    a = np.array(["A"] * 10 + ["B"] * 10)
+    b = a.copy()
+    b[:3] = np.where(b[:3] == "A", "B", "A")  # flip 3 labels -> 3 mismatches
+
+    kappa = cohens_kappa(a, b)
+
+    assert kappa == pytest.approx(0.70, abs=1e-9)
+
+
+def test_kappa_matches_sklearn():
+    rng = np.random.default_rng(seed=0)
+    for _ in range(3):
+        a = rng.integers(0, 3, size=100)  # 3 categories, not just binary
+        b = rng.integers(0, 3, size=100)
+        assert cohens_kappa(a, b) == pytest.approx(
+            cohen_kappa_score(a, b), abs=1e-9
+        )
