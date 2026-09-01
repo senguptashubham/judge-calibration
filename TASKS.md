@@ -37,7 +37,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **0.7 [C]** `src/data.py::load_votes()` — pull `lmsys/mt_bench_human_judgments` split `human`, return a tidy DataFrame with the fields in `CLAUDE.md` §3.
   **DoD:** returns 3,355 rows. Asserts the row count and fails loudly if the dataset shape changed.
 
-- [ ] **0.8 [C]** `src/data.py::build_items()` — aggregate votes to items keyed by `(question_id, model_a, model_b, turn)`. Emit `n_human_votes`, `frac_prefer_a`, `majority_label`, `human_unanimous`, `is_tie`. Apply the tie policy from config.
+- [x] **0.8 [C]** `src/data.py::build_items()` — aggregate votes to items keyed by `(question_id, model_a, model_b, turn)`. Emit `n_human_votes`, `frac_prefer_a`, `majority_label`, `human_unanimous`, `is_tie`. Apply the tie policy from config.
   Also emit **`d_human = |frac_prefer_a − 0.5|`** (continuous consensus strength, D9) and **`human_agreed = human_unanimous AND n_human_votes >= 2`** (D16) — a single-vote item is trivially "unanimous" and must not count as agreed ground truth.
   **DoD:** `results/items_labels.parquet` written. Printed summary: N total, N non-tie, N ≥2 votes, N ≥3 votes, **N unanimous, N contested** — the last two printed separately, because D2's fallback threshold is checked **per subset**, not on the total (D9). H4 is the fragile split, not the overall count.
 

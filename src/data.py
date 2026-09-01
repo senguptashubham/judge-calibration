@@ -2,6 +2,7 @@
 Cohen's kappa. See TASKS.md tasks 0.7-0.9.
 """
 import argparse
+from pathlib import Path
 from typing import cast
 
 import pandas as pd
@@ -127,4 +128,11 @@ if __name__ == "__main__":
   config = Config.from_yaml(args.config)
   votes = load_votes(config.dataset)
   items = build_items(votes, tie_policy=config.tie_policy)
-  print(summarize_items(items))
+
+  Path(config.paths.items_labels_parquet).parent.mkdir(parents=True, exist_ok=True)
+  items.to_parquet(config.paths.items_labels_parquet)
+
+  summary = summarize_items(items)
+  print(f"Wrote {len(items)} items to {config.paths.items_labels_parquet}")
+  for key, value in summary.items():
+    print(f"  {key}: {value}")

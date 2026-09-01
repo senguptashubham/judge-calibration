@@ -22,6 +22,7 @@ class Paths:
     figures_dir: str
     calls_parquet: str
     items_parquet: str
+    items_labels_parquet: str
 
 
 @dataclasses.dataclass(frozen=True)

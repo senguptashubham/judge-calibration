@@ -12,6 +12,7 @@ def _paths() -> Paths:
         figures_dir="results/figures",
         calls_parquet="results/calls.parquet",
         items_parquet="results/items.parquet",
+        items_labels_parquet="results/items_labels.parquet",
     )
 
 

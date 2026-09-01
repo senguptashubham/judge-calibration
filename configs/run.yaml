@@ -36,3 +36,5 @@ paths:
   figures_dir: results/figures
   calls_parquet: results/calls.parquet
   items_parquet: results/items.parquet
+  items_labels_parquet: results/items_labels.parquet   # task 0.8's own output,
+                                                         # distinct from items_parquet (task 2.2)
