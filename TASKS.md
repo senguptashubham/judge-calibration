@@ -41,13 +41,13 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   Also emit **`d_human = |frac_prefer_a − 0.5|`** (continuous consensus strength, D9) and **`human_agreed = human_unanimous AND n_human_votes >= 2`** (D16) — a single-vote item is trivially "unanimous" and must not count as agreed ground truth.
   **DoD:** `results/items_labels.parquet` written. Printed summary: N total, N non-tie, N ≥2 votes, N ≥3 votes, **N unanimous, N contested** — the last two printed separately, because D2's fallback threshold is checked **per subset**, not on the total (D9). H4 is the fragile split, not the overall count.
 
-- [ ] **0.9 [A]** Compute **human–human Cohen's κ** on items with ≥2 non-tie votes (pair up votes, or Krippendorff's α if the vote counts are ragged).
+- [x] **0.9 [A]** Compute **human–human Cohen's κ** on items with ≥2 non-tie votes (pair up votes, or Krippendorff's α if the vote counts are ragged).
   **DoD:** a number, with N, written into `PREREGISTRATION.md`. This is the ceiling on everything downstream.
 
-- [ ] **0.10 [W]** Write `PREREGISTRATION.md`: the five RQs (RQ5 added 31 Aug 2026); decisions **D1** (tie policy), **D2** (label construction + the ≥150-item fallback), **D3** (whether RewardBench 2 augmentation is needed), plus every ⚑-marked decision D4–D24; the primary endpoint; which analyses are exploratory.
+- [x] **0.10 [W]** Write `PREREGISTRATION.md`: the five RQs (RQ5 added 31 Aug 2026); decisions **D1** (tie policy), **D2** (label construction + the ≥150-item fallback), **D3** (whether RewardBench 2 augmentation is needed), plus every ⚑-marked decision D4–D24; the primary endpoint; which analyses are exploratory.
   **DoD:** committed. Written *before* looking at any judge output.
 
-- ⛔ **GATE 0** — you know N total, N non-tie, N≥2 votes, **N unanimous, N contested**, and human–human κ. D1–D3 decided and committed. **If N contested < 100, H4's bucketed analysis is dropped now and the continuous version (D9) becomes the sole test — record that in `PREREGISTRATION.md` today, not in W5.**
+- [x] ⛔ **GATE 0** — passed. N total=2396, N non-tie=1904, N≥2 votes=761, **N unanimous=2273, N contested=123**, human–human κ=0.683 (N=536). D1–D3 decided and committed (`PREREGISTRATION.md`). N contested ≥100, so H4's bucketed secondary test stays viable — the `<100` contingency did not trigger.
 
 ---
 

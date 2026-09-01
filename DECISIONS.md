@@ -239,7 +239,7 @@ Not a bug found in the design — a workflow question the owner raised before st
 
 ---
 
-## D18 — `attribution` condition is dropped entirely *(professor feedback, 31 Aug 2026)*
+## D18 ⚑ — `attribution` condition is dropped entirely *(professor feedback, 31 Aug 2026)*
 
 **Decision:** `attribution` is removed from the condition vocabulary. Conditions become **`clean`, `verbose`** (`vacuum` stays, untouched, as the separate small sanity check). This is not the drop-order contingency it used to be (`PLAN.md` sec 4 used to list it as item 4) — it is now unconditional, not something to cut only if behind schedule.
 
@@ -252,7 +252,7 @@ Not a bug found in the design — a workflow question the owner raised before st
 
 ---
 
-## D19 — Prompt ensemble: new axis, new schedule *(professor feedback, point 3)*
+## D19 ⚑ — Prompt ensemble: new axis, new schedule *(professor feedback, point 3)*
 
 **Decision:** three frozen, hashed prompt variants — **`P1`** (the existing MT-Bench template, primary; RQ1–RQ4 use this alone), **`P2`** (correctness-first rubric), **`P3`** (helpfulness-first rubric). `prompt_variant` becomes a new axis in `calls.parquet`, orthogonal to `condition` and `order` — exactly the role `order` already plays after D5.
 
@@ -273,7 +273,7 @@ D5 and D12's own *reasoning* (order is an axis, not a condition; budget the unit
 
 ---
 
-## D20 — `conf_ens`, judge-level entropy decomposition, and the schema break it causes *(professor feedback, points 3, 4, 5)*
+## D20 ⚑ — `conf_ens`, judge-level entropy decomposition, and the schema break it causes *(professor feedback, points 3, 4, 5)*
 
 **Decision — `conf_ens` and its decomposition.** Computed across the P1/P2/P3 ensemble's greedy `p_a` values for a `clean` item (uniform prior over the three variants):
 
@@ -293,7 +293,7 @@ D5 and D12's own *reasoning* (order is an axis, not a condition; budget the unit
 
 ---
 
-## D21 — Two signals are clean-only: the transfer test and the verbose-shift check both need a fix *(found while resolving D19/D20)*
+## D21 ⚑ — Two signals are clean-only: the transfer test and the verbose-shift check both need a fix *(found while resolving D19/D20)*
 
 Self-consistency sampling and the P2/P3 ensemble both only happen for `clean` under D19's schedule. Previously `verbose` had its own `conf_sc`; now it has neither `conf_sc` **nor** `conf_ens` (nor its total/aleatoric/epistemic components) — there is no ensemble to decompose with only one prompt variant present.
 
@@ -308,7 +308,7 @@ Note what this implies for the verbose-shift check specifically: the "epistemic 
 
 ---
 
-## D22 — Bayesian hierarchical logistic regression joins RQ4 *(professor feedback, points 1, 4)*
+## D22 ⚑ — Bayesian hierarchical logistic regression joins RQ4 *(professor feedback, points 1, 4)*
 
 **Decision:** add a third model to RQ4, alongside the existing `LogisticRegression` (kept as the frequentist baseline) and `HistGradientBoostingClassifier` (kept — it tests nonlinearity, a different axis from what the Bayesian model tests; nothing in the feedback cuts it):
 
@@ -331,7 +331,7 @@ Fit with NumPyro/NUTS. **Fallback ladder, preregistered, not improvised mid-week
 
 ---
 
-## D23 — RQ5: prompt distillation and the human-disagreement validation *(professor feedback, points 2, 4; "consequences" section)*
+## D23 ⚑ — RQ5: prompt distillation and the human-disagreement validation *(professor feedback, points 2, 4; "consequences" section)*
 
 **New research question.** RQ5: does marginalizing over the prompt (the P1/P2/P3 ensemble) produce a better uncertainty estimate than any single prompt, and how much of that benefit survives distillation to single-call cost?
 
