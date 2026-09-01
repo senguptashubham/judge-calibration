@@ -34,7 +34,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **0.6 [C]** `src/metrics.py::cohens_kappa(a, b)` implemented from first principles (p_o, p_e, κ).
   **DoD:** matches `sklearn.metrics.cohen_kappa_score` on 3 random arrays; `test_metrics.py::test_kappa_balanced` asserts p_o=0.85, p_e=0.5 → κ=0.70.
 
-- [ ] **0.7 [C]** `src/data.py::load_votes()` — pull `lmsys/mt_bench_human_judgments` split `human`, return a tidy DataFrame with the fields in `CLAUDE.md` §3.
+- [x] **0.7 [C]** `src/data.py::load_votes()` — pull `lmsys/mt_bench_human_judgments` split `human`, return a tidy DataFrame with the fields in `CLAUDE.md` §3.
   **DoD:** returns 3,355 rows. Asserts the row count and fails loudly if the dataset shape changed.
 
 - [ ] **0.8 [C]** `src/data.py::build_items()` — aggregate votes to items keyed by `(question_id, model_a, model_b, turn)`. Emit `n_human_votes`, `frac_prefer_a`, `majority_label`, `human_unanimous`, `is_tie`. Apply the tie policy from config.
