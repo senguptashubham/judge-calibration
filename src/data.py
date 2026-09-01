@@ -7,7 +7,7 @@ from typing import cast
 
 import pandas as pd
 from datasets import load_dataset
-
+from src import metrics
 from src.config import Config
 
 
@@ -120,6 +120,39 @@ def summarize_items(items: pd.DataFrame) -> dict:
   }
 
 
+def human_human_kappa(votes: pd.DataFrame) -> tuple[float, int]:
+  """Human-human Cohen's kappa: pairs up two non-tie votes per qualifying
+  item (Option A - one pair per item, not all pairwise combinations, so
+  every pair is an independent observation) and feeds the pooled pairs into
+  cohens_kappa(). This is the ceiling on everything downstream (task 0.9).
+
+  Items with >2 non-tie votes have more than two judges to choose from,
+  so which two matters for reproducibility. Each group is sorted by
+  `judge` (a stable identifier, unlike row order from the source data)
+  before taking the first and last - deterministic across runs, and
+  confirmed empirically that no judge votes twice on the same item in
+  this dataset (max group size 5, always 5 distinct judges), so first/last
+  after sorting is never degenerate self-agreement.
+
+  Args:
+    votes: load_votes()'s output - one row per vote.
+
+  Returns:
+    (kappa, N) where N is the number of qualifying items/pairs used, not
+    the number of underlying votes.
+  """
+  non_tie_votes = votes[votes["winner"] != "tie"]
+  group_cols = ["question_id", "model_a", "model_b", "turn"]
+  rater1, rater2 = [], []
+  for (question_id, model_a, model_b, turn), group in non_tie_votes.groupby(group_cols):
+    group = group.sort_values("judge")
+    winners = group["winner"]
+    if len(winners) >= 2:
+      rater1.append(winners.iloc[0])
+      rater2.append(winners.iloc[-1])
+  return metrics.cohens_kappa(rater1, rater2), len(rater1)
+
+
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument("--config", required=True)
@@ -128,6 +161,8 @@ if __name__ == "__main__":
   config = Config.from_yaml(args.config)
   votes = load_votes(config.dataset)
   items = build_items(votes, tie_policy=config.tie_policy)
+  kappa, N = human_human_kappa(votes)
+  print(f"Got {N} human-human comparisons with {kappa} score")
 
   Path(config.paths.items_labels_parquet).parent.mkdir(parents=True, exist_ok=True)
   items.to_parquet(config.paths.items_labels_parquet)

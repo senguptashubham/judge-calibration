@@ -167,8 +167,9 @@ src/
                 diagnostics, meta-model-level entropy decomposition (D22)
   plots.py
 tests/
-  test_config.py  test_parse.py     test_metrics.py    test_perturb.py
-  test_prompts.py test_boot.py      test_features.py   test_predictor.py
+  test_config.py  test_data.py      test_parse.py       test_metrics.py
+  test_perturb.py test_prompts.py   test_boot.py         test_features.py
+  test_predictor.py
   test_bayesian.py    held-out random-intercept marginalization, convergence checks (D22)
   fixtures/     real malformed judge outputs (task 1.5)
 runs/        *.jsonl checkpoints, logprobs_sample/  (gitignored)
@@ -203,13 +204,14 @@ REPORT.md    written incrementally, not at the end
 The owner has six years as an SDET. Test code is expected to be good, and it is a deliverable, not overhead.
 
 - `test_metrics.py` must check `ece()` against a **hand-computed** example. Reference case: two bins, (conf 0.9, acc 0.75, weight 0.4) and (conf 0.6, acc 0.33, weight 0.6) → ECE = 0.4·0.15 + 0.6·0.27 = **0.222**.
+- `test_data.py` must check `build_items()`'s tie-policy branching against small hand-constructed vote groups (tie-dominant, clean majority, unanimous, single-vote, and the strict-vs-lenient boundary case that motivated D1), and `human_human_kappa()` against a hand-computed κ **and** a determinism check that row order doesn't change which votes get paired (a real bug found and fixed during development).
 - `test_parse.py` runs against a fixture file of **real malformed judge outputs** collected during Week 1. Add every new failure mode you see as a fixture.
 - `test_perturb.py` property-tests `verbose_pad()`: it preserves the verdict-relevant content. (`attribution()` is cut, D18 — there is no attribution property test.) **The `order` round-trip property (rendering AB then BA returns the original assignment) belongs in `test_prompts.py`, not here — order is a renderer concern, not a perturbation (D5).**
 - `test_predictor.py` must assert (a) no `question_id` appears in both train and test of any fold, and (b) two different seeds produce **different** fold assignments — the `GroupKFold`-has-no-shuffle trap in §2.1.
 - `test_bayesian.py` must assert a held-out question's random intercept is marginalized over the population prior, never its would-be fitted value (D22) — the hierarchical-model analogue of `test_predictor.py`'s no-leakage assertion.
 - `test_boot.py` checks that the cluster bootstrap produces wider intervals than a naive row bootstrap on the same data. If it doesn't, the grouping is broken.
 
-Run `pytest` before any commit that touches `src/metrics.py`, `src/boot.py`, `src/predictor.py`, or `src/bayesian.py`.
+Run `pytest` before any commit that touches `src/metrics.py`, `src/boot.py`, `src/predictor.py`, `src/bayesian.py`, or `src/data.py`.
 
 ---
 
