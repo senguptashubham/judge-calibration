@@ -21,6 +21,104 @@ def load_votes(dataset: str) -> pd.DataFrame:
   return df_human
 
 
+def build_items(votes: pd.DataFrame, tie_policy: str) -> pd.DataFrame:
+  """Aggregate one-row-per-vote to one-row-per-item, keyed by
+  (question_id, model_a, model_b, turn).
+
+  tie_policy is decision D1. Four candidates were implemented and compared
+  empirically on this exact dataset (drop_ties, count_half, mark_tie_lenient,
+  mark_tie_strict) before deciding - the comparison table and full reasoning
+  live in PREREGISTRATION.md, not here, since those numbers are a snapshot
+  of one run and would drift out of sync with this docstring over time.
+
+  Decided: "mark_tie_strict". A "tie" ballot is different information from
+  a weak preference for either side, not a 0.5-strength vote for both - so
+  an item's ties are treated as a categorical property of the item
+  (is_tie), never smoothed into frac_prefer_a. "Strict" means tie ballots
+  must strictly outnumber both sides (n_tie > n_a and n_tie > n_b) to mark
+  the item tied - not just tie for the most common outcome - because the
+  lenient (>=) version was discarding real signal: e.g. a group of 2 tie /
+  2 A / 1 B was being marked fully tied under lenient even though A beat B
+  2-to-1 among the voters who actually expressed a preference.
+
+  human_unanimous means "no disagreement among the votes that count" - for
+  a tied item that's every raw vote (only true if literally everyone voted
+  tie); for a non-tied item it's the non-tie votes only.
+
+  Args:
+    votes: load_votes()'s output - one row per vote.
+    tie_policy: must be "mark_tie_strict" - the only value D1 decided.
+      Still a parameter, not hardcoded, so this stays config-driven
+      (CLAUDE.md sec 5) even though only one value is currently valid.
+
+  Returns:
+    One row per item, with n_human_votes, frac_prefer_a, majority_label,
+    human_unanimous, is_tie, d_human, human_agreed.
+  """
+  if tie_policy != "mark_tie_strict":
+    raise ValueError(
+      f"tie_policy={tie_policy!r} is not supported - D1 decided "
+      "'mark_tie_strict' after comparing four candidates; see "
+      "PREREGISTRATION.md for the comparison."
+    )
+
+  records = []
+  group_cols = ["question_id", "model_a", "model_b", "turn"]
+  for (question_id, model_a, model_b, turn), group in votes.groupby(group_cols):
+    n_a = int((group["winner"] == "model_a").sum())
+    n_b = int((group["winner"] == "model_b").sum())
+    n_tie = int((group["winner"] == "tie").sum())
+    n_human_votes = n_a + n_b + n_tie
+    n_unique_raw = group["winner"].nunique()
+
+    is_tie = n_tie > n_a and n_tie > n_b
+    if is_tie:
+      frac_prefer_a = float("nan")
+      human_unanimous = n_unique_raw == 1
+    else:
+      frac_prefer_a = n_a / (n_a + n_b)
+      human_unanimous = (n_a == 0 or n_b == 0)
+
+    if frac_prefer_a == frac_prefer_a:  # not NaN
+      majority_label = "A" if frac_prefer_a > 0.5 else "B" if frac_prefer_a < 0.5 else None
+      d_human = abs(frac_prefer_a - 0.5)
+    else:
+      majority_label = None
+      d_human = float("nan")
+
+    records.append({
+      "question_id": question_id,
+      "model_a": model_a,
+      "model_b": model_b,
+      "turn": turn,
+      "n_human_votes": n_human_votes,
+      "frac_prefer_a": frac_prefer_a,
+      "majority_label": majority_label,
+      "human_unanimous": human_unanimous,
+      "is_tie": is_tie,
+      "d_human": d_human,
+      "human_agreed": bool(human_unanimous) and (n_human_votes >= 2),
+    })
+
+  return pd.DataFrame.from_records(records)
+
+
+def summarize_items(items: pd.DataFrame) -> dict:
+  """The Gate 0 / task 0.8 printed summary, as a dict so it's easy to
+  compare across tie_policy runs rather than just eyeballing print output.
+  """
+  return {
+    "n_total": len(items),
+    "n_non_tie": int((~items["is_tie"]).sum()),
+    "n_ge2_votes": int((items["n_human_votes"] >= 2).sum()),
+    "n_ge3_votes": int((items["n_human_votes"] >= 3).sum()),
+    "n_unanimous": int(items["human_unanimous"].sum()),
+    # Contested (D9): enough votes to show disagreement, and does show it.
+    # Independent of is_tie, whose definition varies by tie_policy.
+    "n_contested": int(((items["n_human_votes"] >= 2) & (~items["human_unanimous"])).sum()),
+  }
+
+
 if __name__ == "__main__":
   parser = argparse.ArgumentParser()
   parser.add_argument("--config", required=True)
@@ -28,4 +126,5 @@ if __name__ == "__main__":
 
   config = Config.from_yaml(args.config)
   votes = load_votes(config.dataset)
-  print(votes.head())
+  items = build_items(votes, tie_policy=config.tie_policy)
+  print(summarize_items(items))

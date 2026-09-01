@@ -1,10 +1,15 @@
 judge_model: Qwen/Qwen2.5-7B-Instruct
 dataset: lmsys/mt_bench_human_judgments
 
-# Provisional - this is preregistration decision D1, finalized in
-# PREREGISTRATION.md (task 0.10) after looking at the real vote-count
-# distribution at Gate 0. Not a considered methodological choice yet.
-tie_policy: drop_ties
+# Decision D1: compared drop_ties, count_half, mark_tie_lenient, and
+# mark_tie_strict empirically on the real vote-count distribution; a "tie"
+# ballot is different information from a weak preference, so ties are a
+# categorical property of the item, not smoothed into frac_prefer_a - and
+# "strict" (tie must strictly outnumber both sides) over "lenient" (tie only
+# needs to tie for most common) because lenient discarded real signal on
+# items where the tie count merely equaled the leading side's count.
+# Full comparison table: PREREGISTRATION.md (task 0.10).
+tie_policy: mark_tie_strict
 
 temperature_canonical: 0.0   # sample_idx = 0, greedy, reproducible (DECISIONS.md D6)
 temperature_sc: 0.7          # sample_idx = 1..k_sc (DECISIONS.md D6)
