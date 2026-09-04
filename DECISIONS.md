@@ -26,6 +26,15 @@ Verdict on the review: **eight of ten findings were correct.** #1, #2 and #3 eac
 - **⚠️ The two are not in the same unit.** The secondary feature is computed from the T=0.7 sampled calls, so the same temperature-scaling effect D6 found for `p_a` applies to it. Standardization means the model doesn't care, but *interpretation* does — a coefficient plot that treats them as one quantity is wrong.
   **The fix is naming, not a comment:** the columns are `cot_logprob_mean_greedy` and `cot_logprob_mean_sampled_t07` (and likewise for `min`, `std`, `p10`, `entropy`). Carrying the temperature in the name makes it structurally impossible for anyone — including you in October — to average them or read them as the same feature.
 
+**Amended, 4 Sep 2026 (task 1.4 implementation review):** point 3's sidecar is raised from a **10% sample to 100% coverage** — every call's full per-token logprobs are now saved, not just calls where `hash(item_id) % 10 == 0`. Two reasons, found while actually writing `judge.py`:
+
+1. **It removes a split this decision was otherwise forcing on `judge.py`.** With only a 10% sample, the raw per-token logprobs needed for `verdict_token_logprob`/`p_a` would vanish for the other 90% of rows before `src/parse.py` (task 1.5) ever runs — so `judge.py` itself had to compute those two fields at generation time, alongside the CoT aggregates. That's a real violation of invariant 7's "parsing lives only in `parse.py`," made out of necessity, not choice. At 100% coverage, `parse.py` can compute `verdict`, `verbalized_conf`, `verdict_token_logprob`, and `p_a` — every logprob-derived field — from saved data, whenever it runs, restoring the intended split cleanly: `judge.py` runs the model and saves raw materials only; `parse.py` is the one place that turns raw materials into signals.
+2. **The "insurance against an unanticipated statistic" this decision already argued for is strictly stronger at 100%.** Any future statistic can be computed on the *full* dataset instead of a 10% subsample carrying materially higher variance for anything sliced by category or question.
+
+**Cost, scaled from this decision's own arithmetic above:** roughly **10x** the raw/gzipped sizes already quoted (170MB raw / 48MB gzipped at 10%, post-D19's 12,000-call schedule) — comfortably under 2GB gzipped even generously scaled. The exact absolute total is provisional pending task 4.1b's GPU-budget re-extrapolation, same as every other total-generation-count figure in this file. Judged acceptable against Colab Pro's storage headroom.
+
+Sidecar directory renamed `runs/logprobs_sample/` → `runs/logprobs/`, since "sample" no longer describes 100% coverage. `CLAUDE.md`'s schema and layout sections updated to match.
+
 ---
 
 ## D5 ⚑ — `order` is the axis; `swap` is not a condition *(review #2)*
@@ -143,6 +152,8 @@ Once `order` is collected for every condition, `judge_verdict` at item level is 
 - Record the resolved version of `vllm`, `torch`, `transformers` in the **run manifest**, alongside `git_sha`.
 - **Colab's preinstalled `torch` will fight vLLM's pinned `torch`.** Install into a fresh venv (or `uv venv`) rather than the system environment, and expect one runtime restart. Budget 30 minutes for this in W1; it is the single most likely way the peak week overruns.
 - Task 1.2's DoD is amended: the scratch script must exercise **guided decoding + logprobs together**, not logprobs alone, because that is the combination that breaks.
+
+**Resolved, 3 Sep 2026 (task 1.2's smoke test):** pinned `vllm==0.28.0`, installed via `uv venv` into a fresh venv on Colab (T4). This version uses the renamed `StructuredOutputsParams`, not `GuidedDecodingParams`. All three cases — logprobs alone, structured-decoding alone, and **both together** — ran cleanly with no error; the historical incompatibility this decision was written to guard against does not reproduce on this version. `pyproject.toml`'s `colab` extra now pins `vllm==0.28.0` accordingly; per this decision's own rule, that pin does not move again for the rest of the project.
 
 ---
 

@@ -89,25 +89,29 @@ parse_ok            bool
 parse_failure_type  str    none|no_verdict|no_confidence|malformed_json|truncated
 verdict             str    A|B|null
 verbalized_conf     float  [0,1] or null
-verdict_token_logprob float
-p_a                 float  renormalised P(A) over {A,B} at the decision position
-                           ⚠ VALID ONLY WHEN sample_idx == 0 — temperature scales the
-                             reported logprobs. See D6.
-cot_logprob_mean    float  ┐
-cot_logprob_min     float  │ computed in judge.py AT GENERATION TIME, never
-cot_logprob_std     float  │ reconstructed later. Tier C is unbuildable without
-cot_logprob_p10     float  │ these. See D4.
-cot_entropy_mean    float  │ mean TOP-20 TRUNCATED entropy — always labelled as such
-n_cot_tokens        int    ┘
+verdict_token_logprob float ┐
+p_a                 float  │ ⚠ p_a VALID ONLY WHEN sample_idx == 0 — temperature scales
+                           │ the reported logprobs (D6). Every column on this brace is
+cot_logprob_mean    float  │ computed in src/parse.py (task 1.5) from the full
+cot_logprob_min     float  │ per-token logprobs saved for every call (D4, amended
+cot_logprob_std     float  │ 4 Sep 2026 - originally a 10% sample, raised to 100%
+cot_logprob_p10     float  │ coverage specifically so parse.py can compute these from
+cot_entropy_mean    float  │ saved data alone rather than judge.py needing to compute
+n_cot_tokens        int    ┘ them at generation time before the raw data vanished.
 n_prompt_tokens     int
 n_out_tokens        int
 latency_ms          float
 ```
 
-A 10% raw per-token logprob sidecar goes to `runs/logprobs_sample/*.jsonl.gz` (gzipped — ~250MB
-raw, ~70MB compressed) for calls where `hash(item_id) % 10 == 0` — insurance against wanting a
-statistic you didn't anticipate (D4). The CoT aggregate columns are stored as `*_greedy` and
-`*_sampled_t07` pairs; the temperature is in the name so the two are never averaged together.
+A raw per-token logprob file goes to `runs/logprobs/*.jsonl.gz` (gzipped) for **every** call
+(D4, amended 4 Sep 2026 — originally a 10% sample at `runs/logprobs_sample/`, raised to 100%
+coverage: the storage cost scales to roughly 10x the sample's own quoted sizes, which stays
+comfortably small, and full coverage means `src/parse.py` can compute every logprob-derived
+field from saved data alone, keeping all parsing logic in the one file invariant 7 requires
+instead of splitting it against `judge.py`). `judge.py` itself only ever writes `raw_output`
+plus call-identifying provenance to its checkpoint — it computes no derived signal itself.
+The CoT aggregate columns are stored as `*_greedy` and `*_sampled_t07` pairs at the
+items.parquet stage; the temperature is in the name so the two are never averaged together.
 
 ### `results/items.parquet` — one row per (item_id, condition, prompt_variant)
 ⚠ Grain changed from (item_id, condition) when the P1/P2/P3 ensemble was added (D19, D20).
@@ -172,7 +176,8 @@ tests/
   test_predictor.py
   test_bayesian.py    held-out random-intercept marginalization, convergence checks (D22)
   fixtures/     real malformed judge outputs (task 1.5)
-runs/        *.jsonl checkpoints, logprobs_sample/  (gitignored)
+runs/        *.jsonl checkpoints, logprobs/  (gitignored) - full per-token logprobs for
+             every call, not a sample (D4, amended 4 Sep 2026)
 results/     calls.parquet  items.parquet  figures/   (gitignored)
 pyproject.toml   pinned deps; base install excludes vllm (`colab` extra adds it, D17)
                  but includes numpyro/jax/arviz (D24)

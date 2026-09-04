@@ -4,6 +4,32 @@ import numpy as np
 import numpy.typing as npt
 
 
+def truncated_entropy(position_logprobs: dict) -> float:
+    """Entropy of the top-K logprob distribution at a single generated
+    token position, renormalized over just those K tokens (K=20 in this
+    project - CLAUDE.md's `logprobs` config key, D4). This is NOT the true
+    full-vocabulary entropy: vLLM's logprobs=K only reports the K most
+    likely tokens, and renormalizing over that truncated set systematically
+    *underestimates* the true entropy, since probability mass sitting
+    outside the top-K is discarded rather than merely unobserved. Always
+    called "truncated" per CLAUDE.md's schema note so this bias is never
+    silently forgotten downstream.
+
+    H = -sum(p_i * log(p_i)), i over the K reported tokens, with
+    p_i = exp(logprob_i) / sum_j(exp(logprob_j)) - a softmax renormalization
+    over just the K observed logprobs.
+
+    Args:
+      position_logprobs: one generated position's top-K logprobs, as
+        returned by vLLM (dict of token_id -> object with a `.logprob`
+        attribute).
+    """
+    logprobs = np.array([lp.logprob for lp in position_logprobs.values()])
+    probs = np.exp(logprobs)
+    probs = probs / probs.sum()
+    return float(-np.sum(probs * np.log(probs)))
+
+
 def ece(
     confidences: npt.ArrayLike,
     correct: npt.ArrayLike,

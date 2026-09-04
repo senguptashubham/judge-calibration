@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data import build_items, human_human_kappa, summarize_items
+from src.data import build_items, human_human_kappa, item_id, summarize_items
 
 
 def _votes(winners, judges=None, question_id=1, model_a="m1", model_b="m2", turn=1):
@@ -122,6 +122,18 @@ def test_human_human_kappa_hand_computed():
     kappa, n = human_human_kappa(votes)
     assert n == 2
     assert kappa == pytest.approx(0.0, abs=1e-9)
+
+
+def test_item_id_stable_across_calls():
+    assert item_id(81, "alpaca-13b", "gpt-3.5-turbo", 1) == item_id(81, "alpaca-13b", "gpt-3.5-turbo", 1)
+
+
+def test_item_id_differs_when_any_field_differs():
+    base = item_id(81, "alpaca-13b", "gpt-3.5-turbo", 1)
+    assert base != item_id(82, "alpaca-13b", "gpt-3.5-turbo", 1)  # question_id
+    assert base != item_id(81, "vicuna-13b", "gpt-3.5-turbo", 1)  # model_a
+    assert base != item_id(81, "alpaca-13b", "claude-v1", 1)  # model_b
+    assert base != item_id(81, "alpaca-13b", "gpt-3.5-turbo", 2)  # turn
 
 
 def test_human_human_kappa_ordering_is_deterministic_regardless_of_row_order():

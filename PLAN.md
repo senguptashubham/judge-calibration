@@ -59,7 +59,7 @@ That question makes *every* outcome reportable, which is how you de-risk an ML c
 | **B** | A + `len_a`, `len_b`, `len_ratio`, `abs_len_diff`, `longer_is_chosen`, `turn`, `category`, `judge_output_len`, `flipped` | Is judge error predictable from surface features the judge itself does not use? |
 | **C** | B + verdict-position top-2 margin (exact — the verdict is constrained to 2 tokens) + `cot_logprob_{mean,min,std,p10}` + `cot_entropy_mean` (**truncated** top-20, a biased estimator — never call it "predictive entropy") | Is the usable signal in the token distribution rather than the verbalization? |
 
-⚠️ **Tier C is unbuildable unless `judge.py` captures those CoT aggregates at generation time (D4).** They cannot be reconstructed from `calls.parquet` afterwards, and rediscovering that in W5 means re-running the harness. Each is stored twice: the `sample_idx=0` value and the across-sample mean.
+⚠️ **Tier C is unbuildable unless `judge.py` captures the full per-token logprobs at generation time (D4, amended 4 Sep 2026: 100% coverage, not a 10% sample).** `src/parse.py` derives the CoT aggregates from that saved data; neither the aggregates nor the raw logprobs they come from can be reconstructed from `raw_output` text alone, and rediscovering that in W5 means re-running the harness. Each aggregate is stored twice: the `sample_idx=0` value and the across-sample mean.
 
 Read the outcomes:
 

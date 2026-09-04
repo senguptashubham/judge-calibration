@@ -26,10 +26,11 @@ dependencies = [
 
 [project.optional-dependencies]
 # Colab only — never installed on the local dev machine (DECISIONS.md D17).
-# Pin the exact version the day you run task 1.2, per D11, and do not move it
-# again for the rest of the project.
+# Pinned 3 Sep 2026 per D11's task-1.2 smoke test (guided/structured decoding
+# + logprobs=20 together, confirmed working on this version) - do not move
+# this pin again for the rest of the project.
 colab = [
-    "vllm",
+    "vllm==0.28.0",
 ]
 
 [tool.setuptools]

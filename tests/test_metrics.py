@@ -7,7 +7,28 @@ import numpy as np
 import pytest
 from sklearn.metrics import cohen_kappa_score
 
-from src.metrics import cohens_kappa, ece
+from src.metrics import cohens_kappa, ece, truncated_entropy
+
+
+class _FakeLogprob:
+    def __init__(self, logprob):
+        self.logprob = logprob
+
+
+def test_truncated_entropy_hand_computed_already_normalized():
+    # p = [0.6, 0.4] already sums to 1 - renormalization is a no-op.
+    position = {0: _FakeLogprob(np.log(0.6)), 1: _FakeLogprob(np.log(0.4))}
+    expected = -(0.6 * np.log(0.6) + 0.4 * np.log(0.4))  # ~0.673012
+    assert truncated_entropy(position) == pytest.approx(expected)
+
+
+def test_truncated_entropy_hand_computed_renormalizes_truncated_mass():
+    # Raw probabilities [0.5, 0.3] sum to 0.8 (mass outside top-K is
+    # missing) - must renormalize over just these two before computing H.
+    position = {0: _FakeLogprob(np.log(0.5)), 1: _FakeLogprob(np.log(0.3))}
+    p1, p2 = 0.5 / 0.8, 0.3 / 0.8
+    expected = -(p1 * np.log(p1) + p2 * np.log(p2))  # ~0.661563
+    assert truncated_entropy(position) == pytest.approx(expected)
 
 
 def test_ece_reference():

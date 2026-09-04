@@ -2,6 +2,7 @@
 Cohen's kappa. See TASKS.md tasks 0.7-0.9.
 """
 import argparse
+import hashlib
 from pathlib import Path
 from typing import cast
 
@@ -9,6 +10,20 @@ import pandas as pd
 from datasets import load_dataset
 from src import metrics
 from src.config import Config
+
+
+def item_id(question_id: int, model_a: str, model_b: str, turn: int) -> str:
+  """Stable hash of an item's identity - CLAUDE.md's calls.parquet/items.parquet
+  schema both key on this. Defined once here, not duplicated in judge.py or
+  wherever items.parquet gets built (task 2.2), so the two tables are
+  guaranteed to join on identical ids rather than risking silent drift
+  between two independently-written hash implementations.
+
+  16 hex chars (64 bits) of sha256 - short enough to be a readable column,
+  long enough that a collision across ~2000 items is not a real concern.
+  """
+  raw = f"{question_id}|{model_a}|{model_b}|{turn}"
+  return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
 
 
 def load_votes(dataset: str) -> pd.DataFrame:

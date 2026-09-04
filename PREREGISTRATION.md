@@ -26,7 +26,7 @@ RQ4 is the owner's own idea and RQ5 was added 31 Aug 2026 from professor feedbac
 
 **Confirmatory (planned in advance, reported regardless of outcome):** RQ1, RQ2, RQ4's core (Tiers A/B, permutation null, H4's continuous form).
 
-**Exploratory (hypothesis-generating, reported as such, not treated as pre-registered claims):** RQ3 (the specific magnitude of the verbosity/position effects wasn't predicted numerically in advance), Tier C of RQ4 (contingent on `judge.py` capturing the CoT logprob aggregates cleanly, D4), RQ5 in full (new as of 31 Aug 2026, no prior numeric prediction beyond the qualitative "epistemic should beat total" from D20), and every secondary/tertiary fallback listed in `DECISIONS.md` (D9's bucketed H4 variant, D12's transfer-test `LeaveOneGroupOut`).
+**Exploratory (hypothesis-generating, reported as such, not treated as pre-registered claims):** RQ3 (the specific magnitude of the verbosity/position effects wasn't predicted numerically in advance), Tier C of RQ4 (contingent on `judge.py` capturing the full per-token logprobs cleanly and `parse.py` deriving the CoT aggregates from them correctly, D4), RQ5 in full (new as of 31 Aug 2026, no prior numeric prediction beyond the qualitative "epistemic should beat total" from D20), and every secondary/tertiary fallback listed in `DECISIONS.md` (D9's bucketed H4 variant, D12's transfer-test `LeaveOneGroupOut`).
 
 This is a purely interpretive distinction for how `REPORT.md` discusses findings — mainly to avoid presenting a hypothesis-generating result as though its exact magnitude had been predicted in advance. It is not a scope decision: every RQ1–RQ5 item, confirmatory or exploratory, is still built and delivered. The split matches `PLAN.md` §4's drop order — confirmatory items sit below the "protect everything below this line" marker; exploratory items sit above it.
 
@@ -79,7 +79,7 @@ Computed by `python -m src.data --config configs/run.yaml` (D1's decided policy)
 
 The full text and reasoning for each lives in `DECISIONS.md`, not duplicated here — copying ~15 decisions verbatim would create two documents that could silently drift out of sync. This is the binding list; each is in force as of Gate 1.
 
-- **D4** — Tier C CoT logprob aggregates captured at generation time, not reconstructed later.
+- **D4** — Full per-token logprobs captured at generation time for every call (100% coverage, amended 4 Sep 2026), so `src/parse.py` can derive the Tier C CoT aggregates and verdict-level logprob signals from saved data - never reconstructed from `raw_output` text alone.
 - **D5** — `order` is an axis orthogonal to `condition`; `swap` is not a condition.
 - **D6** — Two temperature config keys, never one; `conf_lp`/`p_a` from the canonical greedy call only.
 - **D7** — `judge_verdict` (primary, canonical AB) vs `verdict_bidir` (secondary, order-averaged) — both reported.

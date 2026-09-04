@@ -53,14 +53,14 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 ## Week 1 · Aug 31–Sep 6 · 14h (peak week) — Harness
 
-- [ ] **1.1 [L]** Course: Getting Structured LLM Output, full (`LEARNING.md` B1).
+- [x] **1.1 [L]** Course: Getting Structured LLM Output, full (`LEARNING.md` B1).
   **DoD:** you can explain how Outlines constrains generation by masking logits per token — and why that means you must constrain to exactly `{A, B}` and read the renormalised `p_a`.
 
-- [ ] **1.2 [L/C]** Course: vLLM lessons 3, 6, 7, 8 + 30 min of vLLM docs on `LLM.generate`, `SamplingParams(logprobs=...)`, structured outputs (`LEARNING.md` B2).
+- [x] **1.2 [L/C]** Course: vLLM lessons 3, 6, 7, 8 + 30 min of vLLM docs on `LLM.generate`, `SamplingParams(logprobs=...)`, structured outputs (`LEARNING.md` B2).
   **Pin `vllm==<exact>` now** and install into a **fresh venv** — Colab's preinstalled `torch` will fight vLLM's pinned `torch`; expect one runtime restart. Budget 30 min (D11).
   **DoD:** a scratch script exercises **guided decoding AND `logprobs=20` together** — that combination is what breaks, not either alone. Note whether your pinned version uses `GuidedDecodingParams` or `StructuredOutputsParams`; the API was renamed.
 
-- [ ] **1.3 [C]** `src/prompts.py` — **three** MT-Bench pairwise templates (D19): **P1** (the existing template — explanation before verdict / CoT, plus a verbalized-confidence line), **P2** (correctness-first rubric), **P3** (helpfulness-first rubric). Each independently versioned + hashed.
+- [x] **1.3 [C]** `src/prompts.py` — **three** MT-Bench pairwise templates (D19): **P1** (the existing template — explanation before verdict / CoT, plus a verbalized-confidence line), **P2** (correctness-first rubric), **P3** (helpfulness-first rubric). Each independently versioned + hashed.
   **DoD:** `prompt_hash()` is stable across runs, for all three variants. Each template renders correctly for a real item. All three are frozen at Gate 1 and touching any of them after requires a new version string and a full re-run (invariant 10).
 
 - [ ] **1.3b [L]** Theory I — Bayesian inference + NumPyro/NUTS basics (`LEARNING.md`, new block, D22). Deliberately scheduled here, not W5, since it's the biggest new-concept lift in the plan and needs runway.
@@ -68,12 +68,11 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 - [ ] **1.4 [C]** `src/judge.py` — vLLM wrapper. Batched `LLM.generate`; guided decoding constraining the verdict to `{A, B}`; **`logprobs=20`**; JSONL append-checkpoint keyed by **`(item_id, condition, prompt_variant, order, sample_idx)`** (D19 adds `prompt_variant` to the key); skip-completed on restart.
   **Per-call schedule (D5, D6, D19):** for **`(clean, P1)`** emit **6 calls** — `sample_idx=0` at `temperature_canonical` in both orders (2), plus `sample_idx=1..k_sc` at `temperature_sc` in AB order only (4). For **`(clean, P2)`** and **`(clean, P3)`** emit **2 calls each** — greedy only, both orders, no sampling. For **`(verbose, P1)`** emit **2 calls** — greedy only, both orders, no sampling. **Self-consistency sampling (`sample_idx > 0`) happens only for `(clean, P1)`** — nowhere else (D19, D21).
-  **Compute the CoT logprob aggregates here, at generation time** — `cot_logprob_{mean,min,std,p10}`, `cot_entropy_mean`, `n_cot_tokens`. They cannot be reconstructed from `calls.parquet` later, and Tier C is unbuildable without them (D4).
-  **Write the 10% raw logprob sidecar** to `runs/logprobs_sample/` where `hash(item_id) % 10 == 0` (D4).
-  **DoD:** running twice does not duplicate rows. Killing mid-run and restarting loses at most one batch. A row for `sample_idx=0` has all six CoT aggregate columns populated. Sidecar files exist for ~10% of items. A test asserts `sample_idx > 0` never appears for any `(condition, prompt_variant)` other than `(clean, P1)`.
+  **Write the full per-token logprobs for every call** to `runs/logprobs/` (D4, amended 4 Sep 2026: 100% coverage, not a 10% sample - see DECISIONS.md). `judge.py` itself computes no derived signal - it only writes `raw_output` plus provenance to the checkpoint and the full logprobs file; the CoT aggregates and logprob-based signals are computed later, by `src/parse.py` (task 1.5), from this saved data.
+  **DoD:** running twice does not duplicate rows. Killing mid-run and restarting loses at most one batch. A logprobs file exists for every completed call (not ~10% - D4's amendment). A test asserts `sample_idx > 0` never appears for any `(condition, prompt_variant)` other than `(clean, P1)`.
 
-- [ ] **1.5 [C]** `src/parse.py` — extract verdict, verbalized confidence, verdict-token logprob, renormalised `p_a`. Failure taxonomy per `CLAUDE.md` §3.
-  **DoD:** `tests/test_parse.py` passes against ≥10 real malformed outputs collected in 1.6, saved as fixtures.
+- [ ] **1.5 [C]** `src/parse.py` — extract verdict, verbalized confidence, verdict-token logprob, renormalised `p_a`, and the CoT logprob aggregates (`cot_logprob_{mean,min,std,p10}`, `cot_entropy_mean`, `n_cot_tokens`) from `raw_output` plus the full per-token logprobs saved by `judge.py` (D4, amended 4 Sep 2026 - this file, not `judge.py`, now owns every logprob-derived field, since 100% coverage means the raw data judge.py saves never disappears). Failure taxonomy per `CLAUDE.md` §3. `split_cot_and_verdict_tokens()` (locating the CoT vs. verdict token boundary within `raw_output`) is already written here.
+  **DoD:** `tests/test_parse.py` passes against ≥10 real malformed outputs collected in 1.6, saved as fixtures. A row for `sample_idx=0` has all six CoT aggregate columns populated.
 
 - [ ] **1.6 [C]** Pilot run: **20 items × `clean`/P1 only × 6 calls = 120 generations** (D5, D6, D10, D19) — 2 canonical greedy across orders + 4 sampled draws in AB. `verbose` doesn't exist until W4; the full P1+P2+P3 clean run doesn't exist until W2.
   **Plus a light P2/P3 smoke test:** run a handful of items through P2 and P3 (greedy, both orders) to confirm all three templates parse cleanly before Gate 1 — catching a P2/P3-specific prompt or parsing bug now is much cheaper than in W2.
