@@ -39,6 +39,13 @@ dependencies = [
 # this pin again for the rest of the project.
 colab = [
     "vllm==0.28.0",
+    # Added 8 Sep 2026, discovered during task 1.6's pilot run: vLLM's
+    # flashinfer sampling backend JIT-compiles a CUDA kernel via ninja on
+    # first use (a subprocess call to the `ninja` binary, not a Python
+    # import) - without it, engine startup fails during warmup with
+    # FileNotFoundError: 'ninja'. Not a version-sensitive pin like vllm's
+    # own; just needs to be present.
+    "ninja",
 ]
 
 [tool.setuptools]
