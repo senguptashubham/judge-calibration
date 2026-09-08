@@ -12,7 +12,15 @@ dependencies = [
     "datasets==5.0.1",
     "pandas==3.0.5",
     "pyarrow==25.0.1",
-    "numpy==2.4.6",
+    # Amended 8 Sep 2026: was pinned "==2.4.6" from whatever resolved
+    # locally on 26 Aug 2026, before vllm was ever in the picture. vllm==
+    # 0.28.0 transitively requires numpy<2.4 (via mistral-common), which
+    # made base deps + the colab extra mutually unsatisfiable on Colab.
+    # Re-pinned to 2.3.5, confirmed via `uv pip install --dry-run
+    # --python-platform linux --python-version 3.11 ".[colab]"` - the
+    # actual resolution for base+colab together on Colab's platform, not
+    # a guess. Local env re-synced to match (was 2.4.6, now 2.3.5).
+    "numpy==2.3.5",
     "scikit-learn==1.9.0",
     "matplotlib==3.11.1",
     "pyyaml==6.0.3",
