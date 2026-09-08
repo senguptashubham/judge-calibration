@@ -4,6 +4,10 @@ results/
 *.parquet
 .env
 
+# Generated output from learning/ exercises (the scripts are tracked, their
+# plots/artifacts aren't - same convention as results/figures/).
+parameter_recovery.png
+
 # Python
 __pycache__/
 *.pyc

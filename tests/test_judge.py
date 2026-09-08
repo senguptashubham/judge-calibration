@@ -162,22 +162,30 @@ def test_logprobs_path_lives_under_logprobs_dir_not_the_old_sample_name():
 
 
 class _FakeLogprob:
-    def __init__(self, logprob):
+    def __init__(self, logprob, decoded_token):
         self.logprob = logprob
+        self.decoded_token = decoded_token
 
 
 def test_write_logprobs_round_trips_through_gzip(tmp_path):
     path = tmp_path / "logprobs" / "some_call.jsonl.gz"
+    # Position 0: model actually emitted token 101 ("A"), even though 202
+    # ("B") was also a top-K candidate. Position 1: only one candidate.
+    token_ids = [101, 303]
     per_token_logprobs = [
-        {101: _FakeLogprob(-0.1), 202: _FakeLogprob(-2.3)},
-        {303: _FakeLogprob(-0.05)},
+        {101: _FakeLogprob(-0.1, "A"), 202: _FakeLogprob(-2.3, "B")},
+        {303: _FakeLogprob(-0.05, "!")},
     ]
-    write_logprobs(path, per_token_logprobs)
+    write_logprobs(path, token_ids, per_token_logprobs)
 
     with gzip.open(path, "rt", encoding="utf-8") as f:
         record = json.loads(f.readline())
 
+    assert record["token_ids"] == [101, 303]
+    assert record["token_texts"] == ["A", "!"]
+    # Both candidates at position 0 keep their own decoded text - not just
+    # the chosen one - so parse.py can later tell which id means "A" vs "B".
     assert record["token_logprobs"] == [
-        {"101": -0.1, "202": -2.3},
-        {"303": -0.05},
+        {"101": {"logprob": -0.1, "decoded_token": "A"}, "202": {"logprob": -2.3, "decoded_token": "B"}},
+        {"303": {"logprob": -0.05, "decoded_token": "!"}},
     ]

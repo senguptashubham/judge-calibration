@@ -131,17 +131,45 @@ def logprobs_path(runs_dir: str, item: str, condition: str, prompt_variant: str,
     return Path(runs_dir) / "logprobs" / f"{key}.jsonl.gz"
 
 
-def write_logprobs(path: Path, per_token_logprobs: list[dict]) -> None:
-    """Full per-token top-K logprobs for one call, gzipped. `per_token_logprobs`
-    is vLLM's own per-position dict (token_id -> object with `.logprob`),
-    one dict per generated token, in generation order.
+def write_logprobs(path: Path, token_ids: list[int], per_token_logprobs: list[dict]) -> None:
+    """Full per-token top-K logprobs for one call, gzipped, PLUS which token
+    was actually generated at each position (`token_ids`/`token_texts`) AND
+    the decoded text of every top-K *candidate*, not just the chosen one.
+
+    Both are necessary, for different reasons:
+    - `token_ids`/`token_texts` (the chosen sequence) is what
+      split_cot_and_verdict_tokens() needs to find the CoT/verdict boundary
+      in `raw_output` - without it parse.py would have no way to reconstruct
+      which generated token corresponds to which piece of text.
+    - Per-candidate decoded text (inside `token_logprobs` itself) is what
+      p_a needs: to renormalize P(A) vs P(B) at the verdict position,
+      parse.py must find *which* of the ~20 candidate token ids there
+      decode to the literal text "A" and "B" - the chosen token's own text
+      alone doesn't tell you that for the *other* candidate.
+
+    Saving both here, rather than parse.py re-tokenizing `raw_output` or
+    the literal strings "A"/"B" itself, keeps parse.py from needing a
+    tokenizer/transformers dependency at all (D17 - parse.py stays a
+    light, local-only module).
+
+    Args:
+      token_ids: the actually-generated token id at each position, in order.
+      per_token_logprobs: vLLM's own per-position dict (token_id -> object
+        with `.logprob` and `.decoded_token`), one dict per generated
+        token, in generation order - same order/length as token_ids.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wt", encoding="utf-8") as f:
         record = {
+            "token_ids": list(token_ids),
+            "token_texts": [position[tid].decoded_token for tid, position in zip(token_ids, per_token_logprobs)],
             "token_logprobs": [
-                {token_id: lp.logprob for token_id, lp in position.items()} for position in per_token_logprobs
-            ]
+                {
+                    token_id: {"logprob": lp.logprob, "decoded_token": lp.decoded_token}
+                    for token_id, lp in position.items()
+                }
+                for position in per_token_logprobs
+            ],
         }
         f.write(json.dumps(record) + "\n")
 
@@ -237,7 +265,7 @@ def _run_generation(
             path = logprobs_path(
                 config.paths.runs_dir, item, spec.condition, spec.prompt_variant, spec.order, spec.sample_idx
             )
-            write_logprobs(path, completion.logprobs)
+            write_logprobs(path, completion.token_ids, completion.logprobs)
 
 
 if __name__ == "__main__":

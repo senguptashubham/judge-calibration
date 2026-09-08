@@ -4,7 +4,7 @@ import numpy as np
 import numpy.typing as npt
 
 
-def truncated_entropy(position_logprobs: dict) -> float:
+def truncated_entropy(logprobs: npt.ArrayLike) -> float:
     """Entropy of the top-K logprob distribution at a single generated
     token position, renormalized over just those K tokens (K=20 in this
     project - CLAUDE.md's `logprobs` config key, D4). This is NOT the true
@@ -19,13 +19,17 @@ def truncated_entropy(position_logprobs: dict) -> float:
     p_i = exp(logprob_i) / sum_j(exp(logprob_j)) - a softmax renormalization
     over just the K observed logprobs.
 
+    Takes a plain array of logprob floats, deliberately decoupled from any
+    particular object/dict shape (vLLM's live objects, a JSON-loaded
+    record, whatever) - the caller (src/parse.py) extracts the floats
+    itself before calling this, since this function only needs the numbers.
+
     Args:
-      position_logprobs: one generated position's top-K logprobs, as
-        returned by vLLM (dict of token_id -> object with a `.logprob`
-        attribute).
+      logprobs: one generated position's top-K logprobs, as a flat array
+        of floats.
     """
-    logprobs = np.array([lp.logprob for lp in position_logprobs.values()])
-    probs = np.exp(logprobs)
+    logprobs_arr = np.asarray(logprobs, dtype=float)
+    probs = np.exp(logprobs_arr)
     probs = probs / probs.sum()
     return float(-np.sum(probs * np.log(probs)))
 
