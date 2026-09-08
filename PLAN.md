@@ -87,6 +87,16 @@ At N=1000 × 12 = **12,000 generations**, against 18,000 under the pre-D19 3-con
 
 **Budget the units, not the hours** (D12): measure seconds-per-generation at Gate 1, multiply by 12,000, **multiply by 3 for reruns** — reruns after a parser or prompt fix are the base case, not a contingency — then read the live burn rate from Colab's resource panel and compare against remaining monthly units *before* committing to W2. **If it's tight, cut N before cutting conditions.** N=600 with everything beats N=1000 with pieces missing. Prefer L4; reach for A100 only if measured L4 throughput fails the budget.
 
+**Gate 1 measurement, PROVISIONAL — 8 Sep 2026.** Two timed cells from task 1.6's pilot on Colab L4: 120 generations in 180s, 20 generations in 60s (both `clean` condition - no `verbose` timing exists yet, task 4.1/4.2 haven't run). Solving both as `total = startup + n × rate` separates the per-call model-reload overhead from the real per-generation cost, rather than blending them: **startup ≈ 36s, rate ≈ 1.2 sec/generation**. A naive single blend (140 gens / 4 min ≈ 1.71 sec/gen) would overstate the steady-state rate, since a fixed ~36s reload cost dominates a 20-generation sample but is negligible at the real run's scale.
+
+Using the **real Gate 0 N = 1904** (not the N=1000 placeholder line 86's "12,000" used before Gate 0 confirmed the actual count): total generations = 1904 × 12 × 3 (rerun factor) = **68,544**. Splitting by the schedule's own clean:verbose ratio (10:2 per item) and applying the measured 1.19x verbose prompt-token multiplier (`REPORT.md`) as an approximation for verbose's marginal rate (1.2 × 1.19 ≈ 1.43 sec/gen — an approximation, since prefill cost doesn't scale 1:1 with wall-clock the way decode does):
+
+- Clean: 57,120 generations × 1.2 sec ≈ 19.04 hours
+- Verbose: 11,424 generations × 1.43 sec ≈ 4.53 hours
+- **Total ≈ 23.6 hours of L4 compute**
+
+This exceeds a single Colab session (12h free-tier cap, 24h Pro cap) — the full run will span multiple sessions, which is exactly what the checkpoint/resume design (invariant 9) exists for. **Re-extrapolate once `perturb.py` lands (task 4.1b, W4)** with real verbose-condition timing instead of the prompt-token-multiplier approximation used here.
+
 ### 2.3 The label problem — and why it makes RQ4 and the human-disagreement angle reinforce each other
 
 `correct` = judge verdict matches human majority. But on items where humans split ~50/50, "correct" is a coin flip, and no predictor can beat chance on those. Left alone, that noise floor caps your AUROC and you'd report a muddy number.
