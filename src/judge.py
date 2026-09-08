@@ -120,6 +120,18 @@ def pending_calls(items_df, specs: list[CallSpec], completed: set[str]) -> list[
     return pending
 
 
+def filter_schedule(specs: list[CallSpec], prompt_variants: list[str] | None) -> list[CallSpec]:
+    """Restricts a call schedule to a subset of prompt variants - what lets
+    a pilot/smoke-test run (task 1.6: 20 items, clean/P1 only) stay scoped
+    down instead of accidentally launching the full D19 schedule against
+    every item. `None` means no restriction (every configured variant runs,
+    the normal case for the real W2 run).
+    """
+    if prompt_variants is None:
+        return specs
+    return [s for s in specs if s.prompt_variant in prompt_variants]
+
+
 def logprobs_path(runs_dir: str, item: str, condition: str, prompt_variant: str, order: str, sample_idx: int) -> Path:
     """Where one call's full per-token logprobs get saved (D4, amended
     4 Sep 2026: every call, not a 10% sample - directory renamed from
@@ -180,10 +192,15 @@ def _run_generation(
     checkpoint_path: Path,
     items_df,
     batch_size: int = 32,
+    prompt_variants: list[str] | None = None,
 ) -> None:
     """The only function in this module that touches vLLM. Kept separate so
     everything above stays importable/testable without vllm installed
     (DECISIONS.md D17 - vllm only exists in Colab's venv).
+
+    `prompt_variants`: passed straight to filter_schedule() - restricts
+    which variants actually run, for scoped pilot/smoke-test invocations
+    (task 1.6). `None` runs the full D19 schedule, the normal case.
 
     NOTE: verify `StructuredOutputsParams`'s exact JSON-schema keyword
     against the installed vllm==0.28.0 build before the first real run
@@ -209,6 +226,7 @@ def _run_generation(
     vllm_version = __import__("vllm").__version__
 
     specs = [s for s in call_schedule(config) if s.condition == condition]
+    specs = filter_schedule(specs, prompt_variants)
     pending = pending_calls(items_df, specs, completed)
 
     for batch_start in range(0, len(pending), batch_size):
@@ -272,6 +290,20 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--condition", required=True, choices=["clean", "verbose"])
+    parser.add_argument(
+        "--n-items",
+        type=int,
+        default=None,
+        help="Limit to a seeded random sample of N items - for scoped pilot/smoke-test runs "
+        "(task 1.6's 20-item pilot). Default: no limit, every non-tie item.",
+    )
+    parser.add_argument(
+        "--prompt-variants",
+        type=str,
+        default=None,
+        help="Comma-separated subset of prompt variants to run, e.g. 'P1' for task 1.6's "
+        "clean/P1-only pilot. Default: every variant in the schedule.",
+    )
     args = parser.parse_args()
 
     cfg = Config.from_yaml(args.config)
@@ -289,5 +321,14 @@ if __name__ == "__main__":
     items_df = items_labels.merge(conv_cols, on=["question_id", "model_a", "model_b", "turn"])
     items_df = items_df[~items_df["is_tie"]]  # D2: no ground truth for tied items
 
+    if args.n_items is not None:
+        # Seeded, not the first N - a naive head() risks clustering on a
+        # handful of question_ids (each has multiple model_a/model_b
+        # pairs), giving a pilot with far less category diversity than a
+        # random sample of the same size.
+        items_df = items_df.sample(n=args.n_items, random_state=cfg.seed)
+
+    prompt_variants = args.prompt_variants.split(",") if args.prompt_variants else None
+
     checkpoint_path = Path(cfg.paths.runs_dir) / f"judge_{args.condition}.jsonl"
-    _run_generation(cfg, args.condition, checkpoint_path, items_df)
+    _run_generation(cfg, args.condition, checkpoint_path, items_df, prompt_variants=prompt_variants)

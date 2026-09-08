@@ -18,6 +18,7 @@ from src.judge import (
     append_checkpoint,
     call_schedule,
     checkpoint_key,
+    filter_schedule,
     load_completed_keys,
     logprobs_path,
     pending_calls,
@@ -52,6 +53,20 @@ def test_call_schedule_verbose_is_p1_only_both_orders(config):
     verbose_specs = [s for s in call_schedule(config) if s.condition == "verbose"]
     assert {s.order for s in verbose_specs} == {"AB", "BA"}
     assert all(s.prompt_variant == "P1" and s.sample_idx == 0 for s in verbose_specs)
+
+
+def test_filter_schedule_none_is_a_no_op(config):
+    specs = call_schedule(config)
+    assert filter_schedule(specs, None) == specs
+
+
+def test_filter_schedule_restricts_to_requested_variants(config):
+    clean_specs = [s for s in call_schedule(config) if s.condition == "clean"]
+    filtered = filter_schedule(clean_specs, ["P1"])
+    assert filtered  # non-empty - P1 exists for clean
+    assert all(s.prompt_variant == "P1" for s in filtered)
+    # Task 1.6's pilot expects exactly 6 clean/P1 calls (2 greedy + 4 sampled).
+    assert len(filtered) == 6
 
 
 def test_checkpoint_key_deterministic():
