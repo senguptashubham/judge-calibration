@@ -23,6 +23,7 @@ import argparse
 import gzip
 import json
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -252,7 +253,15 @@ def _run_generation(
             for _, _, spec in batch
         ]
 
+        batch_start_time = time.time()
         outputs = llm.generate(prompts, sampling_params)
+        batch_elapsed_ms = (time.time() - batch_start_time) * 1000
+        # Batch-averaged, not true per-request latency - vLLM processes the
+        # whole batch concurrently, so individual request times aren't
+        # cleanly separable from one wall-clock measurement around the call.
+        # Good enough for GPU-budget extrapolation (task 1.6's DoD), not a
+        # latency SLA - documented as an average, not claimed as precise.
+        avg_latency_ms = batch_elapsed_ms / len(batch)
 
         for (item, item_row, spec), output in zip(batch, outputs):
             completion = output.outputs[0]
@@ -276,7 +285,7 @@ def _run_generation(
                 "raw_output": completion.text,
                 "n_prompt_tokens": len(output.prompt_token_ids),
                 "n_out_tokens": len(completion.token_ids),
-                "latency_ms": None,  # TODO: wire up per-request timing once batching timing is confirmed on Colab
+                "latency_ms": avg_latency_ms,
             }
             append_checkpoint(checkpoint_path, row)
 
