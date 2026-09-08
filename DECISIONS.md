@@ -1,6 +1,6 @@
 # DECISIONS.md — resolutions from the Week-0 design review
 
-Twenty-one decisions, D4–D24, resolving the review findings and (D18 onward) integrating the professor's 31 Aug 2026 feedback (`PROFESSORFEEDBACK.md`). Each is binding; copy the ones marked ⚑ into `PREREGISTRATION.md` before Gate 1.
+Twenty-two decisions, D4–D25, resolving the review findings and (D18 onward) integrating the professor's 31 Aug 2026 feedback (`PROFESSORFEEDBACK.md`). Each is binding; copy the ones marked ⚑ into `PREREGISTRATION.md` before Gate 1.
 
 Verdict on the review: **eight of ten findings were correct.** #1, #2 and #3 each would have cost a full re-run. #2 turned out to save GPU time rather than cost it. Two findings needed a stronger fix than proposed (#4, #5) and one revealed a second bug underneath it (#3). Nothing was wrong.
 
@@ -357,4 +357,25 @@ Fit with NumPyro/NUTS. **Fallback ladder, preregistered, not improvised mid-week
 ## D24 — New dependencies: local, not Colab *(professor feedback, mechanical consequence of D22)*
 
 **Decision:** `numpyro` (+ its `jax` dependency, CPU-only — no GPU needed for a hierarchical logistic regression at this N) and `arviz` (for the convergence diagnostics D22 makes mandatory) go into `pyproject.toml`'s **base install**, not the `colab` extra. Fitting the Bayesian model is analysis work on already-collected data, consistent with the existing framing that RQ4 costs zero extra GPU time (`PLAN.md` sec 1) — it runs on the same local `judge-calib` conda env as everything else in `src/` except `judge.py` (D17).
+
+---
+
+## D25 ⚑ — `conf_lp` is inflated by constrained-decoding renormalization; `vllm` version bump investigated and rejected *(found while designing task 1.8's vacuum test, 8 Sep 2026)*
+
+**The problem.** Structured/guided decoding works by masking disallowed tokens to `-inf` before softmax, then renormalizing over whatever survives. At the verdict position, that shrinks the competition pool from the full vocabulary down to just `{A, B}`. This means `conf_lp = exp(verdict_token_logprob)` — an *absolute* probability — gets systematically inflated: a token that would have had modest absolute probability across the full vocabulary (competing against everything else the model might have "wanted" to say) can end up looking highly confident once renormalized against only one other candidate. This is **not** a vacuum-test-specific issue — it affects every use of `conf_lp` throughout RQ1–RQ4, since the whole harness uses constrained decoding.
+
+**Crucially, this does NOT affect everything logprob-derived.** `p_a = P(A)/(P(A)+P(B))` is a *ratio* between exactly the two surviving candidates, and renormalizing a distribution by a constant factor preserves the ratio between any two specific survivors. So `p_a` — and everything built on it (`verdict_bidir`, `conf_bpe`) — is robust to this distortion. Only the absolute-probability signal (`conf_lp`) is compromised.
+
+**Investigated fix: `SamplingParams(logprobs_mode="raw_logprobs")`.** vLLM's `main` branch (post-`0.28.0`) captures logprobs *before* the structured-output mask is applied — confirmed by reading the actual sampler source (`vllm/v1/sample/sampler.py`), which computes `raw_logprobs` from unmasked logits ahead of `apply_logits_processors()`. This would give the true, unconstrained top-K distribution at the verdict position, for free, from a single call.
+
+**Checked empirically against the pinned version, not assumed:** `SamplingParams(logprobs_mode=...)` raises `TypeError: Unexpected keyword argument 'logprobs_mode'` on `vllm==0.28.0` — the feature isn't in this release.
+
+**Considered re-pinning to a newer vLLM specifically for this.** D11 says "do not move it again," but the reasoning behind that rule (preserving comparability of a mostly-collected dataset) doesn't yet apply — this is pre-2.1, before the real full run, and the only data collected so far (task 1.6's 140+20-row pilot) is explicitly disposable, not the final dataset. So this was a genuine reconsideration, not a rule violation, weighed the same way any other version pin gets decided (D11's own precedent: measure, then pin).
+
+**Rejected — there is nothing to re-pin to.** `uv pip install --upgrade-package vllm` against PyPI still resolves to `0.28.0`: it's the latest published release. `logprobs_mode` exists only in vLLM's unreleased `main` branch. The only way to get it would be installing directly from an unreleased git commit — no stable version pin, real risk of unrelated instability, a materially bigger and riskier ask than picking a newer *released* version. Not worth it for an unquantified benefit.
+
+**Decision, final:**
+1. Stay on `vllm==0.28.0`. No pin change.
+2. For the vacuum test (task 1.8) and generally: `conf_verb` (the model's own stated confidence, not mechanically derived from token renormalization) is the primary "is the judge falsely confident" signal. `conf_lp`/`p_a`-derived signals stay in use but are understood as reporting an upper bound on true confidence, not an exact measurement, wherever `conf_lp` specifically is involved.
+3. **Task 4.5's constrained-vs-free-form ablation is the real resolution path** — it will produce actual evidence on how large this gap is. If it turns out to be large, that's a well-justified, evidence-based reason to revisit a version bump for a deliberate re-run (or a future vLLM release may ship `logprobs_mode` by then). Revisiting speculatively, without that evidence, is not.
 

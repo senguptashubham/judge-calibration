@@ -75,7 +75,7 @@ Computed by `python -m src.data --config configs/run.yaml` (D1's decided policy)
 - N contested: **123** — **≥100, so H4's bucketed secondary comparison stays viable** (`TASKS.md` Gate 0 would otherwise have dropped it in favor of D9's continuous-only version).
 - **Human–human Cohen's κ: 0.683** (N = 536 item-pairs). Method: non-tie votes only, one pair per item with ≥2 non-tie votes (not all pairwise combinations, so every pair is an independent observation), the two votes chosen deterministically by sorting each item's votes by annotator ID and taking the first and last (`src/data.py::human_human_kappa()`). This is the ceiling on everything downstream — no judge, however well-calibrated, should be expected to exceed human-human agreement on the same task.
 
-## 8. ⚑-marked decisions, D4–D24
+## 8. ⚑-marked decisions, D4–D25
 
 The full text and reasoning for each lives in `DECISIONS.md`, not duplicated here — copying ~15 decisions verbatim would create two documents that could silently drift out of sync. This is the binding list; each is in force as of Gate 1.
 
@@ -94,5 +94,6 @@ The full text and reasoning for each lives in `DECISIONS.md`, not duplicated her
 - **D21** — `conf_sc`/`conf_ens` are clean/P1-only; the clean→verbose transfer test and verbose-shift check both use Tier A minus those signals.
 - **D22** — Bayesian hierarchical logistic regression joins RQ4; held-out random intercepts marginalized over the population prior, never fitted; convergence diagnostics mandatory.
 - **D23** — RQ5: ensemble distribution as teacher, single-call Bayesian model as student; aleatoric estimate validated against `d_human`/H4.
+- **D25** — `conf_lp` is inflated by constrained-decoding renormalization (absolute probability, unlike the ratio-based `p_a`); `conf_verb` is the primary false-confidence signal wherever this matters; `vllm` stays pinned at `0.28.0` (no newer PyPI release exists); task 4.5's ablation is the real resolution path.
 
 Not ⚑-marked (operational/workflow, not methodologically binding — still real decisions, just not ones that change what gets measured): D10 (pilot scope), D11 (vLLM pinning), D12 (Colab budget method), D13 (superseded by D18), D17 (local/Colab split), D24 (new dependencies).
