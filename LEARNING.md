@@ -166,7 +166,7 @@ Each block ends in code, not notes. If there's no artifact, it didn't happen.
 | C3 | `signals.py` + docstrings | W1 | 2h | ☐ |
 | **A11** | **Auto-Prompt Ensemble for LLM Judge** | **W1** | **30m** | ☐ |
 | **A12** | **Bayesian Prompt Ensembles (ICCV 2025)** | **W1** | **30m** | ☐ |
-| **C9** | **Bayesian inference + NumPyro/NUTS basics** | **W1** | **2h** | ☐ |
+| **C9** | **Bayesian inference + NumPyro/NUTS basics** | **W1** | **2h** | ☑ |
 | A8 | Dark Current | W2 | 30m | ☐ |
 | A6 | Reliability without Validity | W2 | 30m | ☐ |
 | C4 | ECE⊥AUROC counterexample | W2 | 1h | ☐ |

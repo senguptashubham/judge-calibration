@@ -63,7 +63,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **1.3 [C]** `src/prompts.py` — **three** MT-Bench pairwise templates (D19): **P1** (the existing template — explanation before verdict / CoT, plus a verbalized-confidence line), **P2** (correctness-first rubric), **P3** (helpfulness-first rubric). Each independently versioned + hashed.
   **DoD:** `prompt_hash()` is stable across runs, for all three variants. Each template renders correctly for a real item. All three are frozen at Gate 1 and touching any of them after requires a new version string and a full re-run (invariant 10).
 
-- [ ] **1.3b [L]** Theory I — Bayesian inference + NumPyro/NUTS basics (`LEARNING.md`, new block, D22). Deliberately scheduled here, not W5, since it's the biggest new-concept lift in the plan and needs runway.
+- [x] **1.3b [L]** Theory I — Bayesian inference + NumPyro/NUTS basics (`LEARNING.md`, new block, D22). Deliberately scheduled here, not W5, since it's the biggest new-concept lift in the plan and needs runway.
   **DoD:** you can explain what NUTS actually samples (the posterior over model parameters, via Hamiltonian trajectories), why a hierarchical model's group-level intercepts shrink toward the population mean (partial pooling), and why that's the standard fix for "too few groups per unit" — not an exception to invariant 11, but the textbook use case for it.
 
 - [x] **1.4 [C]** `src/judge.py` — vLLM wrapper. Batched `LLM.generate`; guided decoding constraining the verdict to `{A, B}`; **`logprobs=20`**; JSONL append-checkpoint keyed by **`(item_id, condition, prompt_variant, order, sample_idx)`** (D19 adds `prompt_variant` to the key); skip-completed on restart.
