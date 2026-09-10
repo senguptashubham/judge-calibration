@@ -61,3 +61,54 @@ next to decode"), now backed by a real tokenizer measurement rather than an assu
 The real `verbose_pad()` (task 4.1) may land at a different multiplier - this is a
 sanity check on the current GPU-budget estimate's order of magnitude, not a
 substitute for re-extrapolating once the real perturbation exists.
+
+### Vacuum test — "dark current" (task 1.8, LEARNING.md A8) — 10 Sep 2026
+
+**Purpose:** does the judge express a spurious preference when there is genuinely no
+content difference to base one on? Our JSON schema forces a binary `verdict` with no
+tie option (unlike the Dark Current paper's own `DC(J) = count(J(o) != 'tie') / N`
+metric), so "does it pick a winner" is trivially 100% by construction - the
+informative question is *how* it picks, not whether.
+
+**Method:** 40 pairs of identical responses (`vacuum_identical()` - one real item's
+response duplicated to both sides) + 20 pairs of empty responses (`vacuum_empty()` -
+real questions, both sides' assistant turns blanked), `clean`-schedule item sample
+(seed 1234), single greedy `P1`/AB call per pair (order doesn't matter when both
+sides are byte-identical - see `src/perturb.py`). Two measurements: the A/B verdict
+split (systematic positional skew, since content provides no real signal either way),
+and mean `verbalized_conf` (per D25, the primary false-confidence signal - `conf_lp`
+is a known post-mask upper bound, reported but not relied on here).
+
+**Result:**
+
+| | n | verdict split (A / B) | binomial p (two-sided, H0: 50/50) | mean `verbalized_conf` |
+|---|---|---|---|---|
+| Identical pairs | 40 | 72.5% / 27.5% | **0.0064** | 0.970 |
+| Empty pairs | 20 | 10.0% / 90.0% | **0.0004** | 0.973 |
+| *(real clean/P1 items, for comparison)* | 20 | — | — | 0.945 |
+
+Parse rate: 60/60 (100%) - structured output held up cleanly even on this degenerate
+content.
+
+**Conclusion:** two distinct findings, both real:
+
+1. **Genuine positional bias, and its direction flips with content type.** Both splits
+   are far from chance (p < 0.01 for identical, p < 0.001 for empty) - not noise at
+   these sample sizes. Identical content favors position A; empty content favors
+   position B, just as strongly, in the *opposite* direction. The judge's "dark
+   current" isn't a single fixed positional preference - what nothing looks like to it
+   depends on what kind of nothing it's shown.
+2. **False confidence.** Mean `verbalized_conf` on both vacuum types (0.970, 0.973) is
+   not lower than - if anything, slightly higher than - the real clean/P1 items'
+   mean (0.945). A judge that recognized "there is no real basis for a decision here"
+   should show measurably *lower* confidence on these degenerate pairs. It doesn't.
+
+Both findings matter for RQ1 (calibration) and RQ2 (whether confidence is informative
+about error): the judge's stated confidence does not distinguish a genuine, considered
+judgment from a coin flip forced by schema constraints and possibly-arbitrary
+positional preference. Sample sizes (n=40, n=20) are small by design (task 1.8 is a
+W1 sanity check, not a powered study) - treat the specific percentages as descriptive,
+not as a precise population estimate of the judge's true positional bias rate.
+
+Analysis script: ad hoc, not checked in (see `runs/vacuum.jsonl` + `runs/logprobs/`
+for the underlying data; `src/vacuum_test.py` generated it).

@@ -84,7 +84,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **1.7 [C]** `src/signals.py` — `conf_verb` and `conf_lp` (both from `sample_idx=0` only, D6), `conf_sc` (fraction of the k_sc sampled verdicts matching the canonical greedy verdict, `(clean, P1)` only), `conf_bpe` (entropy of mean `p_a` across the two orders, within `(condition, prompt_variant)`). Docstrings state formulas. Also emit `judge_verdict` / `verdict_bidir` per D7.
   **DoD:** all four populated for the 20 pilot items, no NaNs. A test asserts `conf_lp` is never read from a row with `sample_idx != 0`. (`conf_ens` and its decomposition are a separate task, 2.2b — they need the P2/P3 data this pilot only smoke-tests, not the full W2 run.)
 
-- [ ] **1.8 [A]** Vacuum test: 40 pairs of identical responses + 20 empty-response pairs.
+- [x] **1.8 [A]** Vacuum test: 40 pairs of identical responses + 20 empty-response pairs.
   **DoD:** a "dark current" number — the rate at which the judge picks a winner between identical responses — in `REPORT.md`.
 
 - [ ] **1.9 [L]** Read Tian and Xiong (`LEARNING.md` A3, A4).
