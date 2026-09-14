@@ -7,7 +7,16 @@ import numpy as np
 import pytest
 from sklearn.metrics import cohen_kappa_score
 
-from src.metrics import cohens_kappa, ece, truncated_entropy
+from src.metrics import (
+    auroc_error,
+    brier,
+    brier_decomposition,
+    cohens_kappa,
+    ece,
+    mce,
+    overconfidence_gap,
+    truncated_entropy,
+)
 
 
 def test_truncated_entropy_hand_computed_already_normalized():
@@ -103,3 +112,93 @@ def test_kappa_matches_sklearn():
         assert cohens_kappa(a, b) == pytest.approx(
             cohen_kappa_score(a, b), abs=1e-9
         )
+
+
+# --- TASKS.md task 2.5 ------------------------------------------------------
+#
+# overconfidence_gap/mce/brier/brier_decomposition reuse test_ece_reference's
+# dataset (200 items @ conf=0.9, 150 correct; 300 items @ conf=0.6, 99
+# correct - N=500, mean conf=0.72, mean accuracy=0.498) so the numbers are
+# hand-checkable against each other, not just against this file. Expected
+# values worked out during planning:
+#   overconfidence_gap -> 0.222 (same number as ECE here, NOT a general
+#     identity - true only because the judge is overconfident in BOTH bins;
+#     worth a comment in the test explaining why, since it looks like a bug)
+#   mce                -> 0.27 (the worse of the two bins' gaps, 0.15/0.27)
+#   brier               -> 0.2604
+#   brier_decomposition -> reliability=0.05274, resolution=0.042336,
+#     uncertainty=0.249996 (reliability - resolution + uncertainty = 0.2604,
+#     matching brier() exactly - this cross-check IS the task's DoD)
+# auroc_error's tests are below this block, already filled in.
+
+
+def test_overconfidence_gap_reference():
+    pass  # TODO(owner): expected 0.222 - see note above
+
+
+def test_mce_reference():
+    pass  # TODO(owner): expected 0.27 - see note above
+
+
+def test_brier_reference():
+    pass  # TODO(owner): expected 0.2604 - see note above
+
+
+def test_brier_decomposition_reconstructs_brier_score():
+    # CLAUDE.md task 2.5's DoD: reliability - resolution + uncertainty must
+    # reconstruct brier() to 1e-6. This is the important test in this
+    # block - it catches sign/assignment bugs the individual-term checks
+    # below can't.
+    pass  # TODO(owner)
+
+
+def test_brier_decomposition_reference_terms():
+    pass  # TODO(owner): expected (0.05274, 0.042336, 0.249996)
+
+
+def test_auroc_error_reference():
+    # 3 correct items at uncertainty [0.1, 0.2, 0.4], 2 error items at
+    # [0.3, 0.5] -> 5 of the 6 (error, correct) pairs rank correctly
+    # (0.3 loses to 0.4) -> AUROC = 5/6.
+    uncertainty = [0.1, 0.2, 0.4, 0.3, 0.5]
+    correct = [True, True, True, False, False]
+
+    assert auroc_error(uncertainty, correct) == pytest.approx(5 / 6)
+
+
+def test_auroc_error_perfectly_separating_signal_is_one():
+    # Every error item has higher uncertainty than every correct item -
+    # the signal ranks errors above correct answers with zero mistakes.
+    uncertainty = [0.1, 0.2, 0.3, 0.9, 0.95]
+    correct = [True, True, True, False, False]
+
+    assert auroc_error(uncertainty, correct) == pytest.approx(1.0)
+
+
+def test_auroc_error_inverted_signal_is_zero():
+    # Every error item has LOWER uncertainty than every correct item - the
+    # worst possible ranking. This is the test that would catch the
+    # positive-class/sign bug the docstring warns about: get error vs.
+    # correct backwards and this silently reports 1.0 instead of 0.0.
+    uncertainty = [0.7, 0.8, 0.9, 0.1, 0.2]
+    correct = [True, True, True, False, False]
+
+    assert auroc_error(uncertainty, correct) == pytest.approx(0.0)
+
+
+def test_auroc_error_uninformative_signal_is_near_half():
+    # A signal with no relationship to correctness should land near 0.5,
+    # not exactly 0.5 - tolerance sized for N=2000 draws at this seed.
+    rng = np.random.default_rng(seed=0)
+    uncertainty = rng.uniform(0, 1, size=2000)
+    correct = rng.integers(0, 2, size=2000).astype(bool)
+
+    assert auroc_error(uncertainty, correct) == pytest.approx(0.5, abs=0.05)
+
+
+def test_auroc_error_raises_when_only_one_class_present():
+    # AUROC is undefined without both an error and a correct item present -
+    # this must surface as a loud failure (sklearn's ValueError), never a
+    # silently wrong number like 0.5 or 1.0.
+    with pytest.raises(ValueError):
+        auroc_error([0.1, 0.2, 0.3], [True, True, True])

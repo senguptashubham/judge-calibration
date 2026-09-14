@@ -2,6 +2,7 @@
 
 import numpy as np
 import numpy.typing as npt
+from sklearn.metrics import roc_auc_score
 
 
 def truncated_entropy(logprobs: npt.ArrayLike) -> float:
@@ -200,3 +201,197 @@ def cohens_kappa(a: npt.ArrayLike, b: npt.ArrayLike) -> float:
         return 0.0
 
     return (p_o - p_e) / (1 - p_e)
+
+
+def overconfidence_gap(confidences: npt.ArrayLike, correct: npt.ArrayLike) -> float:
+    """Signed calibration gap: mean stated confidence minus mean accuracy.
+
+    gap = mean(confidences) - mean(correct)
+
+    CLAUDE.md invariant 6: ECE alone can't distinguish overconfidence from
+    underconfidence, because it takes |acc(B_m) - conf(B_m)| per bin before
+    averaging - a judge overconfident in one bin and underconfident in
+    another can post a small ECE while being badly miscalibrated in both
+    directions. This signed, unbinned version never cancels that way.
+
+    Args:
+        confidences: stated confidence per item, in [0, 1].
+        correct: whether the judge was actually right, per item.
+
+    Returns:
+        gap. Positive = overconfident on average, negative = underconfident.
+    """
+    confidences_arr = np.asarray(confidences, dtype=float)
+    correct_arr = np.asarray(correct, dtype=float)
+    return float(np.mean(confidences_arr) - np.mean(correct_arr))
+
+
+def mce(
+    confidences: npt.ArrayLike,
+    correct: npt.ArrayLike,
+    n_bins: int,
+    strategy: str = "auto",
+) -> tuple[float, int]:
+    """Maximum Calibration Error: the worst single bin's gap, not the
+    weighted average ECE reports.
+
+    MCE = max_m |acc(B_m) - conf(B_m)|
+
+    Same binning as ece() (reuse get_bin_edges()) - MCE answers "how bad is
+    the worst bin," ECE answers "how bad is the typical bin." A model can
+    have a small ECE and still have one badly-miscalibrated bin that MCE
+    would catch and ECE would average away.
+
+    Args:
+        confidences: stated confidence per item, in [0, 1].
+        correct: whether the judge was actually right, per item.
+        n_bins: requested number of bins - see get_bin_edges.
+        strategy: one of "uniform", "quantile", "auto" (default).
+
+    Returns:
+        (mce, n_effective_bins) - mirrors ece()'s return shape.
+    """
+    confidences_arr = np.asarray(confidences, dtype=float)
+    correct_arr = np.asarray(correct, dtype=float)
+
+    edges = get_bin_edges(confidences_arr, n_bins, strategy)
+    bin_labels = np.digitize(confidences_arr, edges)
+
+    bin_gaps = []
+    for bin_label in np.unique(bin_labels):
+        mask = bin_labels == bin_label
+        mean_confidence = confidences_arr[mask].mean()
+        accuracy = correct_arr[mask].mean()
+        bin_gaps.append(abs(accuracy - mean_confidence))
+
+    mce_value = float(max(bin_gaps))
+    n_effective_bins = len(bin_gaps)
+
+    return mce_value, n_effective_bins
+
+
+def brier(confidences: npt.ArrayLike, correct: npt.ArrayLike) -> float:
+    """Brier score: mean squared error between stated confidence and the
+    binary outcome. A strictly proper scoring rule - unlike accuracy, a
+    judge cannot minimize this by reporting anything other than its true
+    believed probability of being correct.
+
+    BS = mean((confidence_i - correct_i)^2), correct_i in {0, 1}
+
+    Args:
+        confidences: stated confidence per item, in [0, 1].
+        correct: whether the judge was actually right, per item.
+
+    Returns:
+        Brier score in [0, 1]. Lower is better; 0 = perfect.
+    """
+    confidences_arr = np.asarray(confidences, dtype=float)
+    correct_arr = np.asarray(correct, dtype=float)
+    return float(np.mean((confidences_arr - correct_arr) ** 2))
+
+
+def brier_decomposition(
+    confidences: npt.ArrayLike,
+    correct: npt.ArrayLike,
+    n_bins: int,
+    strategy: str = "auto",
+) -> tuple[float, float, float]:
+    """Murphy (1973)'s three-term decomposition of the Brier score, computed
+    over the same bins as ece()/mce():
+
+    BS = Reliability - Resolution + Uncertainty
+
+    - Uncertainty = obar * (1 - obar), obar = overall mean of `correct`
+      (irreducible - depends only on the base rate, not on the judge at all)
+    - Reliability = sum_m (n_m/N) * (conf_bar_m - acc_m)^2
+      (a squared, bin-weighted calibration gap - this term IS what ece()
+      measures, just squared instead of |.| and before the final average.
+      Low is good.)
+    - Resolution = sum_m (n_m/N) * (acc_m - obar)^2
+      (how far each bin's accuracy departs from the overall base rate - the
+      judge is only "resolving" anything if different confidence levels
+      really do correspond to different accuracy. High is good.)
+
+    Args:
+        confidences: stated confidence per item, in [0, 1].
+        correct: whether the judge was actually right, per item.
+        n_bins: requested number of bins - see get_bin_edges.
+        strategy: one of "uniform", "quantile", "auto" (default).
+
+    Returns:
+        (reliability, resolution, uncertainty), the three terms separately -
+        RQ1 reports each on its own, not just their sum. Caller reconstructs
+        BS = reliability - resolution + uncertainty to check against
+        brier() (that reconstruction is TASKS.md task 2.5's DoD).
+    """
+    confidences_arr = np.asarray(confidences, dtype=float)
+    correct_arr = np.asarray(correct, dtype=float)
+    n = len(confidences_arr)
+    obar = float(np.mean(correct_arr))
+
+    edges = get_bin_edges(confidences_arr, n_bins, strategy)
+    bin_labels = np.digitize(confidences_arr, edges)
+
+    reliability_terms = []
+    resolution_terms = []
+    for bin_label in np.unique(bin_labels):
+        mask = bin_labels == bin_label
+        count = mask.sum()
+        mean_confidence = confidences_arr[mask].mean()
+        accuracy = correct_arr[mask].mean()
+        reliability_terms.append(count * (accuracy - mean_confidence) ** 2)
+        resolution_terms.append(count * (accuracy - obar) ** 2)
+
+    reliability = float(sum(reliability_terms) / n)
+    resolution = float(sum(resolution_terms) / n)
+    uncertainty = obar * (1 - obar)
+
+    return reliability, resolution, uncertainty
+
+
+def auroc_error(uncertainty: npt.ArrayLike, correct: npt.ArrayLike) -> float:
+    """AUROC for using an uncertainty signal to predict judge ERROR - RQ2's
+    primary metric. Positive class is error (NOT correct), scored by
+    `uncertainty` (higher = more uncertain = more likely to be flagged).
+
+    A thin wrapper around sklearn.metrics.roc_auc_score, not a from-scratch
+    reimplementation: unlike ece()'s binning strategy (D14) or
+    cohens_kappa()'s chance-correction (invariant 5), AUROC has no
+    project-specific variant embedded in it - it's the standard "P(a random
+    error item ranks above a random correct item)" statistic, with no
+    design choice to internalize by re-deriving it. What this function
+    actually adds - and what's worth testing - is the semantic adapter:
+    which class counts as "positive" (error, not correct) and which
+    direction `uncertainty` points. Getting either backwards silently
+    produces `1 - true_AUROC` with no crash, which is what the tests below
+    target, not sklearn's own math.
+
+    Args:
+        uncertainty: an uncertainty score per item (higher = more uncertain).
+            Caller is responsible for sign - e.g. pass `1 - conf_verb`, not
+            `conf_verb` itself, or a raw entropy signal directly.
+        correct: whether the judge was actually right, per item. Cast to
+            bool explicitly before negating - if this arrives as int/float
+            0/1 (e.g. straight out of a pandas column), `~` on an int array
+            is two's-complement bit-flipping (`~1 == -2`), not logical
+            negation, and would silently corrupt the error label.
+
+    Returns:
+        AUROC in [0, 1]. 0.5 = uninformative, matching CLAUDE.md's note
+        that Xiong found ~0.5-0.6 for prompted confidence signals. Raises
+        ValueError if `correct` is all-True or all-False - AUROC is
+        undefined without both classes present. Checked explicitly here
+        rather than left to sklearn: roc_auc_score's own behavior in this
+        situation has changed across versions (older releases raised;
+        this installed version instead warns and returns NaN), so relying
+        on it would make this function's behavior depend on which sklearn
+        happens to be installed.
+    """
+    uncertainty_arr = np.asarray(uncertainty, dtype=float)
+    error_arr = ~np.asarray(correct, dtype=bool)
+    if error_arr.all() or not error_arr.any():
+        raise ValueError(
+            "auroc_error is undefined: `correct` must contain both "
+            "correct and incorrect items, got all one class."
+        )
+    return float(roc_auc_score(error_arr, uncertainty_arr))
