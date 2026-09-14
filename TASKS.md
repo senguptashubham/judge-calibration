@@ -88,10 +88,10 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **1.8 [A]** Vacuum test: 40 pairs of identical responses + 20 empty-response pairs.
   **DoD:** a "dark current" number — the rate at which the judge picks a winner between identical responses — in `REPORT.md`.
 
-- [ ] **1.9 [L]** Read Tian and Xiong (`LEARNING.md` A3, A4).
+- [x] **1.9 [L]** Read Tian and Xiong (`LEARNING.md` A3, A4).
   **DoD:** you can state Xiong's negative AUROC result — prompting fixes ECE, AUROC stays ~0.5–0.6 — and why it means a flat risk–coverage curve in W3 is the expected outcome.
 
-- ⛔ **GATE 1** — pilot complete, parse failures <5% across all three prompt variants, resume proven, GPU budget known (marked provisional, D19 arithmetic). **`PREREGISTRATION.md` frozen and committed, including D18–D24. `src/prompts.py` frozen — all three variants.**
+- [x] ⛔ **GATE 1** — passed. Pilot complete (140 real generations, clean/P1+P2/P3), parse failure **0%** across all three prompt variants (well under the <5% bar), resume proven on real Colab runs (not just unit tests), GPU budget known and provisional (**~23.6h** L4 compute, `PLAN.md`, D19 arithmetic). `PREREGISTRATION.md` frozen and committed, including D18–D25. `src/prompts.py` frozen — all three variants.
 
 ---
 
