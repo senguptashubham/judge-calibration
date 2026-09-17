@@ -10,7 +10,14 @@ this file never touches `raw_output`). All functions here take `rows`:
 every call belonging to one (item_id, condition, prompt_variant) group.
 """
 
+import argparse
 import math
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from src.config import Config
 
 
 def _find_call(rows: list[dict], order: str, sample_idx: int) -> dict | None:
@@ -127,11 +134,7 @@ def conf_bpe(rows: list[dict]) -> float | None:
     p = _p_model_a_wins(rows)
     if p is None:
         return None
-    if p <= 0.0 or p >= 1.0:
-        entropy = 0.0
-    else:
-        entropy = -(p * math.log(p) + (1 - p) * math.log(1 - p))
-    return 1 - entropy
+    return 1 - _binary_entropy(p)
 
 
 def compute_item_signals(rows: list[dict], k_sc: int) -> dict:
@@ -148,3 +151,227 @@ def compute_item_signals(rows: list[dict], k_sc: int) -> dict:
         "conf_sc": conf_sc(rows, k_sc),
         "conf_bpe": conf_bpe(rows),
     }
+
+
+def _binary_entropy(p: float) -> float:
+    """H(p) = -(p*log(p) + (1-p)*log(1-p)), in nats. conf_bpe computes this
+    same quantity inline (for a different p) - factored out now that
+    conf_ens needs it three more times (once per variant, plus once for
+    the ensemble mean). Keep this on the same raw-nats scale conf_bpe
+    already uses, not normalized to [0,1] - see conf_bpe's docstring for
+    why a shared scale matters once these get compared to each other.
+    """
+    if p <= 0.0 or p >= 1.0:
+        return 0.0
+    return -((p * np.log(p)) + ((1 - p) * np.log(1 - p)))
+
+
+def conf_ens(rows_by_variant: dict[str, list[dict]]) -> dict:
+    """Judge-level entropy decomposition over the P1/P2/P3 prompt ensemble
+    (DECISIONS.md D20) - clean items only. `rows_by_variant` maps
+    "P1"/"P2"/"P3" -> that variant's own rows for ONE item (same shape
+    `compute_item_signals` takes, just three of them at once instead of
+    one - this is exactly why conf_ens can't live inside
+    compute_item_signals: it needs cross-variant information that a single
+    (item_id, condition, prompt_variant) group doesn't have).
+
+    Per variant, get p_i = P(model_a wins) via _p_model_a_wins(rows) (the
+    same order-corrected mean conf_bpe and verdict_bidir already use) -
+    NOT the raw greedy AB p_a alone, so conf_ens is measuring the same
+    "which model does this variant favor" quantity the rest of the file
+    already standardizes on.
+
+        mean_p     = mean(p_P1, p_P2, p_P3)
+        Total      = H(mean_p)                        # _binary_entropy
+        Aleatoric  = mean(H(p_P1), H(p_P2), H(p_P3))
+        Epistemic  = Total - Aleatoric                 # >=0, Jensen's inequality
+        conf_ens   = 1 - Total
+
+    Total is the ensemble's overall uncertainty; Aleatoric is how unsure
+    each variant is on its own, on average; Epistemic is the extra
+    uncertainty that only appears once you average ACROSS variants - i.e.
+    disagreement between P1/P2/P3, not uncertainty within any one of them
+    (the BALD / mutual-information reading - LEARNING.md theory K).
+
+    Args:
+        rows_by_variant: {"P1": rows, "P2": rows, "P3": rows} - all three
+            required (caller's job to only call this when all three exist
+            for the item, i.e. condition == "clean").
+
+    Returns:
+        dict with ens_entropy_total, ens_entropy_aleatoric,
+        ens_entropy_epistemic, conf_ens - all None if any variant's p is
+        unavailable.
+    """
+    p_p1 = _p_model_a_wins(rows_by_variant["P1"])
+    p_p2 = _p_model_a_wins(rows_by_variant["P2"])
+    p_p3 = _p_model_a_wins(rows_by_variant["P3"])
+
+    if p_p1 is None or p_p2 is None or p_p3 is None:
+        # "Uniform prior over three variants" (D20) doesn't hold with a
+        # variant missing - propagate the gap, don't fabricate a 0.0 in
+        # its place (that would silently claim "certain model_b wins" for
+        # a variant that actually just failed to parse).
+        return {
+            "ens_entropy_total": None,
+            "ens_entropy_aleatoric": None,
+            "ens_entropy_epistemic": None,
+            "conf_ens": None,
+        }
+
+    mean_p = (p_p1 + p_p2 + p_p3) / 3
+    total = _binary_entropy(mean_p)
+    aleatoric = (_binary_entropy(p_p1) + _binary_entropy(p_p2) + _binary_entropy(p_p3)) / 3
+    epistemic = total - aleatoric  # >=0, Jensen's inequality
+    return {
+        "ens_entropy_total": total,
+        "ens_entropy_aleatoric": aleatoric,
+        "ens_entropy_epistemic": epistemic,
+        "conf_ens": 1 - total,
+    }
+
+
+def _sanitize_records(records: list[dict]) -> list[dict]:
+    """DataFrame.to_dict("records") represents every missing value as NaN
+    (a float) - even for string columns like `verdict` - never as Python's
+    `None`, which is what every is-None check in this file (_find_call,
+    _p_model_a_wins, conf_lp, conf_sc, conf_ens, ...) was written against.
+    A NaN silently sails past `is None` (nan is None -> False), so without
+    this, a parse failure would propagate as NaN through the arithmetic
+    instead of being treated as missing - confirmed empirically against
+    calls.parquet's own truncated rows before this was added. Converts
+    NaN -> None once, at the DataFrame -> dict boundary, so nothing above
+    this function needs to learn pandas' missing-value convention.
+    """
+    return [
+        {k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in record.items()}
+        for record in records
+    ]
+
+
+def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc: int) -> pd.DataFrame:
+    """calls.parquet -> items.parquet (task 2.2). One row per
+    (item_id, condition, prompt_variant) - CLAUDE.md invariant 14's grain.
+
+    Structure: group by (item_id, condition) FIRST, then split each group
+    by prompt_variant - this is what lets conf_ens (needs all three
+    variants at once) and compute_item_signals (needs just one variant's
+    rows) both fall out of the same pass, rather than building the table
+    once and then doing a separate cross-variant pass over it afterward.
+
+    Per (item_id, condition, prompt_variant) group:
+      - rows.to_dict("records") to get the list[dict] shape every
+        signals.py function expects (they were written against dicts,
+        not DataFrame rows - see compute_item_signals's own signature).
+      - compute_item_signals(rows, k_sc) for judge_verdict/verdict_bidir/
+        conf_verb/conf_lp/conf_sc/conf_bpe.
+      - join items_labels (on item_id) for majority_label/frac_prefer_a/
+        n_human_votes/human_unanimous/human_agreed/d_human.
+      - correct = judge_verdict == majority_label;
+        correct_bidir = verdict_bidir == majority_label.
+      - question_id/category/model_a/model_b/turn carry straight over
+        from the group (every row in a group shares them).
+
+    Per (item_id, condition) group, once all its prompt_variant sub-groups
+    are built: if condition == "clean" and P1/P2/P3 are ALL present, call
+    conf_ens(...) and merge its four fields onto the P1 record only -
+    None on P2/P3 (schema note: item-level quantity, store once). For
+    condition == "verbose" (or any group missing a variant), those four
+    fields are None on every row (D21 - no ensemble exists there; this is
+    the D21 sanity check Gate 2 requires, so don't special-case it away).
+
+    Args:
+        calls: calls.parquet, as loaded (e.g. pd.read_parquet(...)).
+        items_labels: items_labels.parquet - task 0.8's human-label table,
+            now carrying item_id (just added) for the join.
+        k_sc: config.k_sc, passed through to compute_item_signals.
+
+    Returns:
+        items.parquet's DataFrame, per CLAUDE.md sec 3's full schema.
+    """
+    labels_by_item = items_labels.set_index("item_id")
+    empty_ens = {
+        "ens_entropy_total": None,
+        "ens_entropy_aleatoric": None,
+        "ens_entropy_epistemic": None,
+        "conf_ens": None,
+    }
+
+    records = []
+    for (item_id, condition), item_condition_group in calls.groupby(["item_id", "condition"]):
+        variant_groups: dict[str, list[dict]] = {
+            str(variant): _sanitize_records(sub.to_dict("records"))
+            for variant, sub in item_condition_group.groupby("prompt_variant")
+        }
+
+        ens_result = None
+        if condition == "clean" and all(v in variant_groups for v in ("P1", "P2", "P3")):
+            ens_result = conf_ens(variant_groups)
+
+        # .loc[] on an object-dtype column returns NaN, not None, for a
+        # missing scalar (same pandas quirk _sanitize_records exists for) -
+        # route through it here too rather than writing a second,
+        # inconsistent NaN-handling path for this one lookup.
+        label_row = (
+            _sanitize_records([labels_by_item.loc[str(item_id)].to_dict()])[0]
+            if item_id in labels_by_item.index
+            else {}
+        )
+        human_label = label_row.get("majority_label")
+
+        for prompt_variant, rows in variant_groups.items():
+            first_row = rows[0]
+            signals = compute_item_signals(rows, k_sc)
+
+            record = {
+                "item_id": item_id,
+                "question_id": first_row["question_id"],
+                "category": first_row["category"],
+                "condition": condition,
+                "prompt_variant": prompt_variant,
+                "human_label": human_label,
+                "n_human_votes": label_row.get("n_human_votes"),
+                "frac_prefer_a": label_row.get("frac_prefer_a"),
+                "human_unanimous": label_row.get("human_unanimous"),
+                "human_agreed": label_row.get("human_agreed"),
+                "d_human": label_row.get("d_human"),
+                **signals,
+                "correct": (
+                    signals["judge_verdict"] == human_label
+                    if signals["judge_verdict"] is not None and human_label is not None
+                    else None
+                ),
+                "correct_bidir": (
+                    signals["verdict_bidir"] == human_label
+                    if signals["verdict_bidir"] is not None and human_label is not None
+                    else None
+                ),
+                # Deferred, not forgotten: len_a/len_b/len_ratio need
+                # response text this table doesn't have yet (Tier B,
+                # task 5.2); flipped needs cross-order comparison (task
+                # 4.3's RQ3a analysis). Neither blocks Gate 2 / RQ1.
+                "len_a": None,
+                "len_b": None,
+                "len_ratio": None,
+                "flipped": None,
+                **(ens_result if prompt_variant == "P1" and ens_result is not None else empty_ens),
+            }
+            records.append(record)
+
+    return pd.DataFrame.from_records(records)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    args = parser.parse_args()
+
+    config = Config.from_yaml(args.config)
+    calls = pd.read_parquet(config.paths.calls_parquet)
+    items_labels = pd.read_parquet(config.paths.items_labels_parquet)
+
+    items = build_items_dataframe(calls, items_labels, config.k_sc)
+
+    Path(config.paths.items_parquet).parent.mkdir(parents=True, exist_ok=True)
+    items.to_parquet(config.paths.items_parquet)
+    print(f"Wrote {len(items)} items to {config.paths.items_parquet}")
