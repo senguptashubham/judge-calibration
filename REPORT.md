@@ -4,6 +4,48 @@ Written incrementally as results land, per `CLAUDE.md` §4 — not assembled at 
 
 ---
 
+## RQ1 — Is the judge's stated confidence calibrated?
+
+*Written 17 Sep 2026. Data: `results/items.parquet`, filtered to `condition == "clean" AND prompt_variant == "P1"` (invariant 14) and `human_label` non-null — this drops 68 of the 1904 non-tie items, each a genuine 50/50 non-tie human split with no majority label (`data.py::build_items()`; not a data bug), leaving **N = 1836**. Analysis: `analysis/rq1.py`. Figures: `results/figures/reliability_{conf_verb,conf_lp,conf_sc,conf_bpe}.png`. All CIs are cluster bootstraps, B=2000, grouped on `question_id` (invariant 2).*
+
+**Headline: the judge is measurably overconfident.** Its own verbalized confidence
+(`conf_verb`) overstates its actual accuracy by **0.192 [0.172, 0.213]** when scored
+against a single canonical pass (`judge_verdict`), and by **0.157 [0.136, 0.178]** once both presentation orders are averaged (`verdict_bidir`) — both 95% CIs sit well clear of zero.
+
+**Full results** (`judge_verdict` = single canonical AB pass; `verdict_bidir` =
+order-averaged, D7):
+
+| signal | verdict def. | accuracy | κ | ECE | MCE | Brier | overconfidence gap |
+|---|---|---|---|---|---|---|---|
+| `conf_verb` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.192 | 0.383 | 0.215 | 0.192 [0.172, 0.213] |
+| `conf_lp` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.242 | 0.492 | 0.242 | 0.242 [0.221, 0.264] |
+| `conf_sc` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.183 | 0.313 | 0.205 | 0.169 [0.150, 0.187] |
+| `conf_bpe` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.115 | 0.229 | 0.164 | 0.049 [0.030, 0.069] |
+| `conf_verb` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.157 | 0.216 | 0.186 | 0.157 [0.136, 0.178] |
+| `conf_lp` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.207 | 0.397 | 0.207 | 0.207 [0.186, 0.228] |
+| `conf_sc` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.177 | 0.688 | 0.196 | 0.133 [0.116, 0.152] |
+| `conf_bpe` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.151 | 0.316 | 0.177 | **0.014 [-0.011, 0.038]** |
+
+**Every original signal is overconfident, but the magnitude varies by roughly 5x
+depending which one you trust.** 
+`conf_lp` (raw exp(verdict-token logprob)) is the worst — 0.242 overconfident under `judge_verdict`, worse than `conf_verb`. This traces directly to its distribution: 99.3% of `conf_lp` values sit at or above 0.99 (median is exactly 1.0) — the model is essentially always "sure" of the token it generated, regardless of whether the underlying judgment was right, a well-documented property of greedy-decoded token probabilities, not a bug in how it's computed.
+`conf_bpe` (the order-consistency-based entropy signal) is the best-calibrated by a wide margin, and under `verdict_bidir` specifically its overconfidence gap's CI **crosses zero** (0.014 [-0.011, 0.038]) — not distinguishable from perfect calibration at this sample size. This is plausibly not a coincidence: `conf_bpe` is itself built from agreement across both presentation orders, so it looks best exactly when scored against the order-aware ground truth it was already implicitly modeling.
+
+**Debiasing by averaging both orders buys a real, statistically confirmed accuracy
+gain.** Accuracy moves from 0.757 to 0.792 going from `judge_verdict` to `verdict_bidir` — a difference that could just be noise if judged by eye from two separate CIs, so it was tested properly: a **paired** cluster bootstrap on the per-item accuracy difference (invariant 3 — same 1836 items scored two ways is not two independent samples) gives **+0.0354 [0.0177, 0.0531]**, a CI that excludes zero. Concretely: averaging both orders flips 157 items from wrong to right, and only 92 from right to wrong — a net gain of 65/1836 = 0.0354, matching the bootstrap exactly. The debiasing gain is real, not just directionally plausible.
+
+κ improves in step (0.514 → 0.585), but both remain well below the human-human ceiling of κ=0.683 (task 0.9, N=536). That population is smaller and not perfectly matched to RQ1's 1836 items, so treat the comparison as approximate — but debiasing clearly closes only a small fraction of the gap to human-level agreement.
+
+**Corroborating evidence the false confidence is not just a calibration-curve
+artifact.** The vacuum test (task 1.8) found the judge's mean `verbalized_conf` on
+pairs with *no real content difference to judge* (0.970 identical, 0.973 empty) was, if anything, slightly *higher* than on real items (0.945) — a judge that recognized "there is no basis for a decision here" should show measurably lower confidence on those degenerate pairs, and doesn't.
+RQ1's overconfidence finding and the vacuum test's false-confidence finding are two independent measurements pointing at the same underlying problem: the judge's stated confidence tracks something other than its actual likelihood of being right.
+
+**Caveat for `conf_lp`/`conf_bpe`'s `reliability`/`resolution` numbers specifically.**
+`brier_decomposition()`'s reconstruction identity (`brier = reliability - resolution + uncertainty`) is exact only when every bin shares one literal confidence value — true for the two discrete signals here (`conf_verb`: 4 unique values, `conf_sc`: 5), so their reconstruction matches `brier()` to floating-point precision. `conf_lp` (72 unique values) and `conf_bpe` (1521 unique values) fall through `ece()`'s `"auto"` strategy to quantile binning instead, where `reliability`/`resolution` are computed from each bin's *mean* confidence rather than each item's own value — a real, expected "grouping loss" gap from `brier()` (up to ~0.006 for `conf_bpe`), not a bug. The table above reports `ece`/`mce`/`brier` (computed directly, unaffected by this) alongside `reliability`/ `resolution` at face value; treat the latter two as describing the *binned* forecast for these two signals specifically, not a claim they reconstruct `brier()` to the letter.
+
+---
+
 ## Methods notes
 
 Small, dated empirical observations that inform a design decision but don't belong to
@@ -112,50 +154,3 @@ not as a precise population estimate of the judge's true positional bias rate.
 
 Analysis script: ad hoc, not checked in (see `runs/vacuum.jsonl` + `runs/logprobs/`
 for the underlying data; `src/vacuum_test.py` generated it).
-
-### `brier_decomposition()` reconstructs exactly only for discrete-valued signals (D14) — 17 Sep 2026
-
-**Claim:** the reconstruction identity `brier = reliability - resolution + uncertainty`
-(`src/metrics.py::brier_decomposition()`, task 2.5) is exact when every bin's forecasts
-share one literal confidence value (the "auto" strategy's discrete branch, D14) - it is
-only *approximately* exact when a bin groups together items with genuinely different
-confidence values (the quantile branch), because `reliability`/`resolution` are computed
-from each bin's *mean* confidence, not each item's own value. The gap between the
-grouped reconstruction and the raw `brier()` score is real and has a name - "grouping
-loss," the information lost by replacing many distinct confidence values with one bin
-average. `test_brier_decomposition_reconstructs_brier_score`'s `1e-6` tolerance (task
-2.5) was validated only against a 2-unique-value discrete reference case; it was never a
-general claim that reconstruction is exact for every signal, and this doesn't
-contradict it.
-
-**Method:** RQ1 (task 2.6, `analysis/rq1.py`) computes this reconstruction for all four
-original confidence signals on `(clean, P1)` items (N=1836, `human_label` non-null),
-`n_bins=10`, `strategy="auto"`. `ece()`'s `"auto"` strategy bins by exact unique value
-whenever `n_unique(signal) <= n_bins`; otherwise it falls back to quantile bins (D14).
-
-**Result:**
-
-| signal | unique values | binning (n_bins=10) | verdict def. | `brier()` | `reliability - resolution + uncertainty` | gap |
-|---|---|---|---|---|---|---|
-| `conf_verb` | 4 | exact (discrete) | judge_verdict | 0.215120 | 0.215120 | 0.0 |
-| `conf_verb` | 4 | exact (discrete) | verdict_bidir | 0.186362 | 0.186362 | 0.0 |
-| `conf_sc` | 5 | exact (discrete) | judge_verdict | 0.204759 | 0.204759 | 0.0 |
-| `conf_sc` | 5 | exact (discrete) | verdict_bidir | 0.196317 | 0.196317 | 0.0 |
-| `conf_lp` | 72 | quantile | judge_verdict | 0.242173 | 0.242203 | 0.00003 |
-| `conf_lp` | 72 | quantile | verdict_bidir | 0.207322 | 0.207069 | 0.00025 |
-| `conf_bpe` | 1521 | quantile | judge_verdict | 0.163734 | 0.160900 | 0.0028 |
-| `conf_bpe` | 1521 | quantile | verdict_bidir | 0.177267 | 0.171053 | 0.0062 |
-
-**Conclusion:** the pattern maps exactly onto binning strategy, not onto anything
-signal-specific - the two discrete signals (`conf_verb`, `conf_sc`) reconstruct to
-floating-point precision; the two continuous, quantile-binned signals (`conf_lp`,
-`conf_bpe`) don't, with the gap growing with how many distinct values get compressed
-into 10 bins (72 unique values -> a gap of ~0.0001-0.0003; 1521 unique values -> a gap
-of ~0.003-0.006). This is expected behavior of a grouped calibration decomposition, not
-a bug in `brier_decomposition()` - confirmed by the fact the gap tracks unique-value
-count exactly, not signal identity. Reported here so RQ1's eventual write-up (task 2.7)
-doesn't need to re-derive this if the arithmetic gets checked in a viva: `conf_lp`'s and
-`conf_bpe'`s `reliability`/`resolution` numbers describe the *binned* forecasts, not a
-claim that they reconstruct `brier()` to the letter.
-
-Analysis script: `analysis/rq1.py` (task 2.6).

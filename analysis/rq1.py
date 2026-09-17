@@ -25,7 +25,7 @@ import argparse
 
 import pandas as pd
 
-from src.boot import cluster_bootstrap
+from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.metrics import auroc_error, brier, brier_decomposition, cohens_kappa, ece, mce, overconfidence_gap
 from src.plots import plot_reliability_diagram
@@ -181,6 +181,49 @@ def compute_signal_metrics(items: pd.DataFrame, signal: str, correct_col: str, n
     )
 
 
+def compute_verdict_gap(items: pd.DataFrame, seed: int) -> dict:
+    """Paired cluster-bootstrap CI on accuracy's change from
+    `judge_verdict` to `verdict_bidir` (D7).
+
+    Invariant 3: the SAME 1836 items scored two ways is a paired
+    comparison, not two independent samples - a single item's verdict
+    flipping moves both accuracy numbers at once, so eyeballing whether
+    compute_verdict_metrics()'s two separately-bootstrapped accuracy CIs
+    overlap is the wrong tool for claiming the gap itself is real.
+
+    Reuses paired_cluster_bootstrap (task 2.4) rather than a new bootstrap
+    loop: that function compares stat_fn(df_a) vs stat_fn(df_b) for two
+    DIFFERENT row-sets sharing one stat_fn (its usual job - e.g. clean vs
+    verbose). Here both "sides" are the SAME rows, just reading a
+    different column (`correct` vs `correct_bidir`) - renaming each to a
+    shared column name first lets one stat_fn serve both sides, so the
+    existing, already-tested function applies unmodified.
+
+    Args:
+        items: load_rq1_items()'s output (already filtered).
+        seed: config.seed.
+
+    Returns:
+        dict with accuracy_gap_bidir_minus_judge, _ci_low, _ci_high. If
+        the CI excludes 0, debiasing-by-averaging's accuracy improvement
+        is real at this confidence level, not just directionally likely.
+    """
+    df_bidir = items.rename(columns={"correct_bidir": "score"})
+    df_judge = items.rename(columns={"correct": "score"})
+
+    def _accuracy(df: pd.DataFrame) -> float:
+        return df["score"].astype(float).mean()
+
+    diff, ci_low, ci_high = paired_cluster_bootstrap(
+        df_bidir, df_judge, _accuracy, "question_id", n=2000, seed=seed
+    )
+    return {
+        "accuracy_gap_bidir_minus_judge": diff,
+        "accuracy_gap_ci_low": ci_low,
+        "accuracy_gap_ci_high": ci_high,
+    }
+
+
 def main(config_path: str) -> None:
     config = Config.from_yaml(config_path)
     items = load_rq1_items(config.paths.items_parquet)
@@ -207,6 +250,13 @@ def main(config_path: str) -> None:
             n_bins=config.n_bins,
             correct_bidir=items["correct_bidir"].to_numpy(),
         )
+
+    gap = compute_verdict_gap(items, config.seed)
+    print(
+        "Paired accuracy gap (verdict_bidir - judge_verdict): "
+        f"{gap['accuracy_gap_bidir_minus_judge']:.4f} "
+        f"[{gap['accuracy_gap_ci_low']:.4f}, {gap['accuracy_gap_ci_high']:.4f}]"
+    )
 
     table = pd.DataFrame.from_records(rows)
     table.to_csv("results/rq1_table.csv", index=False)
