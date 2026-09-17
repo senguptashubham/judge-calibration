@@ -6,6 +6,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
@@ -84,26 +85,39 @@ def plot_ece_auroc_orthogonal() -> Figure:
     return fig
 
 
+def _binned_means(
+    x: np.ndarray, y: np.ndarray, n_bins: int, strategy: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-bin (mean x, mean y, weight), binning on x - the same binning
+    ece() uses internally (reuses get_bin_edges() so a diagram and its
+    scalar metric are always computed on identical bins). Generic in x/y:
+    a reliability diagram bins on confidence and averages correct; the
+    human-disagreement figure bins on d_human and averages correct (or
+    confidence) - same computation either way, just which column plays
+    which role changes.
+    """
+    edges = get_bin_edges(x, n_bins, strategy)
+    bin_labels = np.digitize(x, edges)
+    n = len(x)
+
+    bin_x, bin_y, bin_weight = [], [], []
+    for bin_label in np.unique(bin_labels):
+        mask = bin_labels == bin_label
+        bin_x.append(x[mask].mean())
+        bin_y.append(y[mask].mean())
+        bin_weight.append(mask.sum() / n)
+    return np.array(bin_x), np.array(bin_y), np.array(bin_weight)
+
+
 def _reliability_points(
     confidences: np.ndarray, correct: np.ndarray, n_bins: int, strategy: str
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Per-bin (mean confidence, accuracy, weight) for a reliability
-    diagram - the same binning ece() uses internally (reuses
-    get_bin_edges() so a diagram and its ECE number are always computed
-    on identical bins), just returned per-bin instead of collapsed to one
-    scalar.
+    diagram. Thin wrapper over _binned_means() - kept as its own name at
+    reliability-diagram call sites since "confidence"/"accuracy" reads
+    better there than the generic x/y.
     """
-    edges = get_bin_edges(confidences, n_bins, strategy)
-    bin_labels = np.digitize(confidences, edges)
-    n = len(confidences)
-
-    bin_conf, bin_acc, bin_weight = [], [], []
-    for bin_label in np.unique(bin_labels):
-        mask = bin_labels == bin_label
-        bin_conf.append(confidences[mask].mean())
-        bin_acc.append(correct[mask].mean())
-        bin_weight.append(mask.sum() / n)
-    return np.array(bin_conf), np.array(bin_acc), np.array(bin_weight)
+    return _binned_means(confidences, correct, n_bins, strategy)
 
 
 def _marker_sizes(weights: np.ndarray) -> np.ndarray:
@@ -230,6 +244,286 @@ def plot_reliability_diagram(
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURES_DIR / f"reliability_{signal_name}.png", dpi=150)
+    return fig
+
+
+def plot_risk_coverage(
+    curves: dict[str, tuple[np.ndarray, np.ndarray]],
+    oracle: tuple[np.ndarray, np.ndarray],
+    filename: str = "risk_coverage.png",
+    title: str = "Risk-coverage: RQ2",
+) -> Figure:
+    """RQ2's thesis figure (task 3.2): every confidence signal's risk-
+    coverage curve, overlaid with the oracle upper bound, on one axis.
+
+    A flat curve is a finding (the signal isn't informative - abstaining
+    doesn't lower risk), and the oracle overlay is what makes that legible:
+    without it, there's no visual reference for how much headroom a flat
+    or shallow curve is actually leaving on the table.
+
+    Also reused as-is for task 3.2b's entropy_threshold_sweep.png (RQ5) -
+    the curve shape (coverage, risk) and the oracle-overlay framing are
+    identical there, just with the three ens_entropy_* signals in place of
+    the four original confidence signals, hence the `filename`/`title`
+    overrides rather than a second, near-duplicate plotting function.
+
+    Args:
+        curves: {signal_name: (coverage, risk)} - typically the output of
+            risk_coverage() per signal, real (non-bootstrapped) data only,
+            one line per signal.
+        oracle: (coverage, risk) from oracle_risk_coverage() - the one
+            curve every real signal must fall on or above at every
+            coverage level.
+        filename: saved under results/figures/{filename}.
+        title: figure title.
+
+    Returns:
+        The Figure (also saved to results/figures/{filename}).
+    """
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    # Curves can be near-identical or exactly overlapping in places (e.g.
+    # RQ5's ens_entropy_total vs ens_entropy_aleatoric, which coincide
+    # almost everywhere by construction whenever epistemic ~ 0 - see
+    # analysis/rq5.py's module docstring). Color alone can't disambiguate
+    # two lines drawn on top of each other, so linestyle/marker are cycled
+    # independently of color - a dashed line traced directly over a solid
+    # one of a different color stays visually distinguishable at every
+    # point, which relying on color (or opacity, which only controls how
+    # much of the UNDER line shows through, not whether the OVER line
+    # reads as distinct) does not guarantee.
+    _LINESTYLES = ["-", "--", "-.", ":"]
+    _MARKERS = ["o", "s", "^", "D"]
+
+    for i, (name, (coverage, risk)) in enumerate(curves.items()):
+        ax.plot(
+            coverage, risk,
+            linestyle=_LINESTYLES[i % len(_LINESTYLES)],
+            marker=_MARKERS[i % len(_MARKERS)],
+            markersize=3,
+            markevery=0.05,
+            alpha=0.85,
+            label=name,
+        )
+
+    oracle_coverage, oracle_risk = oracle
+    ax.plot(
+        oracle_coverage, oracle_risk,
+        linestyle="--", color="black", linewidth=1.5, label="oracle",
+    )
+
+    ax.set_xlim(0, 1.02)
+    ax.set_ylim(bottom=0)
+    ax.set_xlabel("coverage")
+    ax.set_ylabel("risk (1 - accuracy)")
+    ax.set_title(title)
+    ax.legend(loc="upper left", fontsize=9)
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / filename, dpi=150)
+    return fig
+
+
+def _ols_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    """(slope, intercept) of the OLS fit of y on x, for drawing the trend
+    line overlay only - NOT imported from analysis/human_disagreement.py's
+    _ols_slope(): src/ must not depend on analysis/ (analysis/ builds on
+    src/, never the reverse - same layering every other module here
+    follows). Small enough to duplicate the two-line slope formula rather
+    than restructure the layering for it; this version additionally
+    returns the intercept, which the bootstrap-focused _ols_slope() has no
+    use for and deliberately doesn't compute.
+    """
+    x_mean, y_mean = x.mean(), y.mean()
+    slope = float(np.sum((x - x_mean) * (y - y_mean)) / np.sum((x - x_mean) ** 2))
+    intercept = float(y_mean - slope * x_mean)
+    return slope, intercept
+
+
+def _spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
+    """Spearman rank correlation, for the plot's annotation only - NOT
+    imported from analysis/human_disagreement.py's own _spearman_corr()
+    for the same layering reason _ols_fit() doesn't import _ols_slope()
+    (src/ must not depend on analysis/). Duplicated rather than shared
+    since it's two small, self-contained formulas, not worth restructuring
+    the module layering for.
+
+    pd.Series.rank() (average method) handles d_human's heavy ties
+    correctly - see analysis/human_disagreement.py's fuller explanation of
+    why a plain double-argsort would be wrong here.
+    """
+    x_ranks = pd.Series(x).rank().to_numpy()
+    y_ranks = pd.Series(y).rank().to_numpy()
+    x_centered = x_ranks - x_ranks.mean()
+    y_centered = y_ranks - y_ranks.mean()
+    denom = np.sqrt(np.sum(x_centered**2) * np.sum(y_centered**2))
+    return float(np.sum(x_centered * y_centered) / denom)
+
+
+def plot_human_disagreement(
+    d_human: np.ndarray,
+    correct: np.ndarray,
+    confidence: np.ndarray,
+    n_bins: int,
+) -> Figure:
+    """RQ2/task 3.3's figure (D9): does judge accuracy, and separately the
+    judge's stated confidence, track human consensus strength (d_human)?
+
+    Two panels sharing a d_human x-axis: accuracy on the left, confidence
+    on the right. Each panel shows the binned real data (mean of the
+    y-quantity within each d_human bin, marker size ~ bin weight) as
+    scatter points, plus the OLS trend line the regression itself tested,
+    as a separate, deliberately differently-styled element - dashed and a
+    third color, not just relying on the scatter/line distinction, per the
+    lesson from RQ2/RQ5's risk-coverage figures: two elements that could
+    visually coincide (here, if the binned means happen to fall right on
+    the fit line) need more than color to stay legible, so linestyle and
+    marker carry the distinction too, not opacity alone.
+
+    d_human is naturally a low-cardinality signal (a handful of distinct
+    values arise from typical small per-item vote counts), so get_bin_edges'
+    "auto" strategy (reused via _binned_means) is likely to bin it by exact
+    value here rather than falling back to quantile bins - the same
+    "exact, not a fallback" property ece() already relies on for conf_sc.
+
+    Args:
+        d_human: |frac_prefer_a - 0.5| per item, in [0, 0.5].
+        correct: whether the judge was actually right, per item.
+        confidence: conf_verb per item (the one signal this figure uses -
+            see analysis/human_disagreement.py's module docstring for why).
+        n_bins: requested number of bins for the binned view (see
+            get_bin_edges - may bin exactly, not just approximately).
+
+    Returns:
+        The Figure (also saved to results/figures/human_disagreement.png).
+    """
+    # Rounded to 6dp before binning: d_human = |frac_prefer_a - 0.5| computed
+    # from small vote-count fractions (e.g. 1/3 vs 2/3) can land on adjacent
+    # float64 values for the SAME true fraction (verified on real data:
+    # abs(1/3-0.5) and abs(2/3-0.5) differ by ~6e-17, both "really" 1/6) -
+    # get_bin_edges' exact-value branch uses np.unique()'s bitwise equality,
+    # so without rounding this silently doubles a bin that should be one,
+    # splitting its accuracy across two near-identical x positions instead
+    # of averaging it. 6dp is far below the real spacing between distinct
+    # d_human values (>= 0.05 apart) and far above float64 noise (~1e-16).
+    d_human_arr = np.round(np.asarray(d_human, dtype=float), 6)
+    correct_arr = np.asarray(correct, dtype=float)
+    confidence_arr = np.asarray(confidence, dtype=float)
+
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+    panels = [
+        (axes[0], correct_arr, "accuracy", "tab:blue", "o"),
+        (axes[1], confidence_arr, "mean conf_verb", "tab:orange", "s"),
+    ]
+    for ax, y_arr, ylabel, color, marker in panels:
+        bin_d, bin_y, weights = _binned_means(d_human_arr, y_arr, n_bins, strategy="auto")
+        ax.scatter(
+            bin_d, bin_y,
+            s=_marker_sizes(weights),
+            marker=marker,
+            color=color,
+            alpha=0.85,
+            edgecolors="white",
+            linewidths=1,
+            zorder=2,
+        )
+
+        slope, intercept = _ols_fit(d_human_arr, y_arr)
+        line_x = np.array([d_human_arr.min(), d_human_arr.max()])
+        ax.plot(
+            line_x, slope * line_x + intercept,
+            linestyle="--", color="black", linewidth=1.5, zorder=1,
+        )
+
+        # Spearman rho isn't a line in (d_human, y) space - it's a unitless
+        # rank-correlation summary, so it's reported as text, not a second
+        # plotted curve that would imply a shape it doesn't have.
+        rho = _spearman_corr(d_human_arr, y_arr)
+
+        legend_handles = [
+            Line2D([0], [0], marker=marker, linestyle="", color=color, markersize=8, label="binned mean"),
+            Line2D([0], [0], linestyle="--", color="black", label="OLS fit"),
+        ]
+
+        x_pad = 0.05 * (d_human_arr.max() - d_human_arr.min())
+        y_pad = 0.05 * max(y_arr.max() - y_arr.min(), 1e-6)
+        ax.set_xlim(d_human_arr.min() - x_pad, d_human_arr.max() + x_pad)
+        ax.set_ylim(y_arr.min() - y_pad, y_arr.max() + y_pad)
+        ax.set_xlabel("d_human")
+        ax.set_ylabel(ylabel)
+        ax.set_title(f"{ylabel} vs. d_human\nOLS slope={slope:.3f}, Spearman ρ={rho:.3f}", fontsize=10)
+        ax.legend(handles=legend_handles, loc="best", fontsize=9)
+
+    fig.suptitle("Human disagreement (D9)")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / "human_disagreement.png", dpi=150)
+    return fig
+
+
+def plot_d_human_correlations(
+    signals: list[str],
+    spearman: np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+) -> Figure:
+    """Task 3.4's figure: a forest/coefficient plot of the four signals'
+    Spearman rho against d_human, each with its cluster-bootstrap CI as an
+    error bar, plus a reference line at rho=0.
+
+    This is the standard visualization for "several point estimates with
+    CIs, compared against a null value" - simple, no new dependencies, no
+    randomness (unlike the raw-point jitter idea considered for the other
+    figure and deliberately skipped there for adding complexity without
+    adding information). Here the plot adds real legibility a markdown
+    table doesn't: which CIs cross the rho=0 reference line is immediate,
+    not something a reader has to check bracket-by-bracket.
+
+    Args:
+        signals: signal names, in display order (top to bottom).
+        spearman: point estimate per signal, same order.
+        ci_low, ci_high: CI bounds per signal, same order.
+
+    Returns:
+        The Figure (also saved to results/figures/d_human_correlations.png).
+    """
+    signals = list(signals)
+    spearman_arr = np.asarray(spearman, dtype=float)
+    ci_low_arr = np.asarray(ci_low, dtype=float)
+    ci_high_arr = np.asarray(ci_high, dtype=float)
+
+    y_pos = np.arange(len(signals))
+    # errorbar wants the half-widths from the point estimate, not the
+    # absolute CI bounds themselves.
+    err_low = spearman_arr - ci_low_arr
+    err_high = ci_high_arr - spearman_arr
+
+    fig, ax = plt.subplots(figsize=(6, 0.9 * len(signals) + 1.5))
+
+    ax.axvline(0, linestyle="--", color="gray", linewidth=1, zorder=1)
+    ax.errorbar(
+        spearman_arr, y_pos,
+        xerr=[err_low, err_high],
+        fmt="o",
+        color="tab:blue",
+        ecolor="tab:blue",
+        capsize=4,
+        markersize=7,
+        zorder=2,
+    )
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(signals)
+    ax.invert_yaxis()  # first signal at the top, reading order
+    ax.set_xlabel("Spearman ρ (signal vs. d_human)")
+    ax.set_title("Signal-vs-d_human correlations (task 3.4)")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / "d_human_correlations.png", dpi=150)
     return fig
 
 
