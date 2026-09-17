@@ -165,8 +165,9 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 ## Week 4 · Sep 21–27 · 8h — RQ3
 
-- [ ] **4.1 [C]** `src/perturb.py` — `verbose_pad()` (repetitive-list attack, Zheng §3.3) only. (`attribution()` is cut, D18 — do not build it.)
+- [x] **4.1 [C]** `src/perturb.py` — `verbose_pad()` (repetitive-list attack, Zheng §3.3) only. (`attribution()` is cut, D18 — do not build it.)
   **DoD:** `tests/test_perturb.py` — `verbose_pad` leaves semantic content intact. (The order round-trip property lives in `test_prompts.py`, D5.)
+  **Built early, 14 Sep 2026:** unblocked (needs no run data) and no longer W4-only — done alongside the Week 2 independent-task pass.
 
 - [ ] **4.1b [C]** **Re-extrapolate the GPU budget** now that real padding exists, against the provisional Gate 1 number (D10, D19's 12,000-generation baseline).
   **DoD:** updated estimate in `PLAN.md`. If it exceeds the remaining Colab units, **cut N before cutting conditions** (D12).

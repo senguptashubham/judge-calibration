@@ -159,11 +159,11 @@ Each block ends in code, not notes. If there's no artifact, it didn't happen.
 | C1 | `ece()` + reliability diagram | W0 | 3h | ☑ |
 | C2 | `cohens_kappa()` by hand | W0 | 1.5h | ☑ |
 | B5 | Claude Code course *(optional)* | W0 | 2h | ☐ |
-| B1 | Structured LLM Output | W1 | 1h21m | ☐ |
-| B2 | vLLM L3/6/7/8 + vLLM docs | W1 | 1h15m | ☐ |
-| A3 | Tian et al. | W1 | 1h | ☐ |
-| A4 | Xiong et al. | W1 | 1.5h | ☐ |
-| C3 | `signals.py` + docstrings | W1 | 2h | ☐ |
+| B1 | Structured LLM Output | W1 | 1h21m | ☑ |
+| B2 | vLLM L3/6/7/8 + vLLM docs | W1 | 1h15m | ☑ |
+| A3 | Tian et al. | W1 | 1h | ☑ |
+| A4 | Xiong et al. | W1 | 1.5h | ☑ |
+| C3 | `signals.py` + docstrings | W1 | 2h | ☑ |
 | **A11** | **Auto-Prompt Ensemble for LLM Judge** | **W1** | **30m** | ☐ |
 | **A12** | **Bayesian Prompt Ensembles (ICCV 2025)** | **W1** | **30m** | ☐ |
 | **C9** | **Bayesian inference + NumPyro/NUTS basics** | **W1** | **2h** | ☑ |
