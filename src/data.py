@@ -103,6 +103,7 @@ def build_items(votes: pd.DataFrame, tie_policy: str) -> pd.DataFrame:
       d_human = float("nan")
 
     records.append({
+      "item_id": item_id(int(question_id), str(model_a), str(model_b), int(turn)),
       "question_id": question_id,
       "model_a": model_a,
       "model_b": model_b,
