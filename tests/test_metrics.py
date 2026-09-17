@@ -133,27 +133,66 @@ def test_kappa_matches_sklearn():
 
 
 def test_overconfidence_gap_reference():
-    pass  # TODO(owner): expected 0.222 - see note above
+    confidences = np.concatenate([np.full(200, 0.9), np.full(300, 0.6)])
+    correct = np.concatenate(
+        [
+            np.array([True] * 150 + [False] * 50),  # 150/200 = 0.75
+            np.array([True] * 99 + [False] * 201),  # 99/300 = 0.33
+        ]
+    )
+    assert overconfidence_gap(confidences, correct) == pytest.approx(0.222, abs=1e-3)
 
 
 def test_mce_reference():
-    pass  # TODO(owner): expected 0.27 - see note above
+    confidences = np.concatenate([np.full(200, 0.9), np.full(300, 0.6)])
+    correct = np.concatenate(
+        [
+            np.array([True] * 150 + [False] * 50),  # 150/200 = 0.75
+            np.array([True] * 99 + [False] * 201),  # 99/300 = 0.33
+        ]
+    )
+    mce_value, n_effective_bins = mce(confidences, correct, n_bins=2)
+    assert n_effective_bins == 2
+    assert mce_value == pytest.approx(0.27, abs=1e-3)
 
 
 def test_brier_reference():
-    pass  # TODO(owner): expected 0.2604 - see note above
+    confidences = np.concatenate([np.full(200, 0.9), np.full(300, 0.6)])
+    correct = np.concatenate(
+        [
+            np.array([True] * 150 + [False] * 50),  # 150/200 = 0.75
+            np.array([True] * 99 + [False] * 201),  # 99/300 = 0.33
+        ]
+    )
+    assert brier(confidences, correct) == pytest.approx(0.2604, abs=1e-3)
 
 
 def test_brier_decomposition_reconstructs_brier_score():
-    # CLAUDE.md task 2.5's DoD: reliability - resolution + uncertainty must
-    # reconstruct brier() to 1e-6. This is the important test in this
-    # block - it catches sign/assignment bugs the individual-term checks
-    # below can't.
-    pass  # TODO(owner)
+    confidences = np.concatenate([np.full(200, 0.9), np.full(300, 0.6)])
+    correct = np.concatenate(
+        [
+            np.array([True] * 150 + [False] * 50),  # 150/200 = 0.75
+            np.array([True] * 99 + [False] * 201),  # 99/300 = 0.33
+        ]
+    )
+    reliability, resolution, uncertainty = brier_decomposition(confidences, correct, n_bins=2)
+    assert (reliability - resolution + uncertainty) == pytest.approx(
+        brier(confidences, correct), abs=1e-6
+    )
 
 
 def test_brier_decomposition_reference_terms():
-    pass  # TODO(owner): expected (0.05274, 0.042336, 0.249996)
+    confidences = np.concatenate([np.full(200, 0.9), np.full(300, 0.6)])
+    correct = np.concatenate(
+        [
+            np.array([True] * 150 + [False] * 50),  # 150/200 = 0.75
+            np.array([True] * 99 + [False] * 201),  # 99/300 = 0.33
+        ]
+    )
+    reliability, resolution, uncertainty = brier_decomposition(confidences, correct, n_bins=2)
+    assert reliability == pytest.approx(0.05274, abs=1e-3)
+    assert resolution == pytest.approx(0.042336, abs=1e-3)
+    assert uncertainty == pytest.approx(0.249996, abs=1e-3)
 
 
 def test_auroc_error_reference():

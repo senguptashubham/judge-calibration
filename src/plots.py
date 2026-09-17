@@ -33,28 +33,21 @@ def plot_ece_auroc_orthogonal() -> Figure:
     concrete: "a judge that always says 50% has perfect ECE and zero
     usefulness."
 
-    TODO(owner): construct both 6-point datasets yourself below - this is
-    TASKS.md task 2.3 / LEARNING.md block C4, and the point is to build the
-    intuition, not just produce the figure. Hints, not answers:
-      - Example A: what pair of confidence VALUES gives perfect separation
-        (every correct item's confidence beats every incorrect item's)
-        while landing far from each group's own actual accuracy? (Reminder:
-        confidence is bounded below at 0.5 in a forced binary choice.)
-      - Example B: what happens to both metrics if EVERY item - correct and
-        incorrect alike - gets the exact same confidence value?
-    The asserts below will tell you immediately if your numbers don't hit
-    the targets - don't silence them, fix the construction instead.
+    Example A: correct items all at confidence 0.9, incorrect items all at
+    0.5 - clean separation (AUROC=1.0) with a big enough confidence gap
+    (0.4 vs the forced-choice floor) to land ECE at 0.3. Example B: every
+    item at the forced-choice floor (0.5) regardless of correctness - no
+    ranking information at all (AUROC=0.5), but the single confidence
+    value happens to equal the dataset's own base rate exactly (ECE=0).
+    The asserts below catch any future edit that breaks either example -
+    don't silence them, fix the construction instead.
 
     Returns:
         The Figure (also saved to results/figures/ece_auroc_orthogonal.png).
     """
-    # TODO(owner): replace with your own 6-point construction (3 correct,
-    # 3 incorrect, chosen so AUROC = 1.0 and ECE ~= 0.3).
     confidences_a = np.array([0.5, 0.5, 0.9, 0.5, 0.9, 0.9])
     correct_a = np.array([0, 0, 1, 0, 1, 1])
 
-    # TODO(owner): replace with your own 6-point construction (3 correct,
-    # 3 incorrect, chosen so ECE = 0 and AUROC = 0.5).
     confidences_b = np.array([0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
     correct_b = np.array([0, 1, 0, 0, 1, 1])
 
