@@ -112,3 +112,50 @@ not as a precise population estimate of the judge's true positional bias rate.
 
 Analysis script: ad hoc, not checked in (see `runs/vacuum.jsonl` + `runs/logprobs/`
 for the underlying data; `src/vacuum_test.py` generated it).
+
+### `brier_decomposition()` reconstructs exactly only for discrete-valued signals (D14) — 17 Sep 2026
+
+**Claim:** the reconstruction identity `brier = reliability - resolution + uncertainty`
+(`src/metrics.py::brier_decomposition()`, task 2.5) is exact when every bin's forecasts
+share one literal confidence value (the "auto" strategy's discrete branch, D14) - it is
+only *approximately* exact when a bin groups together items with genuinely different
+confidence values (the quantile branch), because `reliability`/`resolution` are computed
+from each bin's *mean* confidence, not each item's own value. The gap between the
+grouped reconstruction and the raw `brier()` score is real and has a name - "grouping
+loss," the information lost by replacing many distinct confidence values with one bin
+average. `test_brier_decomposition_reconstructs_brier_score`'s `1e-6` tolerance (task
+2.5) was validated only against a 2-unique-value discrete reference case; it was never a
+general claim that reconstruction is exact for every signal, and this doesn't
+contradict it.
+
+**Method:** RQ1 (task 2.6, `analysis/rq1.py`) computes this reconstruction for all four
+original confidence signals on `(clean, P1)` items (N=1836, `human_label` non-null),
+`n_bins=10`, `strategy="auto"`. `ece()`'s `"auto"` strategy bins by exact unique value
+whenever `n_unique(signal) <= n_bins`; otherwise it falls back to quantile bins (D14).
+
+**Result:**
+
+| signal | unique values | binning (n_bins=10) | verdict def. | `brier()` | `reliability - resolution + uncertainty` | gap |
+|---|---|---|---|---|---|---|
+| `conf_verb` | 4 | exact (discrete) | judge_verdict | 0.215120 | 0.215120 | 0.0 |
+| `conf_verb` | 4 | exact (discrete) | verdict_bidir | 0.186362 | 0.186362 | 0.0 |
+| `conf_sc` | 5 | exact (discrete) | judge_verdict | 0.204759 | 0.204759 | 0.0 |
+| `conf_sc` | 5 | exact (discrete) | verdict_bidir | 0.196317 | 0.196317 | 0.0 |
+| `conf_lp` | 72 | quantile | judge_verdict | 0.242173 | 0.242203 | 0.00003 |
+| `conf_lp` | 72 | quantile | verdict_bidir | 0.207322 | 0.207069 | 0.00025 |
+| `conf_bpe` | 1521 | quantile | judge_verdict | 0.163734 | 0.160900 | 0.0028 |
+| `conf_bpe` | 1521 | quantile | verdict_bidir | 0.177267 | 0.171053 | 0.0062 |
+
+**Conclusion:** the pattern maps exactly onto binning strategy, not onto anything
+signal-specific - the two discrete signals (`conf_verb`, `conf_sc`) reconstruct to
+floating-point precision; the two continuous, quantile-binned signals (`conf_lp`,
+`conf_bpe`) don't, with the gap growing with how many distinct values get compressed
+into 10 bins (72 unique values -> a gap of ~0.0001-0.0003; 1521 unique values -> a gap
+of ~0.003-0.006). This is expected behavior of a grouped calibration decomposition, not
+a bug in `brier_decomposition()` - confirmed by the fact the gap tracks unique-value
+count exactly, not signal identity. Reported here so RQ1's eventual write-up (task 2.7)
+doesn't need to re-derive this if the arithmetic gets checked in a viva: `conf_lp`'s and
+`conf_bpe'`s `reliability`/`resolution` numbers describe the *binned* forecasts, not a
+claim that they reconstruct `brier()` to the letter.
+
+Analysis script: `analysis/rq1.py` (task 2.6).
