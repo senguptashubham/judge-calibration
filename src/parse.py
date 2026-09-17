@@ -14,13 +14,20 @@ Two independent extraction paths, since they need different raw materials:
 says logic that touches raw model output belongs only in this file.
 """
 
+import argparse
 import gzip
 import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
+from datasets import load_dataset
 
+from src.config import Config
+from src.judge import logprobs_path
 from src.metrics import truncated_entropy
+
+_CATEGORY_DATASET = "philschmid/mt-bench"
 
 
 def parse_verdict_and_confidence(raw_output: str) -> dict:
@@ -178,3 +185,78 @@ def compute_logprob_signals(
         "cot_entropy_mean": float(np.mean(cot_entropies)) if cot_entropies else None,
         "n_cot_tokens": len(cot_indices),
     }
+
+
+def load_category_lookup() -> dict[int, str]:
+    """question_id -> category (writing|roleplay|reasoning|math|coding|
+    extraction|stem|humanities), from the canonical 80-question MT-Bench
+    set. NOT available in lmsys/mt_bench_human_judgments itself - verified
+    empirically that neither its 'human' nor 'gpt4_pair' split carries a
+    category column, since category is a property of the QUESTION, not the
+    vote. philschmid/mt-bench is a clean HF mirror of the original benchmark
+    question set that does carry it; cross-checked question_id=81 ->
+    'writing' against the human-judgments dataset's own question_id=81 (a
+    Hawaii travel-blog prompt) to confirm the join key actually lines up
+    before trusting it.
+    """
+    ds = load_dataset(_CATEGORY_DATASET, split="train")
+    return {int(row["question_id"]): row["category"] for row in ds}
+
+
+def build_calls_dataframe(
+    checkpoint_path: Path, runs_dir: str, category_lookup: dict[int, str]
+) -> pd.DataFrame:
+    """One condition's raw checkpoint (runs/judge_{condition}.jsonl) ->
+    one row per call, with parse_verdict_and_confidence() and
+    compute_logprob_signals() merged in, category backfilled from
+    category_lookup (the raw checkpoint's own `category` is always None -
+    judge.py copies it straight from items_df, which never had it - see
+    load_category_lookup()'s docstring).
+
+    Pure row-by-row transformation, no grouping or aggregation - that's
+    items.parquet's job (src/signals.py), not this function's.
+    """
+    records = []
+    with open(checkpoint_path, "r", encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            record = dict(row)
+            record["category"] = category_lookup.get(row["question_id"], row.get("category"))
+
+            record.update(parse_verdict_and_confidence(row["raw_output"]))
+
+            lp_path = logprobs_path(
+                runs_dir, row["item_id"], row["condition"], row["prompt_variant"], row["order"], row["sample_idx"]
+            )
+            lp_record = load_logprobs_record(lp_path)
+            record.update(
+                compute_logprob_signals(
+                    row["raw_output"], lp_record["token_ids"], lp_record["token_texts"], lp_record["token_logprobs"]
+                )
+            )
+
+            records.append(record)
+    return pd.DataFrame.from_records(records)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    args = parser.parse_args()
+
+    config = Config.from_yaml(args.config)
+    category_lookup = load_category_lookup()
+
+    frames = []
+    for condition in config.conditions:
+        checkpoint_path = Path(config.paths.runs_dir) / f"judge_{condition}.jsonl"
+        if not checkpoint_path.exists():
+            print(f"skipping {condition}: no checkpoint at {checkpoint_path}")
+            continue
+        print(f"parsing {condition} from {checkpoint_path} ...")
+        frames.append(build_calls_dataframe(checkpoint_path, config.paths.runs_dir, category_lookup))
+
+    calls = pd.concat(frames, ignore_index=True)
+    Path(config.paths.calls_parquet).parent.mkdir(parents=True, exist_ok=True)
+    calls.to_parquet(config.paths.calls_parquet)
+    print(f"Wrote {len(calls)} calls to {config.paths.calls_parquet}")
