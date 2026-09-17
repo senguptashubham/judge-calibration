@@ -46,6 +46,136 @@ RQ1's overconfidence finding and the vacuum test's false-confidence finding are 
 
 ---
 
+## RQ2 — Is any cheap uncertainty signal informative about error?
+
+*Written 17 Sep 2026. Data: same population as RQ1 — `results/items.parquet` filtered
+to `(clean, P1)` and `human_label` non-null, **N = 1836** (invariant 14). Analysis:
+`analysis/rq2.py` (per-signal risk-coverage) and `analysis/rq5.py` (entropy threshold
+sweep, task 3.2b). Figures: `results/figures/risk_coverage.png` (the thesis figure),
+`results/figures/entropy_threshold_sweep.png`. Tables: `results/rq2_table.csv`,
+`results/rq5_threshold_sweep_table.csv`. All CIs are cluster bootstraps, B=2000,
+grouped on `question_id` (invariant 2). `accuracy@c%`/`κ@c%` use a rank-based
+"top-c% most confident items" cut (`analysis/rq2.py::_top_k_mask`), a different,
+deliberately simpler definition from the tie-safe value-threshold curve the figure
+itself is built from — see that function's docstring for why the two don't need to
+agree, and RQ1's own accuracy/κ at 100% coverage (0.757 [0.735, 0.778] /
+0.514 [0.471, 0.556]) as the no-abstention reference point.*
+
+**Headline: every real signal beats chance, none comes remotely close to the oracle,
+and the two rankings you'd use to pick "the best" signal disagree with each other.**
+The oracle's AURC is **0.0295** — every real signal's AURC is 1.3–4.7x higher. By
+AUROC (ranking ability — can the signal tell an error item from a correct one at all),
+`conf_bpe` wins clearly (0.794). By AURC (area under the *realized* risk-coverage
+curve — how much risk is actually retained as coverage shrinks), `conf_sc` wins
+(0.038), not `conf_bpe` (0.100). These measure genuinely different things — AURC is
+also shaped by a signal's own value distribution, not just its ranking quality — and
+`conf_sc`'s advantage there traces to it having only 5 possible values at all
+(`k_sc=4`), which mechanically front-loads coverage into large steps rather than
+reflecting cleaner discrimination. Stated plainly rather than picking one "winner":
+neither ranking is wrong, they answer different questions, and reporting only one
+would misrepresent the other.
+
+**Full results:**
+
+| signal | AURC | AUROC | accuracy@90% | κ@90% | accuracy@75% | κ@75% | accuracy@50% | κ@50% |
+|---|---|---|---|---|---|---|---|---|
+| `conf_verb` | 0.139 [0.117, 0.162] | 0.639 [0.608, 0.672] | 0.780 [0.756, 0.802] | 0.557 [0.513, 0.602] | 0.814 [0.784, 0.833] | 0.626 [0.566, 0.663] | 0.844 [0.790, 0.850] | 0.683 [0.578, 0.696] |
+| `conf_lp` | 0.078 [0.066, 0.092] | 0.715 [0.682, 0.746] | 0.784 [0.763, 0.807] | 0.566 [0.524, 0.611] | 0.832 [0.804, 0.853] | 0.662 [0.608, 0.705] | 0.889 [0.857, 0.906] | 0.777 [0.713, 0.813] |
+| `conf_sc` | 0.038 [0.032, 0.046] | 0.623 [0.601, 0.647] | 0.788 [0.766, 0.811] | 0.573 [0.528, 0.619] | 0.816 [0.789, 0.831] | 0.627 [0.573, 0.657] | **0.838 [0.785, 0.836]** | 0.668 [0.565, 0.667] |
+| `conf_bpe` | 0.100 [0.083, 0.120] | **0.794 [0.767, 0.819]** | 0.795 [0.769, 0.817] | 0.589 [0.538, 0.633] | 0.861 [0.830, 0.887] | 0.721 [0.661, 0.774] | 0.916 [0.892, 0.942] | 0.832 [0.784, 0.883] |
+
+**`conf_bpe` is the strongest signal by nearly every coverage-restricted metric**
+(highest accuracy@c% and κ@c% at all three thresholds, and the best AUROC) — the one
+place it isn't "best" is AURC, for the discreteness reason above. `conf_verb`
+(the judge's own stated confidence, RQ1's headline signal) is the weakest across the
+board on this task specifically — being badly overconfident (RQ1) doesn't
+automatically make a signal uninformative for *ranking* errors, but here it's both.
+
+**Caveat: `conf_sc`'s accuracy@50% point estimate (0.838) sits fractionally outside
+its own 95% CI** (`[0.785, 0.836]` — the point is 0.0018 above the upper bound).
+A real, minor artifact of the rank-based top-k cut interacting with `conf_sc`'s heavy
+ties (only 5 distinct values) right at the 50%-coverage boundary, not a computation
+bug — flagged rather than silently rounded through, same standard RQ1's `brier()`
+reconstruction caveat was held to.
+
+**Entropy threshold sweep (RQ5, task 3.2b): the preregistered prediction did NOT
+hold.** D23 predicted epistemic thresholding would beat total thresholding on AURC,
+since epistemic is the reducible part of the uncertainty. The opposite happened, and
+by a wide margin: AURC(`ens_entropy_total`) = 0.098, AURC(`ens_entropy_aleatoric`) =
+0.099, AURC(`ens_entropy_epistemic`) = 0.273 — a paired cluster-bootstrap on the gap
+gives **epistemic − total = +0.175 [0.141, 0.207]**, a CI entirely on the "epistemic is
+worse" side of zero. The `total`/`aleatoric` curves are visually indistinguishable in
+the figure (distinct linestyles/markers used specifically so they stay legible despite
+this) because they're nearly numerically identical: **65% of items have epistemic
+entropy at machine-epsilon** (all three prompt variants agree), so `total ≈ aleatoric`
+for most of the population by construction (`total - aleatoric` exactly equals
+`epistemic`, verified). The mechanism: ensemble agreement (low epistemic) does not
+mean the ensemble is *right* — among the lowest-decile-epistemic items, accuracy is
+only **46%**, far below the 75.7% overall baseline. The judge's three prompt variants
+can be confidently, uniformly wrong together just as easily as confidently right
+together; low epistemic uncertainty is actively misleading as a trust signal here, not
+merely uninformative.
+
+**Human disagreement (tasks 3.3, 3.4): does judge behavior track genuine human
+consensus strength at all?** Population for both: `(clean, P1)` further restricted to
+`n_human_votes >= 2` (D9 — `d_human` is undefined-as-a-disagreement-signal below 2
+votes), **N = 595**. `d_human = |frac_prefer_a - 0.5|` takes only **3 distinct values**
+here and is badly imbalanced — **0.167** (28 items, 4.7%), **0.25** (3 items, 0.5%),
+**0.5** (564 items, 94.8%), a direct consequence of MT-Bench's small (2-5) per-item
+vote counts. D9's secondary bucketed (unanimous/strong-majority/contested) comparison
+is correctly out of scope (`n_contested = 31` in this population, below D9's
+`n_contested >= 100` bar — a different, smaller population than Gate 0's own
+`n_contested = 123`, which was computed on the full 2396-item corpus).
+
+Both `correct` and `conf_verb` rise with `d_human` (i.e. are lower on more-contested
+items), CI-backed under both a linear and a rank-only assumption:
+
+| target | OLS slope | Spearman ρ |
+|---|---|---|
+| `correct ~ d_human` | 0.803 [0.208, 1.376] | 0.141 [0.036, 0.237] |
+| `conf_verb ~ d_human` | 0.059 [0.016, 0.100] | 0.113 [0.031, 0.190] |
+
+Spearman was added specifically because 3 points can't support a linear-shape claim;
+both CIs excluding 0 under the weaker, monotonic-only assumption is what makes this
+finding hold up, not just the OLS number in isolation. Extended to all four original
+signals (task 3.4, Spearman only, same population,
+`results/figures/d_human_correlations.png`):
+
+| signal | Spearman ρ | 95% CI |
+|---|---|---|
+| `conf_verb` | 0.113 | [0.031, 0.190] |
+| `conf_lp` | 0.091 | [-0.004, 0.181] |
+| `conf_sc` | 0.024 | [-0.054, 0.123] |
+| `conf_bpe` | 0.101 | [0.002, 0.185] |
+
+All four are weak (ρ ≤ 0.11), and **two of four (`conf_lp`, `conf_sc`) don't clear
+zero** at this sample size. Per task 3.4's own framing: if judge confidence tracked
+genuine task ambiguity, it should track `d_human` meaningfully; instead none of the
+four does more than weakly. Combined with RQ1's overconfidence finding and the vacuum
+test's false-confidence result, this is a third, independent line of evidence for the
+same conclusion — the judge's confidence signals track something other than the
+actual difficulty/ambiguity of the item. (Caveat carried over from task 3.3: with
+94.8% of `d_human`'s weight at one value, this reads as a comparison between the
+dominant near-unanimous group and a small 5.2% minority, not a fine-grained trend
+across many disagreement levels — more human votes would require new annotation,
+outside this project's scope. D3, RewardBench 2 augmentation, was declined "for now"
+in `PREREGISTRATION.md` §6 with an explicit reopen condition — "an unexpectedly thin
+subgroup for a specific analysis" — that this arguably meets; revisiting it is a
+deliberate scope decision, not a default.)
+
+A genuine floating-point bug was found and fixed while building this analysis:
+`d_human` values from 1/3 vs. 2/3 vote splits (both mathematically 1/6) landed on
+adjacent float64 values (~6e-17 apart), which `get_bin_edges`' exact-value branch
+treated as 2 bins instead of 1, and independently corrupted the Spearman ranking too
+(ranks need exact ties detected as ties) until `d_human` was rounded to 6dp once in
+`load_disagreement_items()`, upstream of every consumer. Confirmed this does not
+affect any already-reported RQ1 number (`conf_verb`/`conf_sc`/`conf_lp` show no such
+mismatch; `conf_bpe` does, 1521 raw vs. 797 real unique values, but is always
+quantile-binned regardless since it has far more unique values than `n_bins=10`
+either way).
+
+---
+
 ## Methods notes
 
 Small, dated empirical observations that inform a design decision but don't belong to

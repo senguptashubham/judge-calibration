@@ -132,22 +132,22 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 ## Week 3 · Sep 14–20 · 11h — RQ2 + human-disagreement + threshold sweep
 
-- [ ] **3.1 [C]** `src/metrics.py::risk_coverage(conf, correct)` and `aurc()`, plus the **oracle** curve (rank by true correctness).
+- [x] **3.1 [C]** `src/metrics.py::risk_coverage(conf, correct)` and `aurc()`, plus the **oracle** curve (rank by true correctness).
   **DoD:** unit-tested; oracle dominates every real signal by construction.
 
-- [ ] **3.1b [C]** Extend the risk-coverage machinery with a **threshold-sweep** mode (D20, professor feedback point 5): given a signal, sweep **raw threshold values** (not just percentile coverage) and report coverage, accuracy, κ, **and ECE on the retained set** at each threshold. This is a genuinely different x-axis parametrization from 3.1's percentile-based curve, not a rebuild of it.
+- [x] **3.1b [C]** Extend the risk-coverage machinery with a **threshold-sweep** mode (D20, professor feedback point 5): given a signal, sweep **raw threshold values** (not just percentile coverage) and report coverage, accuracy, κ, **and ECE on the retained set** at each threshold. This is a genuinely different x-axis parametrization from 3.1's percentile-based curve, not a rebuild of it.
   **DoD:** unit-tested against a synthetic signal where the answer is known by construction. Works on `conf_ens`'s `ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic` independently.
 
-- [ ] **3.2 [A]** **RQ2**: risk–coverage per signal + oracle on one axis, on `(clean, P1)` only (invariant 14 — `prompt_variant == "P1"` alone isn't enough once `verbose` exists). AURC, accuracy@{90,75,50}% coverage, **κ@coverage**, AUROC(uncertainty→error). Cluster-bootstrap CIs.
+- [x] **3.2 [A]** **RQ2**: risk–coverage per signal + oracle on one axis, on `(clean, P1)` only (invariant 14 — `prompt_variant == "P1"` alone isn't enough once `verbose` exists). AURC, accuracy@{90,75,50}% coverage, **κ@coverage**, AUROC(uncertainty→error). Cluster-bootstrap CIs.
   **DoD:** `results/figures/risk_coverage.png` — **this is the thesis figure.** Plus `results/rq2_table.csv`.
 
-- [ ] **3.2b [A]** **RQ5 threshold sweep** (D20, D23): run 3.1b's threshold sweep on `ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic` separately, on `clean` items (where `conf_ens` exists). **Test the preregistered prediction:** epistemic thresholding beats total thresholding, since epistemic is the reducible part.
+- [x] **3.2b [A]** **RQ5 threshold sweep** (D20, D23): run 3.1b's threshold sweep on `ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic` separately, on `clean` items (where `conf_ens` exists). **Test the preregistered prediction:** epistemic thresholding beats total thresholding, since epistemic is the reducible part.
   **DoD:** `results/figures/entropy_threshold_sweep.png` (all three curves + oracle) and a one-sentence verdict on whether the preregistered prediction held.
 
-- [ ] **3.3 [A]** Human-disagreement decomposition. **Primary: continuous** — regress judge correctness on `d_human`, and judge confidence on `d_human`, with cluster-bootstrap CIs (D9). **Secondary: bucketed** (unanimous / strong majority / contested) *only if Gate 0 found ≥100 contested items.*
+- [x] **3.3 [A]** Human-disagreement decomposition. **Primary: continuous** — regress judge correctness on `d_human`, and judge confidence on `d_human`, with cluster-bootstrap CIs (D9). **Secondary: bucketed** (unanimous / strong majority / contested) *only if Gate 0 found ≥100 contested items.*
   **DoD:** `results/figures/human_disagreement.png` + the finding as one sentence.
 
-- [ ] **3.4 [A]** Does judge uncertainty track *human* uncertainty at all? Correlation between each of the four original confidence signals and `d_human`.
+- [x] **3.4 [A]** Does judge uncertainty track *human* uncertainty at all? Correlation between each of the four original confidence signals and `d_human`.
   **DoD:** four correlations with CIs in `REPORT.md`. **This is the aleatoric/epistemic result — if judge confidence is uncorrelated with human consensus, the judge is not modelling task ambiguity at all, only its own.** (The equivalent check for `conf_ens`'s aleatoric component specifically is D23's dedicated validation, task 5.9e — kept in W5 alongside the rest of RQ5 rather than duplicated here, even though it reuses this same `d_human` machinery.)
 
 - [ ] **3.4b [L]** Read A7 (Trust or Escalate) and A5 (SCOPE).
@@ -156,10 +156,10 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [ ] **3.4c [L]** Theory K — BALD / mutual information (`LEARNING.md`, new block, D20).
   **DoD:** you can derive Epistemic = Total − Aleatoric from first principles (it's the mutual information between the prediction and the model/ensemble parameter), and explain in one sentence why a position-biased judge maximizing `conf_bpe`'s entropy is conceptually the same phenomenon as an ensemble maximizing epistemic uncertainty.
 
-- [ ] **3.5 [W]** `REPORT.md` RQ2 section, including the entropy threshold-sweep result (3.2b).
+- [x] **3.5 [W]** `REPORT.md` RQ2 section, including the entropy threshold-sweep result (3.2b).
   **DoD:** written.
 
-- ⛔ **GATE 3** — RQ2 answered. One figure that is the whole thesis. A flat curve is a finding; the oracle overlay makes it legible. The epistemic-vs-total threshold-sweep prediction is tested and the verdict stated.
+- [x] ⛔ **GATE 3** — passed. RQ2 answered on `(clean, P1)`, N=1836: oracle AURC 0.0295 vs. every real signal 1.3–4.7x higher; `conf_bpe` best on AUROC (0.794) and every accuracy@coverage/κ@coverage cut, `conf_sc` best on AURC (0.038, driven by its own 5-value discreteness, not cleaner discrimination) — the two rankings disagree and both are reported, not reconciled into one "winner." Entropy threshold-sweep prediction (D23, epistemic beats total) tested and **rejected**: epistemic AURC 0.273 vs. total 0.098, paired gap +0.175 [0.141, 0.207]; mechanism confirmed (65% of items have ~zero epistemic entropy, but accuracy among the lowest-decile-epistemic items is only 46% vs. 75.7% overall — ensemble agreement isn't ensemble correctness). `results/figures/risk_coverage.png` is the thesis figure. 3.4b/3.4c (reading) intentionally left open — not gating, owner's own pace.
 
 ---
 
