@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 
 from src.metrics import auroc_error, ece, get_bin_edges
 
@@ -105,6 +106,26 @@ def _reliability_points(
     return np.array(bin_conf), np.array(bin_acc), np.array(bin_weight)
 
 
+def _marker_sizes(weights: np.ndarray) -> np.ndarray:
+    """Bin weight (share of the data, in [0, 1]) -> scatter `s` (marker
+    area in points^2), bounded to [40, 350] rather than a raw
+    `weight * constant` scale.
+
+    An unbounded scale breaks in two ways once a real (non-uniform) weight
+    distribution shows up: a bin holding most of the data gets a marker
+    whose radius, in screen points, is large enough to visually extend
+    past the axes and get clipped at the boundary (matplotlib draws
+    marker size in screen space, not data space, so this isn't self-
+    correcting); and matplotlib's default legend handle reuses the
+    scatter's own size, so the legend key becomes enormous too. Bounding
+    the range keeps every marker readable and clipping-free regardless of
+    how concentrated the weight distribution is - the legend uses its own
+    fixed-size proxy handles instead (see plot_reliability_diagram), so
+    this bound doesn't need to account for the legend at all anymore.
+    """
+    return 40 + weights * 310
+
+
 def plot_reliability_diagram(
     confidences: np.ndarray,
     correct: np.ndarray,
@@ -152,12 +173,28 @@ def plot_reliability_diagram(
     correct_arr = np.asarray(correct, dtype=float)
 
     fig, ax = plt.subplots(figsize=(5, 5))
-    ax.plot([0, 1], [0, 1], linestyle="--", color="gray", label="perfect calibration")
+    ax.plot([0, 1], [0, 1], linestyle="--", color="gray")
+
+    # Fixed-size proxy handles for the legend, built separately from the
+    # actual (variable, weight-scaled) scatter markers - see
+    # _marker_sizes()'s docstring for why reusing the real markers there
+    # breaks.
+    legend_handles = [Line2D([0], [0], linestyle="--", color="gray", label="perfect calibration")]
 
     conf_pts, acc_pts, weights = _reliability_points(confidences_arr, correct_arr, n_bins, strategy)
     ax.plot(conf_pts, acc_pts, color="tab:blue", alpha=0.5, zorder=1)
     ax.scatter(
-        conf_pts, acc_pts, s=weights * 2000, alpha=0.8, color="tab:blue", label="judge_verdict", zorder=2
+        conf_pts,
+        acc_pts,
+        s=_marker_sizes(weights),
+        alpha=0.8,
+        color="tab:blue",
+        edgecolors="white",
+        linewidths=1,
+        zorder=2,
+    )
+    legend_handles.append(
+        Line2D([0], [0], marker="o", linestyle="", color="tab:blue", markersize=10, label="judge_verdict")
     )
 
     if correct_bidir is not None:
@@ -165,15 +202,30 @@ def plot_reliability_diagram(
         conf_pts2, acc_pts2, weights2 = _reliability_points(confidences_arr, correct_bidir_arr, n_bins, strategy)
         ax.plot(conf_pts2, acc_pts2, color="tab:orange", alpha=0.5, zorder=1)
         ax.scatter(
-            conf_pts2, acc_pts2, s=weights2 * 2000, alpha=0.8, color="tab:orange", label="verdict_bidir", zorder=2
+            conf_pts2,
+            acc_pts2,
+            s=_marker_sizes(weights2),
+            alpha=0.8,
+            color="tab:orange",
+            edgecolors="white",
+            linewidths=1,
+            zorder=2,
+        )
+        legend_handles.append(
+            Line2D([0], [0], marker="o", linestyle="", color="tab:orange", markersize=10, label="verdict_bidir")
         )
 
-    ax.set_xlim(0, 1)
-    ax.set_ylim(0, 1)
+    # A small margin beyond the data's true [0, 1] range - without it, a
+    # bin whose mean confidence sits right at the edge (common; confidence
+    # piles up near 1.0) gets its marker clipped by the axes border, since
+    # marker size is drawn in screen points, not data units, and a point
+    # exactly at the boundary has no room to render outward.
+    ax.set_xlim(-0.05, 1.05)
+    ax.set_ylim(-0.05, 1.05)
     ax.set_xlabel("mean confidence in bin")
     ax.set_ylabel("accuracy in bin")
     ax.set_title(f"Reliability diagram: {signal_name}")
-    ax.legend(loc="upper left")
+    ax.legend(handles=legend_handles, loc="upper left", fontsize=9)
     fig.tight_layout()
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
