@@ -395,3 +395,234 @@ def auroc_error(uncertainty: npt.ArrayLike, correct: npt.ArrayLike) -> float:
             "correct and incorrect items, got all one class."
         )
     return float(roc_auc_score(error_arr, uncertainty_arr))
+
+
+def risk_coverage(
+    uncertainty: npt.ArrayLike,
+    correct: npt.ArrayLike,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Risk-coverage curve for selective prediction: if the judge is allowed
+    to abstain on its least-confident items, how much does accuracy improve
+    on what's left?
+
+    At each threshold t, "coverage" is the fraction of items kept (every
+    item with uncertainty <= t), and "risk" is the error rate among the kept
+    items:
+
+        coverage(t) = |{i : uncertainty_i <= t}| / n
+        risk(t)     = 1 - mean(correct_i for i with uncertainty_i <= t)
+
+    Swept over t = every unique uncertainty value actually observed, ascending.
+    This is a post-hoc, item-level filter over already-generated verdicts -
+    it has nothing to do with decoding-time truncation (top-k/top-p); the
+    judge produced one fixed greedy verdict per item long before this
+    function runs, and "abstaining" here just means discarding that verdict
+    from the kept set based on its confidence.
+
+    Why step through unique threshold values instead of a plain stable sort
+    over individual items: several of this project's signals are heavily
+    tied (conf_sc has only 5 possible values; conf_verb piles up at
+    0.8/0.9/0.95/1.0). A per-item stable sort would split a tied group
+    across several coverage levels in whatever order the array happened to
+    list them - an arbitrary artifact of row order, not a real ranking.
+    Stepping by unique value instead admits an entire tied group into the
+    kept set in one step, so the curve never depends on row order. This is
+    the same discrete-vs-continuous reasoning get_bin_edges() already uses
+    for ece()'s "auto" strategy.
+
+    Convention: like auroc_error(), this takes an UNCERTAINTY-typed signal
+    (higher = more uncertain, abstain-worthy), not a confidence-typed one -
+    caller is responsible for sign, e.g. pass `1 - conf_verb` for a
+    confidence signal, or an entropy signal (ens_entropy_total, etc.)
+    directly.
+
+    Args:
+        uncertainty: an uncertainty score per item (higher = more uncertain).
+        correct: whether the judge was actually right, per item.
+
+    Returns:
+        (coverage, risk), both ascending in coverage. Length equals the
+        number of unique uncertainty values, which can be less than n when
+        the signal has ties (mirrors ece()'s n_effective_bins - fewer
+        distinct points is a real property of the signal, not an error).
+    """
+    uncertainty_arr = np.asarray(uncertainty, dtype=float)
+    correct_arr = np.asarray(correct, dtype=bool)
+    n = len(uncertainty_arr)
+
+    un_thresholds = np.unique(uncertainty_arr)
+    coverages = []
+    risks = []
+    for threshold in un_thresholds:
+        kept = uncertainty_arr <= threshold
+        coverages.append(kept.sum() / n)
+        risks.append(1 - correct_arr[kept].mean())
+    return np.array(coverages), np.array(risks)
+
+
+def oracle_risk_coverage(correct: npt.ArrayLike) -> tuple[np.ndarray, np.ndarray]:
+    """The best-possible risk-coverage curve: what you'd get if the
+    "uncertainty" signal had perfect knowledge of correctness. Every real
+    signal must fall on or above this curve at every coverage level - it's
+    the oracle upper bound, not just another curve to compare against.
+
+    Reuses risk_coverage() itself rather than a separate implementation, by
+    treating wrongness (`~correct`) as the uncertainty signal: an oracle
+    would rank every correct item as maximally trustworthy (uncertainty 0)
+    and every incorrect item as maximally untrustworthy (uncertainty 1), so
+    all correct items enter the kept set before any incorrect one. Going
+    through the same function this way - rather than hand-deriving the
+    curve's closed form - is what makes "oracle dominates every real signal
+    by construction" an actual testable property instead of an assumption:
+    both curves are built by identical coverage/risk accounting, so any gap
+    between them is a genuine property of the signal, not an artifact of
+    two different implementations.
+
+    At coverage <= accuracy, risk is exactly 0 (only correct items are kept
+    yet); above that, risk climbs as incorrect items get forced in.
+
+    Args:
+        correct: whether the judge was actually right, per item.
+
+    Returns:
+        (coverage, risk) - same shape/contract as risk_coverage(). Always
+        exactly 2 points (correct=0.0 and correct=1.0 are the only two
+        uncertainty values `~correct` can take), at
+        coverage = (accuracy, 1.0) and risk = (0.0, 1 - accuracy).
+    """
+    correct_arr = np.asarray(correct, dtype=bool)
+    return risk_coverage(uncertainty=(~correct_arr).astype(float), correct=correct_arr)
+
+
+def aurc(coverage: npt.ArrayLike, risk: npt.ArrayLike) -> float:
+    """Area Under the Risk-Coverage curve: one scalar summary of a
+    risk_coverage() curve, via trapezoidal integration of risk as a
+    function of coverage.
+
+        AURC = integral of risk(c) dc, c from the lowest observed coverage
+        to 1.0
+
+    Lower is better (less risk retained as coverage grows). `risk` is `y`,
+    `coverage` is `x` - integrating the other way around silently computes
+    the area under the wrong curve, so get the argument order right here
+    specifically.
+
+    The curve is integrated only over the coverage values risk_coverage()
+    actually returned (starting at the smallest observed coverage, not 0) -
+    risk at coverage=0 is undefined (no items kept, mean() of an empty set),
+    so there is no (0, ?) point to anchor the integral at.
+
+    Args:
+        coverage: coverage values from risk_coverage() or
+            oracle_risk_coverage(), ascending.
+        risk: the matching risk values, same length as coverage.
+
+    Returns:
+        AURC. For the oracle curve specifically this has a closed form,
+        (1 - accuracy)^2 / 2, derived from its exact two-point shape
+        (see oracle_risk_coverage()) - useful as an independent check.
+    """
+    coverage_arr = np.asarray(coverage, dtype=float)
+    risk_arr = np.asarray(risk, dtype=float)
+    return float(np.trapezoid(y=risk_arr, x=coverage_arr))
+
+
+def threshold_sweep(
+    signal: npt.ArrayLike,
+    correct: npt.ArrayLike,
+    judge_verdict: npt.ArrayLike,
+    human_label: npt.ArrayLike,
+    confidences: npt.ArrayLike,
+    n_bins: int,
+    strategy: str = "auto",
+) -> dict[str, np.ndarray]:
+    """Threshold-sweep table (DECISIONS.md D20, professor feedback point 5):
+    a genuinely different x-axis from risk_coverage()'s percentile-based
+    curve. risk_coverage() answers "what risk do I get if I keep my top C%
+    most confident items" - a framing relative to this sample's own
+    distribution. This answers "what do I get if I only trust the judge
+    when this signal is below RAW VALUE t" - a fixed, deployable cutoff that
+    means the same thing regardless of how the signal happens to be
+    distributed in any particular sample. That's what makes it the right
+    tool for RQ5: comparing ens_entropy_total vs ens_entropy_epistemic at
+    matched coverage only makes sense if each is swept on its own real
+    scale, not forced onto a shared percentile axis.
+
+    Swept over every unique observed value of `signal`, ascending, same
+    tie-safe stepping as risk_coverage() (a tied group enters the kept set
+    together, never split across steps).
+
+    At each threshold, kept = signal <= t, and four things are computed
+    on the kept subset alone:
+      - accuracy: correct_arr[kept].mean() - CLAUDE.md invariant 5 says
+        never report this without kappa alongside it, which is exactly
+        why this function computes both together rather than leaving
+        kappa to a separate pass.
+      - kappa: needs judge_verdict/human_label, not just `correct` - kappa's
+        chance-correction depends on each rater's own label marginals
+        (how often each says "A" vs "B"), which `correct` alone discards.
+      - ece (+ n_effective_bins): recomputed fresh from confidences[kept]
+        each step - calibration on the retained set, not the full sample's
+        calibration restricted to an index range.
+
+    Low-coverage policy: no floor, no dropped rows - every unique threshold
+    gets a row, even where only a handful of items remain and kappa/ece are
+    numerically noisy there (cohens_kappa's own p_e>=1-eps guard already
+    protects against a crash, not against noise). `n_kept` is returned
+    explicitly alongside `coverage` so any "don't trust below N items" cutoff
+    is applied later, at plot/analysis time (3.2b), not silently decided here
+    - matches how ece() always surfaces n_effective_bins instead of refusing
+    to compute below some bin size.
+
+    Args:
+        signal: the raw uncertainty/entropy values to threshold on (higher =
+            more uncertain, same convention as risk_coverage()).
+        correct: whether the judge was actually right, per item.
+        judge_verdict: judge's label per item (e.g. "A"/"B"), for kappa.
+        human_label: human majority label per item, for kappa.
+        confidences: stated confidence per item, for ECE on the retained set.
+        n_bins: requested ECE bin count - see get_bin_edges.
+        strategy: ECE binning strategy, one of "uniform", "quantile", "auto".
+
+    Returns:
+        dict of equal-length arrays: "threshold", "coverage", "n_kept",
+        "accuracy", "kappa", "ece", "n_effective_bins" - one row per unique
+        signal value.
+    """
+    signal_arr = np.asarray(signal, dtype=float)
+    correct_arr = np.asarray(correct, dtype=bool)
+    judge_verdict_arr = np.asarray(judge_verdict)
+    human_label_arr = np.asarray(human_label)
+    confidences_arr = np.asarray(confidences, dtype=float)
+    n = len(signal_arr)
+
+    thresholds = np.unique(signal_arr)
+    coverages = []
+    n_kepts = []
+    accuracies = []
+    kappas = []
+    eces = []
+    n_effective_bins_list = []
+    for threshold in thresholds:
+        kept = signal_arr <= threshold
+        coverage = kept.sum() / n
+        accuracy = correct_arr[kept].mean()
+        kappa = cohens_kappa(judge_verdict_arr[kept], human_label_arr[kept])
+        ece_value, n_effective_bins = ece(confidences_arr[kept], correct_arr[kept], n_bins, strategy)
+
+        coverages.append(coverage)
+        n_kepts.append(int(kept.sum()))
+        accuracies.append(accuracy)
+        kappas.append(kappa)
+        eces.append(ece_value)
+        n_effective_bins_list.append(n_effective_bins)
+
+    return {
+        "threshold": thresholds,
+        "coverage": np.array(coverages),
+        "n_kept": np.array(n_kepts),
+        "accuracy": np.array(accuracies),
+        "kappa": np.array(kappas),
+        "ece": np.array(eces),
+        "n_effective_bins": np.array(n_effective_bins_list),
+    }

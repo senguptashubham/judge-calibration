@@ -8,13 +8,17 @@ import pytest
 from sklearn.metrics import cohen_kappa_score
 
 from src.metrics import (
+    aurc,
     auroc_error,
     brier,
     brier_decomposition,
     cohens_kappa,
     ece,
     mce,
+    oracle_risk_coverage,
     overconfidence_gap,
+    risk_coverage,
+    threshold_sweep,
     truncated_entropy,
 )
 
@@ -241,3 +245,233 @@ def test_auroc_error_raises_when_only_one_class_present():
     # silently wrong number like 0.5 or 1.0.
     with pytest.raises(ValueError):
         auroc_error([0.1, 0.2, 0.3], [True, True, True])
+
+
+# --- TASKS.md task 3.1 -------------------------------------------------------
+#
+# risk_coverage()/oracle_risk_coverage()/aurc() reference case, hand-computed
+# during planning. n=5, with a tied pair at uncertainty=0.3 specifically to
+# exercise the unique-threshold stepping (both items must enter coverage
+# together, not split across two steps):
+#
+#   uncertainty = [0.1, 0.2, 0.3, 0.3, 0.9]
+#   correct     = [T,   T,   F,   T,   F  ]
+#
+#   threshold=0.1: kept={0}       -> correct=[T]         -> cov=1/5=0.2, risk=1-1/1=0.0
+#   threshold=0.2: kept={0,1}     -> correct=[T,T]        -> cov=2/5=0.4, risk=1-2/2=0.0
+#   threshold=0.3: kept={0,1,2,3} -> correct=[T,T,F,T]    -> cov=4/5=0.8, risk=1-3/4=0.25
+#   threshold=0.9: kept={0..4}    -> correct=[T,T,F,T,F]  -> cov=5/5=1.0, risk=1-3/5=0.4
+#
+#   coverage = [0.2, 0.4, 0.8, 1.0], risk = [0.0, 0.0, 0.25, 0.4]
+#
+#   AURC = trapezoid(y=risk, x=coverage):
+#     (0.2->0.4): width 0.2, avg height (0+0)/2=0        -> area 0.0
+#     (0.4->0.8): width 0.4, avg height (0+0.25)/2=0.125  -> area 0.05
+#     (0.8->1.0): width 0.2, avg height (0.25+0.4)/2=0.325 -> area 0.065
+#     total = 0.115
+
+
+def test_risk_coverage_reference():
+    uncertainty = [0.1, 0.2, 0.3, 0.3, 0.9]
+    correct = [True, True, False, True, False]
+
+    coverage, risk = risk_coverage(uncertainty, correct)
+
+    # 4 unique thresholds, not 5 items - the tied pair at 0.3 collapses into
+    # one step, which is the whole point of stepping by unique value.
+    assert len(coverage) == 4
+    np.testing.assert_allclose(coverage, [0.2, 0.4, 0.8, 1.0])
+    np.testing.assert_allclose(risk, [0.0, 0.0, 0.25, 0.4])
+
+
+def test_aurc_reference():
+    coverage = np.array([0.2, 0.4, 0.8, 1.0])
+    risk = np.array([0.0, 0.0, 0.25, 0.4])
+
+    assert aurc(coverage, risk) == pytest.approx(0.115, abs=1e-9)
+
+
+def test_aurc_swapped_axes_gives_a_different_wrong_answer():
+    # Regression guard for the x/y swap bug found during development:
+    # aurc(coverage, risk) and the backwards trapezoid(y=coverage, x=risk)
+    # must not silently agree.
+    coverage = np.array([0.2, 0.4, 0.8, 1.0])
+    risk = np.array([0.0, 0.0, 0.25, 0.4])
+
+    correct_aurc = aurc(coverage, risk)
+    swapped = float(np.trapezoid(y=coverage, x=risk))
+
+    assert correct_aurc != pytest.approx(swapped)
+
+
+def test_oracle_risk_coverage_reference():
+    # Same 5-item correct/incorrect split as above, but oracle ignores the
+    # uncertainty column entirely - it only ever produces 2 points, at
+    # coverage=accuracy and coverage=1.0.
+    correct = [True, True, False, True, False]  # accuracy = 3/5 = 0.6
+
+    coverage, risk = oracle_risk_coverage(correct)
+
+    assert len(coverage) == 2
+    np.testing.assert_allclose(coverage, [0.6, 1.0])
+    np.testing.assert_allclose(risk, [0.0, 0.4])
+
+
+def test_oracle_aurc_matches_closed_form():
+    # AURC of the oracle curve has a closed form: (1 - accuracy)^2 / 2,
+    # from its exact two-point shape (coverage=accuracy -> risk=0,
+    # coverage=1.0 -> risk=1-accuracy): a right triangle of base
+    # (1-accuracy) and height (1-accuracy).
+    rng = np.random.default_rng(seed=0)
+    correct = rng.random(500) < 0.6
+    accuracy = correct.mean()
+
+    coverage, risk = oracle_risk_coverage(correct)
+    computed = aurc(coverage, risk)
+    closed_form = (1 - accuracy) ** 2 / 2
+
+    assert computed == pytest.approx(closed_form, abs=1e-9)
+
+
+def test_oracle_dominates_noisy_real_signal():
+    # DoD for task 3.1: "oracle dominates every real signal by construction."
+    # Build an uncertainty signal correlated with wrongness but with noise
+    # mixed in, so it's a realistic imperfect signal, not already the oracle.
+    rng = np.random.default_rng(seed=1)
+    n = 300
+    correct = rng.random(n) < 0.7
+    noise = rng.normal(0, 0.5, size=n)
+    uncertainty = (~correct).astype(float) + noise
+
+    oracle_coverage, oracle_risk = oracle_risk_coverage(correct)
+    signal_coverage, signal_risk = risk_coverage(uncertainty, correct)
+
+    # Different signals produce different numbers of unique thresholds, so
+    # compare on a common coverage grid via interpolation rather than
+    # assuming the two curves line up point-for-point.
+    grid = np.linspace(oracle_coverage.min(), 1.0, 50)
+    oracle_interp = np.interp(grid, oracle_coverage, oracle_risk)
+    signal_interp = np.interp(grid, signal_coverage, signal_risk)
+
+    assert np.all(oracle_interp <= signal_interp + 1e-9)
+    assert aurc(oracle_coverage, oracle_risk) <= aurc(signal_coverage, signal_risk)
+
+
+def test_risk_coverage_uninformative_signal_stays_near_base_error_rate():
+    # A signal uncorrelated with correctness shouldn't be able to improve
+    # risk as coverage drops - every "kept" subset is effectively a random
+    # sample of the full population, so risk should hover near the overall
+    # error rate at every coverage level, not trend downward.
+    rng = np.random.default_rng(seed=2)
+    n = 2000
+    correct = rng.random(n) < 0.65
+    uncertainty = rng.uniform(0, 1, size=n)  # independent of correct
+
+    coverage, risk = risk_coverage(uncertainty, correct)
+    base_error_rate = 1 - correct.mean()
+
+    grid = np.array([0.25, 0.5, 0.75, 1.0])
+    risk_at_grid = np.interp(grid, coverage, risk)
+
+    np.testing.assert_allclose(risk_at_grid, base_error_rate, atol=0.05)
+
+
+# --- TASKS.md task 3.1b -----------------------------------------------------
+#
+# threshold_sweep() reference case, hand-computed during planning then
+# cross-checked against the function itself (ece()/cohens_kappa() are
+# already independently tested elsewhere, so this dataset targets
+# threshold_sweep()'s own orchestration - kept-mask selection and
+# coverage/n_kept bookkeeping - not the sub-metrics' math).
+#
+# n=8, tied pairs at every threshold (signal repeats each of 0.1/0.3/0.6/0.9
+# twice) to also exercise the same tie-safe stepping as risk_coverage().
+# human_label is deliberately NOT constant (unlike a simpler dataset would
+# give) so kappa isn't trivially 0 - a rater with zero variance makes
+# p_e == p_o always, which would hide any real chance-correction:
+#
+#   idx: signal  judge  human  conf   correct
+#   0    0.1     A      A      0.90   T
+#   1    0.1     B      A      0.60   F
+#   2    0.3     A      A      0.80   T
+#   3    0.3     B      B      0.70   T
+#   4    0.6     A      B      0.55   F
+#   5    0.6     B      B      0.65   T
+#   6    0.9     A      A      0.50   T
+#   7    0.9     B      A      0.50   F
+#
+# At threshold=0.3 (kept = idx 0-3), worked by hand:
+#   accuracy = 3/4 = 0.75
+#   kappa: p_o = 3/4 = 0.75; judge freq(A) = 0.5, human freq(A) = 0.75
+#     -> p_e = 0.5*0.75 + 0.5*0.25 = 0.5 -> kappa = (0.75-0.5)/(1-0.5) = 0.5
+#   ece (n_bins=2, "auto"): 4 unique confidences > n_bins -> quantile bins.
+#     edges from percentiles [0,50,100] of [0.6,0.7,0.8,0.9] -> [0.6,0.75,0.9+eps]
+#     bin1={0.6,0.7} (idx1,3) correct=[F,T] -> conf_bar=0.65, acc=0.5
+#     bin2={0.8,0.9} (idx2,0) correct=[T,T] -> conf_bar=0.85, acc=1.0
+#     ece = (2*|0.5-0.65| + 2*|1.0-0.85|)/4 = (0.3+0.3)/4 = 0.15
+#
+# The other three thresholds' accuracy/kappa/ece were verified against the
+# implementation the same way but aren't reproduced by hand above - the
+# pattern is identical, just more bookkeeping.
+
+_SWEEP_SIGNAL = [0.1, 0.1, 0.3, 0.3, 0.6, 0.6, 0.9, 0.9]
+_SWEEP_JUDGE = ["A", "B", "A", "B", "A", "B", "A", "B"]
+_SWEEP_HUMAN = ["A", "A", "A", "B", "B", "B", "A", "A"]
+_SWEEP_CONF = [0.9, 0.6, 0.8, 0.7, 0.55, 0.65, 0.5, 0.5]
+_SWEEP_CORRECT = [j == h for j, h in zip(_SWEEP_JUDGE, _SWEEP_HUMAN)]
+
+
+def test_threshold_sweep_unique_thresholds_and_coverage():
+    # 4 unique thresholds, not 8 items - the tied pairs must collapse into
+    # one step each, same tie-safe stepping as risk_coverage().
+    result = threshold_sweep(
+        _SWEEP_SIGNAL, _SWEEP_CORRECT, _SWEEP_JUDGE, _SWEEP_HUMAN, _SWEEP_CONF,
+        n_bins=2,
+    )
+    assert len(result["threshold"]) == 4
+    np.testing.assert_allclose(result["threshold"], [0.1, 0.3, 0.6, 0.9])
+    np.testing.assert_allclose(result["coverage"], [0.25, 0.5, 0.75, 1.0])
+    np.testing.assert_array_equal(result["n_kept"], [2, 4, 6, 8])
+
+
+def test_threshold_sweep_reference_row():
+    # The threshold=0.3 row, hand-computed above.
+    result = threshold_sweep(
+        _SWEEP_SIGNAL, _SWEEP_CORRECT, _SWEEP_JUDGE, _SWEEP_HUMAN, _SWEEP_CONF,
+        n_bins=2,
+    )
+    row = 1  # threshold=0.3 is the second unique value
+    assert result["threshold"][row] == pytest.approx(0.3)
+    assert result["accuracy"][row] == pytest.approx(0.75)
+    assert result["kappa"][row] == pytest.approx(0.5)
+    assert result["ece"][row] == pytest.approx(0.15, abs=1e-9)
+    assert result["n_effective_bins"][row] == 2
+
+
+def test_threshold_sweep_all_rows_reference():
+    # Full table, all 4 rows - verified against the implementation itself
+    # (ece()/cohens_kappa() already have their own independent reference
+    # tests elsewhere in this file; this checks threshold_sweep()'s own
+    # kept-mask/bookkeeping logic combines them correctly at every step).
+    result = threshold_sweep(
+        _SWEEP_SIGNAL, _SWEEP_CORRECT, _SWEEP_JUDGE, _SWEEP_HUMAN, _SWEEP_CONF,
+        n_bins=2,
+    )
+    np.testing.assert_allclose(result["accuracy"], [0.5, 0.75, 2 / 3, 0.625])
+    np.testing.assert_allclose(result["kappa"], [0.0, 0.5, 1 / 3, 0.25], atol=1e-9)
+    np.testing.assert_allclose(result["ece"], [0.35, 0.15, 7 / 30, 0.2625], atol=1e-9)
+
+
+def test_threshold_sweep_low_coverage_no_rows_dropped():
+    # Explicit low-coverage policy check: no row is silently filtered out,
+    # even the first threshold where only 2/8 items are kept and kappa
+    # degenerates to 0.0 via cohens_kappa's own p_e>=1-eps guard rather than
+    # raising or being dropped.
+    result = threshold_sweep(
+        _SWEEP_SIGNAL, _SWEEP_CORRECT, _SWEEP_JUDGE, _SWEEP_HUMAN, _SWEEP_CONF,
+        n_bins=2,
+    )
+    assert len(result["threshold"]) == 4
+    assert result["n_kept"][0] == 2
+    assert not np.isnan(result["kappa"][0])
+    assert not np.isnan(result["ece"][0])
