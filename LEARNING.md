@@ -167,10 +167,10 @@ Each block ends in code, not notes. If there's no artifact, it didn't happen.
 | **A11** | **Auto-Prompt Ensemble for LLM Judge** | **W1** | **30m** | ☐ |
 | **A12** | **Bayesian Prompt Ensembles (ICCV 2025)** | **W1** | **30m** | ☐ |
 | **C9** | **Bayesian inference + NumPyro/NUTS basics** | **W1** | **2h** | ☑ |
-| A8 | Dark Current | W2 | 30m | ☐ |
-| A6 | Reliability without Validity | W2 | 30m | ☐ |
-| C4 | ECE⊥AUROC counterexample | W2 | 1h | ☐ |
-| C5 | `boot.py` + `test_boot.py` | W2 | 1h | ☐ |
+| A8 | Dark Current | W2 | 30m | ☑ |
+| A6 | Reliability without Validity | W2 | 30m | ☑ |
+| C4 | ECE⊥AUROC counterexample | W2 | 1h | ☑ |
+| C5 | `boot.py` + `test_boot.py` | W2 | 1h | ☑ |
 | A7 | Trust or Escalate | W3 | 30m | ☐ |
 | A5 | SCOPE | W3 | 45m | ☐ |
 | C6 | `risk_coverage()` + oracle | W3 | 1.5h | ☐ |

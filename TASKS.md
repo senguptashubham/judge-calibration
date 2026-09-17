@@ -97,36 +97,36 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 ## Week 2 · Sep 7–13 · 13h — Clean run (P1+P2+P3) + RQ1
 
-- [ ] **2.1 [C]** Full run: `clean` condition, all items, **all three prompt variants** (D19 — there is no `swap` or `attribution` condition, D5/D18).
+- [x] **2.1 [C]** Full run: `clean` condition, all items, **all three prompt variants** (D19 — there is no `swap` or `attribution` condition, D5/D18).
   **DoD:** `results/calls.parquet` complete for `clean`. Row count = **N × 10 calls** (P1's 6: 2 greedy across orders + 4 sampled in AB; P2's 2 + P3's 2: greedy, both orders, no sampling). No missing keys. All CoT aggregate columns populated for every `(clean, P1)` row.
 
-- [ ] **2.2 [C]** `src/signals.py` CLI: `calls.parquet` → `results/items.parquet` per `CLAUDE.md` §3.
+- [x] **2.2 [C]** `src/signals.py` CLI: `calls.parquet` → `results/items.parquet` per `CLAUDE.md` §3.
   **⚠️ Grain is now `(item_id, condition, prompt_variant)`, not `(item_id, condition)` (D20).** `correct` populated. Schema asserted in a test, including a check that `prompt_variant ∈ {P1, P2, P3}` for `clean` rows and `prompt_variant == P1` for every `verbose` row (since `verbose` never collects P2/P3).
 
-- [ ] **2.2b [C]** `src/signals.py::conf_ens()` — the judge-level entropy decomposition (D20), computed from the three variants' greedy `p_a` on `clean` items only: **Total** = H[mean(p_a across P1,P2,P3)], **Aleatoric** = mean(H[p_a]) across the three, **Epistemic** = Total − Aleatoric. Store all three (`ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic`) plus `conf_ens = 1 - ens_entropy_total`.
+- [x] **2.2b [C]** `src/signals.py::conf_ens()` — the judge-level entropy decomposition (D20), computed from the three variants' greedy `p_a` on `clean` items only: **Total** = H[mean(p_a across P1,P2,P3)], **Aleatoric** = mean(H[p_a]) across the three, **Epistemic** = Total − Aleatoric. Store all three (`ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic`) plus `conf_ens = 1 - ens_entropy_total`.
   **DoD:** all four columns populated for every `clean` item (one value per item, not per prompt_variant — store on the `P1` row, null on P2/P3 rows, to avoid triplicating an item-level quantity). Null for every `verbose` row (test this explicitly — it's the D21 sanity check that will otherwise surface as a confusing bug in W5). Docstring states the formula and cites D20 for why `conf_ens` is `1 - Total` (mirrors `conf_bpe`'s convention) and never reported without naming which of the three components you mean.
 
-- [ ] **2.3 [L]** Block C4 — build the ECE⊥AUROC counterexample figure (`LEARNING.md` C4).
+- [x] **2.3 [L]** Block C4 — build the ECE⊥AUROC counterexample figure (`LEARNING.md` C4).
   **DoD:** `results/figures/ece_auroc_orthogonal.png` exists and you can narrate it in one sentence.
 
-- [ ] **2.4 [C]** `src/boot.py` — `cluster_bootstrap(df, stat_fn, group_col, n=2000)` and `paired_cluster_bootstrap(...)`.
+- [x] **2.4 [C]** `src/boot.py` — `cluster_bootstrap(df, stat_fn, group_col, n=2000)` and `paired_cluster_bootstrap(...)`.
   **DoD:** `tests/test_boot.py` shows clustered CIs are strictly wider than naive row CIs on the same data.
 
-- [ ] **2.5 [C]** Finish `src/metrics.py`: `mce`, `brier`, `brier_decomposition`, `overconfidence_gap`, `auroc_error`.
+- [x] **2.5 [C]** Finish `src/metrics.py`: `mce`, `brier`, `brier_decomposition`, `overconfidence_gap`, `auroc_error`.
   **DoD:** each has a unit test. `brier_decomposition` reconstructs the Brier score to 1e-6.
 
-- [ ] **2.6 [A]** **RQ1**: for each of the four original signals — reliability diagram (quantile bins), ECE, MCE, Brier + decomposition, overconfidence gap, accuracy, κ. All with cluster-bootstrap CIs.
+- [x] **2.6 [A]** **RQ1**: for each of the four original signals — reliability diagram (quantile bins), ECE, MCE, Brier + decomposition, overconfidence gap, accuracy, κ. All with cluster-bootstrap CIs.
   **⚠️ Filter to `condition == "clean" AND prompt_variant == "P1"` before this analysis reads `items.parquet`** (invariant 14) — P2/P3 rows inflate sample size, and once `verbose` runs land in W4, `prompt_variant == "P1"` alone would also mix in `(verbose, P1)` rows.
   Report headline numbers for **both** `judge_verdict` (canonical AB, the deployed case) and `verdict_bidir` (order-averaged) per D7. **The gap between them quantifies what debiasing-by-averaging buys — that's a finding, not bookkeeping.**
   **DoD:** `results/figures/reliability_{signal}.png` ×4, plus `results/rq1_table.csv` with both verdict definitions, computed on `(clean, P1)` only.
 
-- [ ] **2.6b [L]** Read A8 (Dark Current) and A6 (Reliability without Validity).
+- [x] **2.6b [L]** Read A8 (Dark Current) and A6 (Reliability without Validity).
   **DoD:** you can state why κ is mandatory and what the "true vacuum" probe tests.
 
-- [ ] **2.7 [W]** `REPORT.md` RQ1 section: the figures + one sentence stating judge overconfidence with a number and a CI.
+- [x] **2.7 [W]** `REPORT.md` RQ1 section: the figures + one sentence stating judge overconfidence with a number and a CI.
   **DoD:** written. Not deferred.
 
-- ⛔ **GATE 2** — RQ1 answered with CIs, on P1. `conf_ens` populated for every `clean` item and null for every `verbose` item — the D21 sanity check passes.
+- [x] ⛔ **GATE 2** — passed. RQ1 answered with CIs on `(clean, P1)`, N=1836: `conf_verb` overconfidence gap 0.192 [0.172, 0.213] (`judge_verdict`) / 0.157 [0.136, 0.178] (`verdict_bidir`); accuracy 0.757→0.792 debiasing gain confirmed via paired cluster-bootstrap, +0.0354 [0.0177, 0.0531] (CI excludes 0). `conf_ens` populated for every `clean` item (1904/1904 P1 rows) and null for P2/P3, per D20/D21. `verbose` doesn't exist until W4, so the "null for every `verbose` item" half of the D21 check is currently vacuous — re-confirm once that run lands.
 
 ---
 
