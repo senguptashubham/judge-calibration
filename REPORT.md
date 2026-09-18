@@ -392,3 +392,56 @@ not as a precise population estimate of the judge's true positional bias rate.
 
 Analysis script: ad hoc, not checked in (see `runs/vacuum.jsonl` + `runs/logprobs/`
 for the underlying data; `src/vacuum_test.py` generated it).
+
+### Decoding ablation — constrained vs. free-form (task 4.5, D25) — 18 Sep 2026
+
+**Purpose:** D25 found that JSON-schema-constrained decoding renormalizes the
+verdict-position logprobs, inflating `conf_lp`. That's a known, bounded distortion of
+one *signal*. The open question D25 left for task 4.5 to resolve: does constraining
+also change the judge's actual **verdict**, not just how confident `conf_lp` reports
+it was?
+
+**Method:** 100 items (seeded sample, clean/P1/AB/greedy - one call per item per arm),
+generated twice each: once with the production JSON schema enforced
+(`structured_outputs`, exactly what every other call in this project uses), once
+completely free-form (schema removed, same prompt - which already asks for the JSON
+object in its instructions - same temperature=0, same seed). Both arms scored with the
+unmodified production parser (`parse.py::parse_verdict_and_confidence()`), so "did
+free-form generation still produce parseable JSON" is answered by the actual parser
+every real result depends on, not a purpose-built lenient one. `src/ablation_decoding.py`
+(Colab) + `analysis/decoding_ablation.py` (local).
+
+**Result:**
+
+| | n | parse rate |
+|---|---|---|
+| constrained | 100 | 100% |
+| free-form | 100 | 100% |
+
+**Verdict agreement (among the 100/100 items where both parsed): 96.0% (4 disagreements).**
+All four are far from marginal - both arms report **high stated confidence (0.90–0.95)
+on both sides of every flip**, not a low-confidence coin toss that happened to land
+differently. Since both arms use greedy decoding (temperature=0) with the same seed,
+any disagreement is a genuine causal effect of the schema mask on the decoding path at
+some branch point, not sampling noise.
+
+**Conclusion:** two findings, in opposite directions:
+
+1. **Parse rate is a non-issue here.** Free-form generation held to the JSON output
+   contract just as reliably as schema-enforced generation, on this population (clean,
+   single greedy call). This doesn't generalize to every condition without re-checking
+   - `verbose`'s longer inputs, or the sampled (`temperature=0.7`) calls, could behave
+   differently - but for the primary greedy case, constraining buys no parse-rate
+   safety margin that wasn't already there.
+2. **Constraining does move the verdict, in a small but real fraction of cases (4%).**
+   D25's original concern (does the schema mask distort more than `conf_lp`'s reported
+   scale) is confirmed, not dismissed - four items out of 100 get a different, equally
+   confidently-held answer depending on whether the output format is enforced. At
+   N=100 this is a descriptive rate, not a precisely bounded population estimate (no
+   bootstrap CI is reported - see this section's own module docstring for why), but it
+   is real evidence, not a null result: **every calibration/AUROC number in this report
+   is conditional on the constrained-decoding arm specifically**, and roughly 1 in 25
+   items would have gotten a different, comparably confident verdict under free-form
+   generation instead. Per D25's own decision, this is evidence-based grounds to revisit
+   the `vllm` pin (for `logprobs_mode="raw_logprobs"`) in a future run, not something to
+   act on inside this project's remaining timeline.
