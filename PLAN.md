@@ -203,7 +203,7 @@ Course: **Building Generative AI Applications with Gradio** (59m). Demo: cached 
 **GATE 6** — demo runs offline on the Nitro 5. Report complete, RQ1–RQ5 all covered.
 
 ### W7 · Oct 12–15 · 4h — Reproducibility + buffer
-Fresh clone, run from config, confirm numbers match. Leave the rest empty. Re-runs after discovering a parser bug is where every estimate of this kind has failed.
+Fresh clone, run from config, confirm numbers match. Leave the rest empty. Re-runs after discovering a parser bug is where every estimate of this kind has failed. If genuine slack remains: the full-scale constrained-vs-free-form comparison noted at §4 item 3 is the one deferred stretch goal on record — not before then.
 
 ---
 
@@ -211,7 +211,7 @@ Fresh clone, run from config, confirm numbers match. Leave the rest empty. Re-ru
 
 1. Second judge model — cut
 2. Multilingual condition — cut
-3. Constrained-vs-free-form ablation
+3. Constrained-vs-free-form ablation — **done at its scoped size** (task 4.5, 18 Sep 2026: 100 items, 96% verdict agreement, 4% real flip rate at high confidence on both sides). A **full-scale version** (re-running `clean/P1` free-form across all 1904 items and comparing every RQ1-RQ4 headline number) was proposed and deliberately deferred, not forgotten: compute is affordable (~2-6 GPU-hours), but it's a sixth, unscoped research question outside the five preregistered RQs, needs its own parse-failure handling at scale, and would compete directly with W5's protected, professor-mandated RQ4/RQ5 work under the mid-Oct deadline. D25's own bar for revisiting was "if the evidence turns out large" — 4% is real but small, doesn't clearly clear that bar. Candidate for W7's buffer (below) *only* if W5/W6 finish with real slack.
 4. Tier C features (RQ4 runs on A/B only)
 5. Cross-category transfer test
 6. `verbose` condition
