@@ -275,6 +275,110 @@ def flipped(rows: list[dict]) -> bool | None:
     return ab != ba
 
 
+# --- Tier B / Tier C (task 5.2) ---------------------------------------
+#
+# Skeleton only - bodies TODO. Each function's docstring states the exact
+# formula/source columns/scope already agreed (18 Sep 2026 discussion);
+# fill in the body, then wire the call into build_items_dataframe()'s
+# per-record dict below (marked with matching TODO comments) in place of
+# the current None/leftover placeholders.
+
+_COT_FIELDS = (
+    "cot_logprob_mean",
+    "cot_logprob_min",
+    "cot_logprob_std",
+    "cot_logprob_p10",
+    "cot_entropy_mean",
+    "n_cot_tokens",
+)
+
+
+def judge_output_len(rows: list[dict]) -> int | None:
+    """Tier B: character length of just the judge's own "reasoning" text -
+    calls.parquet's `reasoning_len` column (parse.py::reasoning_length(),
+    exact for well-formed JSON, per-call). Canonical AB-greedy call only -
+    same D6 scope conf_lp/conf_verb already use (sample_idx=0, order="AB"
+    is "the" single deployed pass this signal describes).
+
+    Returns:
+      The AB-greedy call's `reasoning_len`, or None if that call or its
+      value is missing.
+    """
+    raise NotImplementedError("task 5.2: _find_call(rows, 'AB', 0)['reasoning_len']")
+
+
+def verdict_margin(rows: list[dict]) -> float | None:
+    """Tier C: exact top-2 margin at the verdict token position. The
+    verdict is schema-constrained to exactly 2 candidate tokens ("A"/"B"),
+    so the top-2 margin is exactly abs(P(A) - P(B)) = abs(2*p_a - 1) -
+    p_a from the canonical AB-greedy call only (D6: p_a is only valid at
+    sample_idx=0, same scope conf_bpe/conf_lp already use).
+
+    Returns:
+      abs(2*p_a - 1) for the AB-greedy call, or None if that call or its
+      p_a is missing.
+    """
+    raise NotImplementedError("task 5.2: abs(2 * _find_call(rows, 'AB', 0)['p_a'] - 1)")
+
+
+def cot_aggregates_greedy(rows: list[dict]) -> dict:
+    """Tier C: the AB-greedy call's own CoT aggregate columns (already
+    computed by parse.py from saved per-token logprobs), passed through
+    unchanged with a "_greedy" suffix on every key - exactly one greedy
+    call per item, so no aggregation is needed here, only renaming.
+
+    Returns:
+      dict with cot_logprob_mean_greedy, cot_logprob_min_greedy,
+      cot_logprob_std_greedy, cot_logprob_p10_greedy,
+      cot_entropy_mean_greedy, n_cot_tokens_greedy - all None if the
+      AB-greedy call is missing.
+    """
+    raise NotImplementedError(
+        "task 5.2: {f'{field}_greedy': _find_call(rows, 'AB', 0)[field] for field in _COT_FIELDS}, "
+        "with a None-call guard"
+    )
+
+
+def cot_aggregates_sampled(rows: list[dict], k_sc: int) -> dict:
+    """Tier C: mean-of-means across the k_sc sampled calls (sample_idx=
+    1..k_sc, AB order only - the only place sampling happens, D19/D21) of
+    each of the same six CoT aggregate columns - "_sampled_t07" suffix,
+    matching D4's naming convention (temperature goes in the column name
+    so this is never silently averaged together with the _greedy variant,
+    which ran at a different temperature).
+
+    Returns:
+      dict with the same six field names, suffixed "_sampled_t07" - all
+      None if no sampled calls exist for this (condition, prompt_variant)
+      pair (verbose/P2/P3 never sample, D19/D21 - the D21 sanity check
+      this file's own module docstring already establishes for conf_sc/
+      conf_ens applies here too, don't special-case it away).
+    """
+    raise NotImplementedError(
+        "task 5.2: mean each _COT_FIELDS entry across [_find_call(rows, 'AB', i) for i in range(1, k_sc + 1)]"
+    )
+
+
+def len_ratio(len_a: int | None, len_b: int | None) -> float | None:
+    """Tier B: len_a / len_b. None whenever len_b == 0 (real data has
+    genuine empty responses - confirmed empirically, task 5.2 discussion
+    18 Sep 2026) or either length is missing - propagate, don't fabricate
+    inf or a smoothed value.
+    """
+    raise NotImplementedError("task 5.2: len_a / len_b, None if len_b in (0, None) or len_a is None")
+
+
+def longer_is_chosen(judge_verdict_value: str | None, len_a: int | None, len_b: int | None) -> bool | None:
+    """Tier B: does the judge's verdict pick whichever side has the
+    strictly longer response? None on a tie (len_a == len_b) - there is
+    no "longer" side to have been chosen, so False would misreport a real
+    non-answer as a negative finding (task 5.2 discussion, 18 Sep 2026).
+    """
+    raise NotImplementedError(
+        "task 5.2: judge_verdict_value == ('A' if len_a > len_b else 'B'), None if tied or either input missing"
+    )
+
+
 def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc: int) -> pd.DataFrame:
     """calls.parquet -> items.parquet (task 2.2). One row per
     (item_id, condition, prompt_variant) - CLAUDE.md invariant 14's grain.
@@ -349,12 +453,16 @@ def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc:
             first_row = rows[0]
             signals = compute_item_signals(rows, k_sc)
 
+            len_a = label_row.get("len_a")
+            len_b = label_row.get("len_b")
+
             record = {
                 "item_id": item_id,
                 "question_id": first_row["question_id"],
                 "category": first_row["category"],
                 "condition": condition,
                 "prompt_variant": prompt_variant,
+                "turn": first_row["turn"],
                 "human_label": human_label,
                 "n_human_votes": label_row.get("n_human_votes"),
                 "frac_prefer_a": label_row.get("frac_prefer_a"),
@@ -372,13 +480,19 @@ def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc:
                     if signals["verdict_bidir"] is not None and human_label is not None
                     else None
                 ),
-                # Deferred, not forgotten: len_a/len_b/len_ratio need
-                # response text this table doesn't have yet (Tier B,
-                # task 5.2) - still pending, doesn't block Gate 2 / RQ1.
-                # flipped() is computed above (task 4.3's RQ3a analysis).
-                "len_a": None,
-                "len_b": None,
-                "len_ratio": None,
+                # len_a/len_b: now real (items_labels.parquet populates
+                # them, task 5.2 prerequisite, 18 Sep 2026) - everything
+                # below this line is task 5.2's own TODO (see the Tier
+                # B/Tier C stub functions above build_items_dataframe).
+                "len_a": len_a,
+                "len_b": len_b,
+                "len_ratio": len_ratio(len_a, len_b),
+                "abs_len_diff": abs(len_a - len_b) if len_a is not None and len_b is not None else None,
+                "longer_is_chosen": longer_is_chosen(signals["judge_verdict"], len_a, len_b),
+                "judge_output_len": judge_output_len(rows),
+                "verdict_margin": verdict_margin(rows),
+                **cot_aggregates_greedy(rows),
+                **cot_aggregates_sampled(rows, k_sc),
                 "flipped": flipped(rows),
                 **(ens_result if prompt_variant == "P1" and ens_result is not None else empty_ens),
             }
