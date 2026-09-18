@@ -471,42 +471,27 @@ def plot_human_disagreement(
     return fig
 
 
-def _forest_plot(
+def _draw_forest(
+    ax: plt.Axes,
     labels: list[str],
     values: np.ndarray,
     ci_low: np.ndarray,
     ci_high: np.ndarray,
     xlabel: str,
-    title: str,
-    filename: str,
-) -> Figure:
-    """Generic forest/coefficient plot: one point estimate + CI error bar
-    per label, plus a reference line at 0, labels on the y-axis in reading
-    order top-to-bottom. The standard visualization for "several point
-    estimates with CIs, compared against a null value" - simple, no new
-    dependencies, no randomness (unlike the raw-point jitter idea
-    considered for the human-disagreement scatter figure and deliberately
-    skipped there for adding complexity without adding information). Here
-    the plot adds real legibility a markdown table doesn't: which CIs
-    cross the zero reference line is immediate, not something a reader
-    has to check bracket-by-bracket.
-
-    Shared by task 3.4's signal-vs-d_human correlations
-    (plot_d_human_correlations) and task 4.3's flipped-vs-unflipped
-    confidence gap (plot_rq3a_confidence_gap) - same shape (N signals,
-    each one point estimate + CI against zero), different data and axis
-    labels, not worth two near-duplicate implementations.
+) -> None:
+    """Draws one forest/coefficient panel - point estimate + CI error bar
+    per label, plus a reference line at 0 - onto an existing `ax`. No
+    title, no savefig: this is the shared drawing primitive both
+    _forest_plot() (one panel, own figure) and plot_rq3b_deltas() (two
+    panels, one figure) build on, so the panel layout exists in exactly
+    one place.
 
     Args:
+        ax: the Axes to draw on.
         labels: category names, in display order (top to bottom).
         values: point estimate per label, same order.
         ci_low, ci_high: CI bounds per label, same order.
         xlabel: x-axis label (what the point estimates measure).
-        title: figure title.
-        filename: saved under results/figures/{filename}.
-
-    Returns:
-        The Figure (also saved to results/figures/{filename}).
     """
     labels = list(labels)
     values_arr = np.asarray(values, dtype=float)
@@ -518,8 +503,6 @@ def _forest_plot(
     # absolute CI bounds themselves.
     err_low = values_arr - ci_low_arr
     err_high = ci_high_arr - values_arr
-
-    fig, ax = plt.subplots(figsize=(6, 0.9 * len(labels) + 1.5))
 
     ax.axvline(0, linestyle="--", color="gray", linewidth=1, zorder=1)
     ax.errorbar(
@@ -554,6 +537,49 @@ def _forest_plot(
     # above its marker) gets clipped by the axes border itself.
     ax.set_ylim(len(labels) - 0.5, -0.75)
     ax.set_xlabel(xlabel)
+
+
+def _forest_plot(
+    labels: list[str],
+    values: np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+    xlabel: str,
+    title: str,
+    filename: str,
+) -> Figure:
+    """Generic forest/coefficient plot: one point estimate + CI error bar
+    per label, plus a reference line at 0, labels on the y-axis in reading
+    order top-to-bottom. The standard visualization for "several point
+    estimates with CIs, compared against a null value" - simple, no new
+    dependencies, no randomness (unlike the raw-point jitter idea
+    considered for the human-disagreement scatter figure and deliberately
+    skipped there for adding complexity without adding information). Here
+    the plot adds real legibility a markdown table doesn't: which CIs
+    cross the zero reference line is immediate, not something a reader
+    has to check bracket-by-bracket.
+
+    Shared by task 3.4's signal-vs-d_human correlations
+    (plot_d_human_correlations) and task 4.3's flipped-vs-unflipped
+    confidence gap (plot_rq3a_confidence_gap) - same shape (N signals,
+    each one point estimate + CI against zero), different data and axis
+    labels, not worth two near-duplicate implementations. The actual panel
+    drawing lives in _draw_forest(), shared again with task 4.4's two-panel
+    plot_rq3b_deltas().
+
+    Args:
+        labels: category names, in display order (top to bottom).
+        values: point estimate per label, same order.
+        ci_low, ci_high: CI bounds per label, same order.
+        xlabel: x-axis label (what the point estimates measure).
+        title: figure title.
+        filename: saved under results/figures/{filename}.
+
+    Returns:
+        The Figure (also saved to results/figures/{filename}).
+    """
+    fig, ax = plt.subplots(figsize=(6, 0.9 * len(labels) + 1.5))
+    _draw_forest(ax, labels, values, ci_low, ci_high, xlabel)
     ax.set_title(title)
     fig.tight_layout()
 
@@ -633,6 +659,61 @@ def plot_rq3a_confidence_gap(
         title="Confidence gap on flipped vs. unflipped items (task 4.3, RQ3a)",
         filename=f"rq3a_confidence_gap_{model_slug}.png",
     )
+
+
+def plot_rq3b_deltas(
+    signals: list[str],
+    delta_ece: np.ndarray,
+    ece_ci_low: np.ndarray,
+    ece_ci_high: np.ndarray,
+    delta_auroc: np.ndarray,
+    auroc_ci_low: np.ndarray,
+    auroc_ci_high: np.ndarray,
+    model_slug: str,
+) -> Figure:
+    """Task 4.4's figure: two forest panels side by side - ΔECE and
+    ΔAUROC, both verbose-minus-clean, for the three signals RQ3b scores
+    (`conf_sc` dropped, D21). Two panels rather than two separate files:
+    the headline finding is a joint one (AUROC drops for all three,
+    ECE only breaks for conf_bpe specifically), which only reads as one
+    finding when both panels share a figure and a signal ordering, not as
+    two tables a reader has to cross-reference by eye.
+
+    A positive ΔECE means the judge is MORE miscalibrated under verbose;
+    a negative ΔAUROC means its uncertainty signal is LESS informative
+    about its own errors under verbose. Both panels share _draw_forest()
+    with plot_rq3a_confidence_gap()/plot_d_human_correlations() - same
+    point+CI-vs-zero shape, just two of them on one figure instead of one.
+
+    Args:
+        signals: signal names, in display order (top to bottom), shared
+            by both panels.
+        delta_ece, ece_ci_low, ece_ci_high: ECE panel's point estimate and
+            CI bounds per signal, same order as `signals`.
+        delta_auroc, auroc_ci_low, auroc_ci_high: AUROC panel's point
+            estimate and CI bounds per signal, same order.
+        model_slug: Config.model_slug - namespaces the saved filename so a
+            second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq3b_deltas_{model_slug}.png).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(11, 0.9 * len(signals) + 1.5))
+
+    _draw_forest(axes[0], signals, delta_ece, ece_ci_low, ece_ci_high, xlabel="Δ ECE (verbose - clean)")
+    axes[0].set_title("Calibration")
+
+    _draw_forest(axes[1], signals, delta_auroc, auroc_ci_low, auroc_ci_high, xlabel="Δ AUROC (verbose - clean)")
+    axes[1].set_title("Error-detection")
+    axes[1].set_ylabel("")  # left panel's labels already identify the rows
+
+    fig.suptitle("Verbosity's effect on calibration and error-detection (task 4.4, RQ3b)")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq3b_deltas_{model_slug}.png", dpi=150)
+    return fig
 
 
 if __name__ == "__main__":

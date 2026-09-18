@@ -72,8 +72,11 @@ positive ECE delta means the judge is MORE miscalibrated under verbose; a
 negative accuracy or AUROC delta means verbosity makes the judge worse or
 its uncertainty signal less informative, respectively.
 
-Writes results/rq3_table_{model_slug}.csv (one row per surviving signal).
-Prints the RQ3b money sentence (conf_verb's paired ECE delta).
+Writes results/rq3_table_{model_slug}.csv (one row per surviving signal)
+and results/figures/rq3b_deltas_{model_slug}.png (src/plots.py's
+plot_rq3b_deltas, two forest panels - Delta ECE and Delta AUROC - sharing
+one signal ordering). Prints the RQ3b money sentence (conf_verb's paired
+ECE delta).
 """
 
 import argparse
@@ -84,7 +87,7 @@ from analysis.rq1 import SIGNALS, load_rq1_items
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.metrics import auroc_error, ece
-from src.plots import plot_rq3a_confidence_gap
+from src.plots import plot_rq3a_confidence_gap, plot_rq3b_deltas
 
 RQ3B_SIGNALS = ["conf_verb", "conf_lp", "conf_bpe"]  # conf_sc dropped, D21
 
@@ -232,6 +235,17 @@ def run_rq3b(config: Config) -> pd.DataFrame:
     table_path = f"results/rq3_table_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
+
+    plot_rq3b_deltas(
+        signals=table["signal"].tolist(),
+        delta_ece=table["delta_ece_verbose_minus_clean"].to_numpy(),
+        ece_ci_low=table["delta_ece_ci_low"].to_numpy(),
+        ece_ci_high=table["delta_ece_ci_high"].to_numpy(),
+        delta_auroc=table["delta_auroc_verbose_minus_clean"].to_numpy(),
+        auroc_ci_low=table["delta_auroc_ci_low"].to_numpy(),
+        auroc_ci_high=table["delta_auroc_ci_high"].to_numpy(),
+        model_slug=config.model_slug,
+    )
 
     headline = table[table["signal"] == "conf_verb"].iloc[0]
     print(

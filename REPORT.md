@@ -192,8 +192,10 @@ across every RQ1–RQ4 core analysis, rather than a second, 68-item-different
 population for no analytical reason. RQ3b data: the same 1836 items, paired —
 `(clean, P1)` vs. `(verbose, P1)`, both filtered identically; task 4.2 confirmed the
 two conditions share an exactly identical 1904-item population, so filtering each
-side the same way keeps them paired 1:1. Analysis: `analysis/rq3.py`. Figure:
-`results/figures/rq3a_confidence_gap_qwen2.5_7b_instruct.png`. Tables:
+side the same way keeps them paired 1:1. Analysis: `analysis/rq3.py`. Figures:
+`results/figures/rq3a_confidence_gap_qwen2.5_7b_instruct.png` (RQ3a),
+`results/figures/rq3b_deltas_qwen2.5_7b_instruct.png` (RQ3b — two forest panels, Δ ECE
+and Δ AUROC, sharing one signal ordering). Tables:
 `results/rq3a_table_qwen2.5_7b_instruct.csv` (RQ3a), `results/rq3_table_qwen2.5_7b_instruct.csv`
 (RQ3b). CI is a cluster bootstrap, B=2000, grouped on `question_id` (invariant 2);
 RQ3b's deltas use the *paired* cluster bootstrap (invariant 3) since both sides are
