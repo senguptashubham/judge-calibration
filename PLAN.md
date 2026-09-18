@@ -87,13 +87,19 @@ At N=1000 × 12 = **12,000 generations**, against 18,000 under the pre-D19 3-con
 
 **Budget the units, not the hours** (D12): measure seconds-per-generation at Gate 1, multiply by 12,000, **multiply by 3 for reruns** — reruns after a parser or prompt fix are the base case, not a contingency — then read the live burn rate from Colab's resource panel and compare against remaining monthly units *before* committing to W2. **If it's tight, cut N before cutting conditions.** N=600 with everything beats N=1000 with pieces missing. Prefer L4; reach for A100 only if measured L4 throughput fails the budget.
 
-**Gate 1 measurement, PROVISIONAL — 8 Sep 2026.** Two timed cells from task 1.6's pilot on Colab L4: 120 generations in 180s, 20 generations in 60s (both `clean` condition - no `verbose` timing exists yet, task 4.1/4.2 haven't run). Solving both as `total = startup + n × rate` separates the per-call model-reload overhead from the real per-generation cost, rather than blending them: **startup ≈ 36s, rate ≈ 1.2 sec/generation**. A naive single blend (140 gens / 4 min ≈ 1.71 sec/gen) would overstate the steady-state rate, since a fixed ~36s reload cost dominates a 20-generation sample but is negligible at the real run's scale.
+**Gate 1 measurement — 8 Sep 2026 (clean), re-extrapolated 18 Sep 2026 (verbose, task 4.1b, no longer provisional).** Two timed cells from task 1.6's pilot on Colab L4: 120 generations in 180s, 20 generations in 60s (`clean` condition). Solving both as `total = startup + n × rate` separates the per-call model-reload overhead from the real per-generation cost, rather than blending them: **startup ≈ 36s, rate ≈ 1.2 sec/generation**. A naive single blend (140 gens / 4 min ≈ 1.71 sec/gen) would overstate the steady-state rate, since a fixed ~36s reload cost dominates a 20-generation sample but is negligible at the real run's scale.
 
-Using the **real Gate 0 N = 1904** (not the N=1000 placeholder line 86's "12,000" used before Gate 0 confirmed the actual count): total generations = 1904 × 12 × 3 (rerun factor) = **68,544**. Splitting by the schedule's own clean:verbose ratio (10:2 per item) and applying the measured 1.19x verbose prompt-token multiplier (`REPORT.md`) as an approximation for verbose's marginal rate (1.2 × 1.19 ≈ 1.43 sec/gen — an approximation, since prefill cost doesn't scale 1:1 with wall-clock the way decode does):
+**Verbose rate, task 4.1b.** The first smoke test (20 items, `--n-items 20`) found `verbose_pad()` was never actually wired into `judge.py`'s generation path at all (fixed, `src/judge.py` commit `3b46ca5`) - every "verbose" generation collected before that fix was silently unpadded. After the fix, a real timed smoke test (same 20 items, 40 generations, real `verbose_pad()` applied) measured: `n_prompt_tokens` mean 2449.5 (vs. clean's 976.5, a real 2.51x multiplier, consistent with the independent tokenizer-only check's 3.00x on a different sample given per-item variance), `n_out_tokens` mean 67.3 (vs. clean's 70.4 - output length is not a confound), mean rate **0.946 sec/gen** - actually *below* clean's 1.2 sec/gen.
+
+**Decision: use 1.2 sec/gen (clean's own rate) for verbose, not the measured 0.946.** Banking on verbose being faster than clean isn't defensible from one 40-generation smoke test with a wide prompt-length range (689-9452 tokens) split across an uneven 32/8 batch split - plausibly batch-composition noise, not a real effect. Using clean's rate as a conservative floor (no penalty for the longer prompts, consistent with "prefill is cheap relative to decode," but not assuming an unconfirmed speedup either) is the safer number to plan a budget around.
+
+Using the **real Gate 0 N = 1904**: total generations = 1904 × 12 × 3 (rerun factor) = **68,544**. Splitting by the schedule's own clean:verbose ratio (10:2 per item):
 
 - Clean: 57,120 generations × 1.2 sec ≈ 19.04 hours
-- Verbose: 11,424 generations × 1.43 sec ≈ 4.53 hours
-- **Total ≈ 23.6 hours of L4 compute**
+- Verbose: 11,424 generations × 1.2 sec ≈ 3.81 hours
+- **Total ≈ 22.85 hours of L4 compute**
+
+**Compute-unit budget, checked against the real account (18 Sep 2026):** 72.79 units available, measured live burn rate 1.54 units/hour on L4. 22.85h × 1.54 ≈ **35.2 units**, leaving **≈37.6 units of headroom**. Comfortable - **N does not need to be cut** (D12).
 
 This exceeds a single Colab session (12h free-tier cap, 24h Pro cap) — the full run will span multiple sessions, which is exactly what the checkpoint/resume design (invariant 9) exists for. **Re-extrapolate once `perturb.py` lands (task 4.1b, W4)** with real verbose-condition timing instead of the prompt-token-multiplier approximation used here.
 

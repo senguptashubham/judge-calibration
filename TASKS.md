@@ -169,8 +169,9 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **DoD:** `tests/test_perturb.py` — `verbose_pad` leaves semantic content intact. (The order round-trip property lives in `test_prompts.py`, D5.)
   **Built early, 14 Sep 2026:** unblocked (needs no run data) and no longer W4-only — done alongside the Week 2 independent-task pass.
 
-- [ ] **4.1b [C]** **Re-extrapolate the GPU budget** now that real padding exists, against the provisional Gate 1 number (D10, D19's 12,000-generation baseline).
+- [x] **4.1b [C]** **Re-extrapolate the GPU budget** now that real padding exists, against the provisional Gate 1 number (D10, D19's 12,000-generation baseline).
   **DoD:** updated estimate in `PLAN.md`. If it exceeds the remaining Colab units, **cut N before cutting conditions** (D12).
+  **Done, 18 Sep 2026:** along the way, found and fixed a real bug - `verbose_pad()` was never actually wired into `judge.py`'s generation path (`src/judge.py` commit `3b46ca5`), so the first smoke test's "verbose" data was silently unpadded. After the fix, real timed smoke test (20 items, 40 generations): verbose measured 0.946 sec/gen (below clean's 1.2), but the conservative choice written into `PLAN.md` uses clean's own 1.2 sec/gen rather than banking on an unconfirmed speedup from one small, noisy sample. Total ≈ 22.85h L4 compute ≈ 35.2 compute units against 72.79 available (1.54 units/hour, confirmed live) - **N does not need to be cut**, ≈37.6 units of headroom.
 
 - [ ] **4.2 [C]** Run for `verbose`, P1 only, both orders, greedy — **2 calls per item** (D19; no sampling, no P2/P3 for `verbose`).
   **DoD:** `calls_{model_slug}.parquet` extended; `items_{model_slug}.parquet` rebuilt at its `(item_id, condition, prompt_variant)` grain (D26). `conf_sc` and `conf_ens` (+ components) are null for every `verbose` row — expected, not a bug (D21).
