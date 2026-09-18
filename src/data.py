@@ -37,6 +37,17 @@ def load_votes(dataset: str) -> pd.DataFrame:
   return df_human
 
 
+def _response_length(conversation: list[dict], turn: int) -> int:
+  """Character length of the assistant's response actually being judged
+  at `turn` - index 1 for turn=1, index 3 for turn=2. Mirrors
+  prompts.py::_render_conversation()'s own indexing exactly, so len_a/
+  len_b measure precisely the same response text the judge is shown, not
+  the full conversation history up to that point.
+  """
+  index = 1 if turn == 1 else 3
+  return len(conversation[index]["content"])
+
+
 def build_items(votes: pd.DataFrame, tie_policy: str) -> pd.DataFrame:
   """Aggregate one-row-per-vote to one-row-per-item, keyed by
   (question_id, model_a, model_b, turn).
@@ -69,7 +80,12 @@ def build_items(votes: pd.DataFrame, tie_policy: str) -> pd.DataFrame:
 
   Returns:
     One row per item, with n_human_votes, frac_prefer_a, majority_label,
-    human_unanimous, is_tie, d_human, human_agreed.
+    human_unanimous, is_tie, d_human, human_agreed, len_a, len_b (RQ4's
+    Tier B raw material, task 5.2 - character length of each side's
+    actual judged response, from `votes`'s own conversation_a/
+    conversation_b, model-independent so this belongs here rather than
+    in the per-judge-model items.parquet, D26's own "shared, unsuffixed"
+    reasoning).
   """
   if tie_policy != "mark_tie_strict":
     raise ValueError(
@@ -102,6 +118,14 @@ def build_items(votes: pd.DataFrame, tie_policy: str) -> pd.DataFrame:
       majority_label = None
       d_human = float("nan")
 
+    # Conversation content is identical across every vote in a group (the
+    # group is keyed on question_id/model_a/model_b/turn, which is exactly
+    # what determines the conversation) - same assumption judge.py's own
+    # CLI makes when it joins conversation_a/conversation_b back from
+    # votes, so taking the first row's value is safe, not an arbitrary pick.
+    len_a = _response_length(group["conversation_a"].iloc[0], int(turn))
+    len_b = _response_length(group["conversation_b"].iloc[0], int(turn))
+
     records.append({
       "item_id": item_id(int(question_id), str(model_a), str(model_b), int(turn)),
       "question_id": question_id,
@@ -115,6 +139,8 @@ def build_items(votes: pd.DataFrame, tie_policy: str) -> pd.DataFrame:
       "is_tie": is_tie,
       "d_human": d_human,
       "human_agreed": bool(human_unanimous) and (n_human_votes >= 2),
+      "len_a": len_a,
+      "len_b": len_b,
     })
 
   return pd.DataFrame.from_records(records)

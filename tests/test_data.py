@@ -9,10 +9,43 @@ import pytest
 from src.data import build_items, human_human_kappa, item_id, summarize_items
 
 
-def _votes(winners, judges=None, question_id=1, model_a="m1", model_b="m2", turn=1):
+# Defaults give every _votes() call a valid, 4-message (turn 1 AND turn 2
+# capable) conversation on both sides, deliberately different lengths
+# between A/B and between turns, so a test that doesn't care about
+# len_a/len_b at all still exercises _response_length()'s real indexing
+# rather than a degenerate same-length fixture that would hide an
+# off-by-one bug.
+_DEFAULT_CONVERSATION_A = [
+    {"role": "user", "content": "question 1"},
+    {"role": "assistant", "content": "default response A, turn 1"},
+    {"role": "user", "content": "question 2"},
+    {"role": "assistant", "content": "default response A, turn 2, a bit longer"},
+]
+_DEFAULT_CONVERSATION_B = [
+    {"role": "user", "content": "question 1"},
+    {"role": "assistant", "content": "default response B, turn 1, quite a bit longer than A"},
+    {"role": "user", "content": "question 2"},
+    {"role": "assistant", "content": "default response B, turn 2"},
+]
+
+
+def _votes(
+    winners,
+    judges=None,
+    question_id=1,
+    model_a="m1",
+    model_b="m2",
+    turn=1,
+    conversation_a=None,
+    conversation_b=None,
+):
     n = len(winners)
     if judges is None:
         judges = [f"judge_{i}" for i in range(n)]
+    if conversation_a is None:
+        conversation_a = _DEFAULT_CONVERSATION_A
+    if conversation_b is None:
+        conversation_b = _DEFAULT_CONVERSATION_B
     return pd.DataFrame(
         {
             "question_id": [question_id] * n,
@@ -21,6 +54,8 @@ def _votes(winners, judges=None, question_id=1, model_a="m1", model_b="m2", turn
             "turn": [turn] * n,
             "winner": winners,
             "judge": judges,
+            "conversation_a": [conversation_a] * n,
+            "conversation_b": [conversation_b] * n,
         }
     )
 
@@ -78,6 +113,42 @@ def test_tie_tied_with_leader_is_not_marked_tied_under_strict():
     assert not item["is_tie"]
     assert item["frac_prefer_a"] == pytest.approx(2 / 3)
     assert item["majority_label"] == "A"
+
+
+def test_len_a_len_b_measure_the_judged_response_length():
+    conversation_a = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "short"},
+    ]
+    conversation_b = [
+        {"role": "user", "content": "q"},
+        {"role": "assistant", "content": "a much longer response"},
+    ]
+    votes = _votes(["model_a"], conversation_a=conversation_a, conversation_b=conversation_b)
+    item = build_items(votes, tie_policy="mark_tie_strict").iloc[0]
+    assert item["len_a"] == len("short")
+    assert item["len_b"] == len("a much longer response")
+
+
+def test_len_a_len_b_use_the_turn_2_response_when_turn_is_2():
+    # index 1 (turn 1) is deliberately a red herring here - turn=2 must
+    # read index 3, not silently fall back to turn 1's response.
+    conversation_a = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "turn 1 response"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "turn 2 response, a different length"},
+    ]
+    conversation_b = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": "b turn 1 response"},
+        {"role": "user", "content": "q2"},
+        {"role": "assistant", "content": "b turn 2"},
+    ]
+    votes = _votes(["model_a"], turn=2, conversation_a=conversation_a, conversation_b=conversation_b)
+    item = build_items(votes, tie_policy="mark_tie_strict").iloc[0]
+    assert item["len_a"] == len("turn 2 response, a different length")
+    assert item["len_b"] == len("b turn 2")
 
 
 def test_build_items_rejects_unknown_tie_policy():
