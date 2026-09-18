@@ -100,6 +100,14 @@ parse_ok            bool
 parse_failure_type  str    none|no_verdict|no_confidence|malformed_json|truncated
 verdict             str    A|B|null
 verbalized_conf     float  [0,1] or null
+reasoning_len       int    character length of just the "reasoning" field's value
+                           (not len(raw_output) as a whole, which would include a
+                           near-constant ~40-char JSON-boilerplate offset). Exact
+                           when raw_output parses as JSON; an approximate substring-
+                           search fallback on the near-unreachable malformed/
+                           truncated rows (parse.py::reasoning_length(), added
+                           18 Sep 2026 for task 5.2's judge_output_len). null only
+                           when neither path can locate a reasoning value at all.
 verdict_token_logprob float ┐
 p_a                 float  │ ⚠ p_a VALID ONLY WHEN sample_idx == 0 — temperature scales
                            │ the reported logprobs (D6). Every column on this brace is

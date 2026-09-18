@@ -76,6 +76,63 @@ def parse_verdict_and_confidence(raw_output: str) -> dict:
     return {"parse_ok": True, "parse_failure_type": "none", "verdict": verdict, "verbalized_conf": float(confidence)}
 
 
+def reasoning_length(raw_output: str) -> int | None:
+    """Character length of just the judge's free-text `"reasoning"` field -
+    RQ4's `judge_output_len` (Tier B, task 5.2). Deliberately NOT
+    `len(raw_output)`, which would include the near-constant ~40-char JSON
+    boilerplate (`{"reasoning": "`, `", "verdict": "A", "confidence": 0.9}`)
+    surrounding every call - harmless as a feature (LogReg/HistGBM are both
+    invariant to a roughly-constant additive shift on one feature) but a
+    real mismatch if this number is ever quoted in prose (`REPORT.md`
+    saying "the judge writes N% longer reasoning" should mean the
+    reasoning, not the JSON wrapper around it).
+
+    Two paths, exact-first:
+      1. `raw_output` parses as JSON with a string `"reasoning"` value ->
+         `len()` of that already-unescaped string. Exact. Covers the
+         overwhelming majority of rows (parse_ok is ~99.99% on real data).
+      2. Parsing fails (malformed/truncated - the same rows
+         `parse_verdict_and_confidence` already marks not parse_ok) ->
+         falls back to plain substring search for the same
+         `"reasoning": "` / `"verdict": "` key literals
+         `split_cot_and_verdict_tokens` uses, taking the last literal `"`
+         between them as the value's end. An approximation (doesn't
+         account for escaped `\"`/`\n` inside the value, unlike path 1's
+         exact `json.loads`), accepted specifically because it only ever
+         runs on the near-unreachable ~0.01% of already-broken rows -
+         returning an approximate length there beats silently shrinking
+         Tier B's population by propagating None on every parse failure.
+
+    Returns:
+      int, or None only if neither path can locate a reasoning value at
+      all (e.g. truncated before "reasoning" itself was ever written).
+    """
+    try:
+        parsed = json.loads(raw_output)
+        if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), str):
+            return len(parsed["reasoning"])
+    except json.JSONDecodeError:
+        pass
+
+    reasoning_key = '"reasoning": "'
+    verdict_key = '"verdict": "'
+
+    reasoning_key_start = raw_output.find(reasoning_key)
+    if reasoning_key_start == -1:
+        return None
+    reasoning_value_start = reasoning_key_start + len(reasoning_key)
+
+    verdict_key_start = raw_output.find(verdict_key, reasoning_value_start)
+    if verdict_key_start == -1:
+        return None
+
+    reasoning_value_end = raw_output.rfind('"', reasoning_value_start, verdict_key_start)
+    if reasoning_value_end == -1:
+        return None
+
+    return reasoning_value_end - reasoning_value_start
+
+
 def split_cot_and_verdict_tokens(
     token_texts: list[str], full_text: str
 ) -> tuple[list[int], int | None]:
@@ -207,7 +264,8 @@ def build_calls_dataframe(
     checkpoint_path: Path, runs_dir: str, category_lookup: dict[int, str]
 ) -> pd.DataFrame:
     """One condition's raw checkpoint (runs/judge_{condition}.jsonl) ->
-    one row per call, with parse_verdict_and_confidence() and
+    one row per call, with parse_verdict_and_confidence(), reasoning_length()
+    (-> `reasoning_len`, task 5.2's `judge_output_len` source column), and
     compute_logprob_signals() merged in, category backfilled from
     category_lookup (the raw checkpoint's own `category` is always None -
     judge.py copies it straight from items_df, which never had it - see
@@ -224,6 +282,7 @@ def build_calls_dataframe(
             record["category"] = category_lookup.get(row["question_id"], row.get("category"))
 
             record.update(parse_verdict_and_confidence(row["raw_output"]))
+            record["reasoning_len"] = reasoning_length(row["raw_output"])
 
             lp_path = logprobs_path(
                 runs_dir, row["item_id"], row["condition"], row["prompt_variant"], row["order"], row["sample_idx"]

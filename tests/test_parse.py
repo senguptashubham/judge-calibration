@@ -23,6 +23,7 @@ from src.parse import (
     compute_logprob_signals,
     load_logprobs_record,
     parse_verdict_and_confidence,
+    reasoning_length,
     split_cot_and_verdict_tokens,
 )
 
@@ -135,6 +136,45 @@ def test_parse_verdict_and_confidence_malformed_json():
     result = parse_verdict_and_confidence(raw)
     assert result["parse_ok"] is False
     assert result["parse_failure_type"] == "malformed_json"
+
+
+# --- reasoning_length ------------------------------------------------------
+
+
+def test_reasoning_length_exact_path_well_formed_json():
+    # 11 characters: "A is better" - the reasoning value alone, not
+    # len(raw_output) as a whole.
+    raw = '{"reasoning": "A is better.", "verdict": "A", "confidence": 0.9}'
+    assert reasoning_length(raw) == len("A is better.")
+
+
+def test_reasoning_length_exact_path_unescapes_json_correctly():
+    # The exact json.loads path must return the DECODED string's length,
+    # not the raw (escaped) substring's length - \" and \n each collapse
+    # from two source characters to one logical character.
+    raw = r'{"reasoning": "A said \"hi\"\nthen B replied.", "verdict": "A", "confidence": 0.9}'
+    decoded = 'A said "hi"\nthen B replied.'
+    assert reasoning_length(raw) == len(decoded)
+
+
+def test_reasoning_length_fallback_path_on_malformed_json():
+    # Ends with "}" so parse_verdict_and_confidence would call this
+    # malformed_json, not truncated - but the reasoning value itself is
+    # still intact and findable via the substring fallback.
+    raw = '{"reasoning": "A is better.", "verdict": "A", "confidence": 0.9,}'
+    assert reasoning_length(raw) == len("A is better.")
+
+
+def test_reasoning_length_returns_none_when_truncated_before_reasoning_value_ends():
+    # No closing quote for the reasoning value and no "verdict" key at
+    # all - neither path can locate where the value ends.
+    raw = '{"reasoning": "still writing when it got cut off'
+    assert reasoning_length(raw) is None
+
+
+def test_reasoning_length_returns_none_when_no_reasoning_key_at_all():
+    raw = '{"verdict": "A", "confidence": 0.9}'
+    assert reasoning_length(raw) is None
 
 
 # --- compute_logprob_signals ---------------------------------------------
