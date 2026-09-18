@@ -471,6 +471,97 @@ def plot_human_disagreement(
     return fig
 
 
+def _forest_plot(
+    labels: list[str],
+    values: np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+    xlabel: str,
+    title: str,
+    filename: str,
+) -> Figure:
+    """Generic forest/coefficient plot: one point estimate + CI error bar
+    per label, plus a reference line at 0, labels on the y-axis in reading
+    order top-to-bottom. The standard visualization for "several point
+    estimates with CIs, compared against a null value" - simple, no new
+    dependencies, no randomness (unlike the raw-point jitter idea
+    considered for the human-disagreement scatter figure and deliberately
+    skipped there for adding complexity without adding information). Here
+    the plot adds real legibility a markdown table doesn't: which CIs
+    cross the zero reference line is immediate, not something a reader
+    has to check bracket-by-bracket.
+
+    Shared by task 3.4's signal-vs-d_human correlations
+    (plot_d_human_correlations) and task 4.3's flipped-vs-unflipped
+    confidence gap (plot_rq3a_confidence_gap) - same shape (N signals,
+    each one point estimate + CI against zero), different data and axis
+    labels, not worth two near-duplicate implementations.
+
+    Args:
+        labels: category names, in display order (top to bottom).
+        values: point estimate per label, same order.
+        ci_low, ci_high: CI bounds per label, same order.
+        xlabel: x-axis label (what the point estimates measure).
+        title: figure title.
+        filename: saved under results/figures/{filename}.
+
+    Returns:
+        The Figure (also saved to results/figures/{filename}).
+    """
+    labels = list(labels)
+    values_arr = np.asarray(values, dtype=float)
+    ci_low_arr = np.asarray(ci_low, dtype=float)
+    ci_high_arr = np.asarray(ci_high, dtype=float)
+
+    y_pos = np.arange(len(labels))
+    # errorbar wants the half-widths from the point estimate, not the
+    # absolute CI bounds themselves.
+    err_low = values_arr - ci_low_arr
+    err_high = ci_high_arr - values_arr
+
+    fig, ax = plt.subplots(figsize=(6, 0.9 * len(labels) + 1.5))
+
+    ax.axvline(0, linestyle="--", color="gray", linewidth=1, zorder=1)
+    ax.errorbar(
+        values_arr, y_pos,
+        xerr=[err_low, err_high],
+        fmt="o",
+        color="tab:blue",
+        ecolor="tab:blue",
+        capsize=4,
+        markersize=7,
+        zorder=2,
+    )
+
+    # Exact-value text labels, not just the visual point+whisker: when one
+    # label's magnitude dwarfs the others (e.g. task 4.3's conf_bpe, whose
+    # gap is ~30x conf_verb's), the small-but-real estimates collapse to a
+    # dot with an invisible error bar at this axis scale - the number
+    # stays legible even where the geometry doesn't. Placed above each
+    # point, not to the side, so the label never competes with the CI
+    # whiskers or gets clipped at the axis edge for an extreme value.
+    for x, y, lo, hi in zip(values_arr, y_pos, ci_low_arr, ci_high_arr):
+        ax.annotate(
+            f"{x:.3f} [{lo:.3f}, {hi:.3f}]",
+            xy=(x, y), xytext=(0, 10), textcoords="offset points",
+            ha="center", fontsize=8, color="dimgray",
+        )
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels)
+    # Extra headroom above the top point and below the bottom one -
+    # without it, the topmost label's value annotation (offset 10 points
+    # above its marker) gets clipped by the axes border itself.
+    ax.set_ylim(len(labels) - 0.5, -0.75)
+    ax.set_xlabel(xlabel)
+    ax.set_title(title)
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / filename, dpi=150)
+    return fig
+
+
 def plot_d_human_correlations(
     signals: list[str],
     spearman: np.ndarray,
@@ -478,17 +569,9 @@ def plot_d_human_correlations(
     ci_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 3.4's figure: a forest/coefficient plot of the four signals'
-    Spearman rho against d_human, each with its cluster-bootstrap CI as an
-    error bar, plus a reference line at rho=0.
-
-    This is the standard visualization for "several point estimates with
-    CIs, compared against a null value" - simple, no new dependencies, no
-    randomness (unlike the raw-point jitter idea considered for the other
-    figure and deliberately skipped there for adding complexity without
-    adding information). Here the plot adds real legibility a markdown
-    table doesn't: which CIs cross the rho=0 reference line is immediate,
-    not something a reader has to check bracket-by-bracket.
+    """Task 3.4's figure: a forest plot of the four signals' Spearman rho
+    against d_human. Thin wrapper over _forest_plot() - see that
+    docstring for the shared rationale/mechanics.
 
     Args:
         signals: signal names, in display order (top to bottom).
@@ -501,41 +584,55 @@ def plot_d_human_correlations(
         The Figure (also saved to
         results/figures/d_human_correlations_{model_slug}.png).
     """
-    signals = list(signals)
-    spearman_arr = np.asarray(spearman, dtype=float)
-    ci_low_arr = np.asarray(ci_low, dtype=float)
-    ci_high_arr = np.asarray(ci_high, dtype=float)
-
-    y_pos = np.arange(len(signals))
-    # errorbar wants the half-widths from the point estimate, not the
-    # absolute CI bounds themselves.
-    err_low = spearman_arr - ci_low_arr
-    err_high = ci_high_arr - spearman_arr
-
-    fig, ax = plt.subplots(figsize=(6, 0.9 * len(signals) + 1.5))
-
-    ax.axvline(0, linestyle="--", color="gray", linewidth=1, zorder=1)
-    ax.errorbar(
-        spearman_arr, y_pos,
-        xerr=[err_low, err_high],
-        fmt="o",
-        color="tab:blue",
-        ecolor="tab:blue",
-        capsize=4,
-        markersize=7,
-        zorder=2,
+    return _forest_plot(
+        labels=signals,
+        values=spearman,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        xlabel="Spearman ρ (signal vs. d_human)",
+        title="Signal-vs-d_human correlations (task 3.4)",
+        filename=f"d_human_correlations_{model_slug}.png",
     )
 
-    ax.set_yticks(y_pos)
-    ax.set_yticklabels(signals)
-    ax.invert_yaxis()  # first signal at the top, reading order
-    ax.set_xlabel("Spearman ρ (signal vs. d_human)")
-    ax.set_title("Signal-vs-d_human correlations (task 3.4)")
-    fig.tight_layout()
 
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"d_human_correlations_{model_slug}.png", dpi=150)
-    return fig
+def plot_rq3a_confidence_gap(
+    signals: list[str],
+    gap: np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+    model_slug: str,
+) -> Figure:
+    """Task 4.3's figure: a forest plot of the four signals'
+    flipped-minus-unflipped confidence gap (mean confidence on items where
+    the AB/BA order changed the verdict, minus mean confidence on items
+    where it didn't). Thin wrapper over _forest_plot() - see that
+    docstring for the shared rationale/mechanics.
+
+    A negative gap with a CI excluding 0 means the signal IS picking up on
+    its own position-bias-induced errors (lower confidence exactly when
+    the order flipped the verdict); a CI crossing 0 means it isn't.
+
+    Args:
+        signals: signal names, in display order (top to bottom).
+        gap: point estimate (mean_flipped - mean_unflipped) per signal,
+            same order.
+        ci_low, ci_high: CI bounds per signal, same order.
+        model_slug: Config.model_slug - namespaces the saved filename so a
+            second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq3a_confidence_gap_{model_slug}.png).
+    """
+    return _forest_plot(
+        labels=signals,
+        values=gap,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        xlabel="mean confidence: flipped - unflipped",
+        title="Confidence gap on flipped vs. unflipped items (task 4.3, RQ3a)",
+        filename=f"rq3a_confidence_gap_{model_slug}.png",
+    )
 
 
 if __name__ == "__main__":

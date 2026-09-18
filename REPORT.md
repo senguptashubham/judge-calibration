@@ -179,6 +179,71 @@ either way).
 
 ---
 
+## RQ3 — Does uncertainty flag bias-induced errors, or is the fooled judge confident?
+
+*Written 18 Sep 2026. RQ3a only so far — RQ3b (verbosity, task 4.4) needs the
+`verbose` run and will be added to this section once that data lands, not written
+as a separate one. Data: same population as RQ1/RQ2 — `results/items_qwen2.5_7b_instruct.parquet`
+filtered to `(clean, P1)` and `human_label` non-null, **N = 1836**. This is a
+deliberate scope choice, not a data requirement: flip rate and confidence-on-flipped
+don't need `human_label` at all (they're pure judge-behavior signals, nothing to do
+with correctness) — the maximal population would be all 1904 clean/P1 items. RQ1's
+1836-item population is reused instead so the whole report cites one canonical N
+across every RQ1–RQ4 core analysis, rather than a second, 68-item-different
+population for no analytical reason. Analysis: `analysis/rq3.py`. Figure:
+`results/figures/rq3a_confidence_gap_qwen2.5_7b_instruct.png`. Table:
+`results/rq3a_table_qwen2.5_7b_instruct.csv`. CI is a cluster bootstrap, B=2000,
+grouped on `question_id` (invariant 2).*
+
+**RQ3a — position bias.** The judge's canonical verdict flips between presentation
+orders (AB vs. BA) on **27.8% [24.8%, 30.8%]** of items — a large, common failure
+mode, not a rare edge case. The money question: is the judge's own confidence lower
+on exactly those items where it got fooled by order?
+
+**Full results** (mean confidence on flipped vs. unflipped items, and the gap
+between them):
+
+| signal | conf. when flipped | conf. when stable | gap (flipped − stable) | 95% CI |
+|---|---|---|---|---|
+| `conf_verb` | 0.935 | 0.955 | −0.0199 | [−0.0248, −0.0152] |
+| `conf_lp` | 0.999 | 1.000 | −0.0009 | [−0.0031, 0.0005] |
+| `conf_sc` | 0.844 | 0.957 | −0.1127 | [−0.1337, −0.0924] |
+| `conf_bpe` | 0.307 | 0.998 | −0.6911 | [−0.6921, −0.6899] |
+
+**Headline: `conf_verb` does track position bias, but only weakly.** Its gap is
+small (−0.02) but the CI sits entirely below zero — the judge's stated confidence
+*is* measurably lower on items its own order-flip just revealed to be shaky. Read
+alongside RQ1's overconfidence finding: the direction is right, but a ~2-point
+confidence drop is a faint signal to hang an abstention policy on for a bias this
+common (28% of items).
+
+**`conf_lp`'s gap is not distinguishable from zero** (CI crosses 0) — consistent
+with D25's finding that constrained-decoding renormalization pins `conf_lp` near
+its ceiling almost everywhere, leaving little room for it to move in either
+direction.
+
+**`conf_bpe`'s near-total collapse (0.307 vs. 0.998) is expected by construction,
+not an independent discovery.** `conf_bpe = 1 - entropy(mean p_a across both
+orders)` — it is *built from* cross-order agreement, so it is close to definitionally
+minimized exactly when the two orders disagree (a flip). This is the same caveat
+RQ1 already raised for `verdict_bidir`'s own suspiciously strong showing: a signal
+scored against (or, here, computed directly from) the same order-machinery it's
+being evaluated on will look artificially good on that specific axis. `conf_sc`'s
+gap (−0.11) is real and worth noting but sits in between — self-consistency
+sampling doesn't use cross-order information directly, so its correlation with
+flipping is a genuine empirical finding, not a mechanical one.
+
+**Caveat on the bootstrap method used for the gap.** The flipped/unflipped groups
+are two *disjoint* subsets of one item population, not the same items measured
+twice — `paired_cluster_bootstrap()` (used elsewhere for e.g. `judge_verdict` vs.
+`verdict_bidir`) doesn't apply here, since it requires both sides to share the same
+`question_id` universe, which a question with zero flipped items would violate. The
+gap and its CI instead come from a single `cluster_bootstrap()` call with a
+group-difference `stat_fn` computed inside each resampled replicate — the standard
+tool for a two-disjoint-subgroup comparison under clustering.
+
+---
+
 ## Methods notes
 
 Small, dated empirical observations that inform a design decision but don't belong to
