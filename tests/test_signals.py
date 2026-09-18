@@ -10,7 +10,17 @@ import math
 
 import pytest
 
-from src.signals import compute_item_signals, conf_bpe, conf_lp, conf_sc, conf_verb, judge_verdict, verdict_bidir
+from src.signals import (
+    _canonical_verdict_ba,
+    compute_item_signals,
+    conf_bpe,
+    conf_lp,
+    conf_sc,
+    conf_verb,
+    flipped,
+    judge_verdict,
+    verdict_bidir,
+)
 
 
 def _call(order, sample_idx, **fields):
@@ -72,6 +82,83 @@ def test_verdict_bidir_none_when_an_order_is_missing():
 def test_verdict_bidir_none_when_p_a_is_none():
     rows = [_call("AB", 0, p_a=None), _call("BA", 0, p_a=0.5)]
     assert verdict_bidir(rows) is None
+
+
+# --- _canonical_verdict_ba (BA's own raw verdict, translated to canonical
+# model identity - the same displayed-A/model_b swap _p_model_a_wins applies
+# to p_a, but applied to the discrete verdict instead) -----------------------
+
+
+def test_canonical_verdict_ba_translates_raw_a_to_canonical_b():
+    # Under BA, displayed-A = model_b, so a raw "A" verdict means model_b won.
+    rows = [_call("BA", 0, verdict="A")]
+    assert _canonical_verdict_ba(rows) == "B"
+
+
+def test_canonical_verdict_ba_translates_raw_b_to_canonical_a():
+    rows = [_call("BA", 0, verdict="B")]
+    assert _canonical_verdict_ba(rows) == "A"
+
+
+def test_canonical_verdict_ba_none_when_ba_call_missing():
+    rows = [_call("AB", 0, verdict="A")]
+    assert _canonical_verdict_ba(rows) is None
+
+
+def test_canonical_verdict_ba_none_when_verdict_is_none():
+    rows = [_call("BA", 0, verdict=None)]
+    assert _canonical_verdict_ba(rows) is None
+
+
+# --- flipped (canonical AB verdict vs. canonical BA verdict) ----------------
+
+
+def test_flipped_true_when_orders_disagree_after_translation():
+    # AB raw "A" -> canonical A (no translation needed).
+    # BA raw "A" -> canonical B (displayed-A under BA = model_b).
+    # Canonical A != canonical B -> flipped.
+    rows = [_call("AB", 0, verdict="A"), _call("BA", 0, verdict="A")]
+    assert flipped(rows) is True
+
+
+def test_flipped_false_when_orders_agree_after_translation():
+    # AB raw "A" -> canonical A.
+    # BA raw "B" -> canonical A (displayed-B under BA = model_a).
+    # Both canonical A -> not flipped, even though the RAW verdict strings
+    # differ ("A" vs "B") - this is exactly the translation flipped() must
+    # apply, not a naive string comparison.
+    rows = [_call("AB", 0, verdict="A"), _call("BA", 0, verdict="B")]
+    assert flipped(rows) is False
+
+
+def test_flipped_none_when_ab_missing():
+    rows = [_call("BA", 0, verdict="A")]
+    assert flipped(rows) is None
+
+
+def test_flipped_none_when_ba_missing():
+    rows = [_call("AB", 0, verdict="A")]
+    assert flipped(rows) is None
+
+
+def test_flipped_is_not_the_same_quantity_as_judge_verdict_vs_verdict_bidir():
+    # Regression guard for the exact distinction flipped()'s docstring
+    # warns about: flipped compares canonical AB vs. canonical BA verdicts
+    # directly, NOT judge_verdict vs. verdict_bidir (a p_a-averaged,
+    # order-corrected label - a different quantity). verdict and p_a are
+    # set independently here (each function only reads the field it needs)
+    # specifically to demonstrate the two are not interchangeable, not to
+    # model a plausible real generation.
+    #
+    # AB: verdict="A" (canonical A), p_a=0.9 -> P(model_a wins|AB)=0.9
+    # BA: verdict="A" (canonical B, translated), p_a=0.4 -> P(model_a wins|BA)=1-0.4=0.6
+    # judge_verdict = "A" (raw AB verdict)
+    # verdict_bidir: mean(0.9, 0.6) = 0.75 >= 0.5 -> "A"
+    # judge_verdict == verdict_bidir ("A" == "A") - NOT flipped by that measure.
+    # But flipped() compares canonical AB ("A") vs. canonical BA ("B") -> True.
+    rows = [_call("AB", 0, verdict="A", p_a=0.9), _call("BA", 0, verdict="A", p_a=0.4)]
+    assert judge_verdict(rows) == verdict_bidir(rows) == "A"
+    assert flipped(rows) is True
 
 
 # --- conf_verb ---------------------------------------------------------

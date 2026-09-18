@@ -249,6 +249,32 @@ def _sanitize_records(records: list[dict]) -> list[dict]:
     ]
 
 
+def _canonical_verdict_ba(rows: list[dict]) -> str | None:
+    """The BA-order call's own verdict, translated into canonical
+    model_a/model_b identity - same translation _p_model_a_wins() applies
+    to p_a: under BA, displayed-A = model_b, so a raw "A" verdict means
+    model_b won.
+    """
+    call = _find_call(rows, "BA", 0)
+    if call is None or call["verdict"] is None:
+        return None
+    return "B" if call["verdict"] == "A" else "A"
+
+
+def flipped(rows: list[dict]) -> bool | None:
+    """CLAUDE.md schema: canonical verdict differs between order AB and
+    BA, within this (condition, prompt_variant) pair. Compares the
+    canonical AB verdict (judge_verdict) against the canonical BA verdict
+    - NOT against verdict_bidir, which is a p_a-averaged, order-corrected
+    label, a different quantity than "what did BA alone say."
+    """
+    ab = judge_verdict(rows)
+    ba = _canonical_verdict_ba(rows)
+    if ab is None or ba is None:
+        return None
+    return ab != ba
+
+
 def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc: int) -> pd.DataFrame:
     """calls.parquet -> items.parquet (task 2.2). One row per
     (item_id, condition, prompt_variant) - CLAUDE.md invariant 14's grain.
@@ -348,12 +374,12 @@ def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc:
                 ),
                 # Deferred, not forgotten: len_a/len_b/len_ratio need
                 # response text this table doesn't have yet (Tier B,
-                # task 5.2); flipped needs cross-order comparison (task
-                # 4.3's RQ3a analysis). Neither blocks Gate 2 / RQ1.
+                # task 5.2) - still pending, doesn't block Gate 2 / RQ1.
+                # flipped() is computed above (task 4.3's RQ3a analysis).
                 "len_a": None,
                 "len_b": None,
                 "len_ratio": None,
-                "flipped": None,
+                "flipped": flipped(rows),
                 **(ens_result if prompt_variant == "P1" and ens_result is not None else empty_ens),
             }
             records.append(record)
