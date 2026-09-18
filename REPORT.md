@@ -6,7 +6,9 @@ Written incrementally as results land, per `CLAUDE.md` §4 — not assembled at 
 
 ## RQ1 — Is the judge's stated confidence calibrated?
 
-*Written 17 Sep 2026. Data: `results/items.parquet`, filtered to `condition == "clean" AND prompt_variant == "P1"` (invariant 14) and `human_label` non-null — this drops 68 of the 1904 non-tie items, each a genuine 50/50 non-tie human split with no majority label (`data.py::build_items()`; not a data bug), leaving **N = 1836**. Analysis: `analysis/rq1.py`. Figures: `results/figures/reliability_{conf_verb,conf_lp,conf_sc,conf_bpe}.png`. All CIs are cluster bootstraps, B=2000, grouped on `question_id` (invariant 2).*
+*Written 17 Sep 2026, paths updated 18 Sep 2026 (output filenames now carry
+`Config.model_slug`, `src/config.py`, so a second judge model's results never
+overwrite this one's). Data: `results/items_qwen2.5_7b_instruct.parquet`, filtered to `condition == "clean" AND prompt_variant == "P1"` (invariant 14) and `human_label` non-null — this drops 68 of the 1904 non-tie items, each a genuine 50/50 non-tie human split with no majority label (`data.py::build_items()`; not a data bug), leaving **N = 1836**. Analysis: `analysis/rq1.py`. Figures: `results/figures/reliability_{conf_verb,conf_lp,conf_sc,conf_bpe}_qwen2.5_7b_instruct.png`. All CIs are cluster bootstraps, B=2000, grouped on `question_id` (invariant 2).*
 
 **Headline: the judge is measurably overconfident.** Its own verbalized confidence
 (`conf_verb`) overstates its actual accuracy by **0.192 [0.172, 0.213]** when scored
@@ -48,12 +50,13 @@ RQ1's overconfidence finding and the vacuum test's false-confidence finding are 
 
 ## RQ2 — Is any cheap uncertainty signal informative about error?
 
-*Written 17 Sep 2026. Data: same population as RQ1 — `results/items.parquet` filtered
+*Written 17 Sep 2026, paths updated 18 Sep 2026 (model-namespaced filenames -
+see RQ1's metadata line). Data: same population as RQ1 — `results/items_qwen2.5_7b_instruct.parquet` filtered
 to `(clean, P1)` and `human_label` non-null, **N = 1836** (invariant 14). Analysis:
 `analysis/rq2.py` (per-signal risk-coverage) and `analysis/rq5.py` (entropy threshold
-sweep, task 3.2b). Figures: `results/figures/risk_coverage.png` (the thesis figure),
-`results/figures/entropy_threshold_sweep.png`. Tables: `results/rq2_table.csv`,
-`results/rq5_threshold_sweep_table.csv`. All CIs are cluster bootstraps, B=2000,
+sweep, task 3.2b). Figures: `results/figures/risk_coverage_qwen2.5_7b_instruct.png` (the thesis figure),
+`results/figures/entropy_threshold_sweep_qwen2.5_7b_instruct.png`. Tables: `results/rq2_table_qwen2.5_7b_instruct.csv`,
+`results/rq5_threshold_sweep_table_qwen2.5_7b_instruct.csv`. All CIs are cluster bootstraps, B=2000,
 grouped on `question_id` (invariant 2). `accuracy@c%`/`κ@c%` use a rank-based
 "top-c% most confident items" cut (`analysis/rq2.py::_top_k_mask`), a different,
 deliberately simpler definition from the tie-safe value-threshold curve the figure
@@ -139,7 +142,7 @@ Spearman was added specifically because 3 points can't support a linear-shape cl
 both CIs excluding 0 under the weaker, monotonic-only assumption is what makes this
 finding hold up, not just the OLS number in isolation. Extended to all four original
 signals (task 3.4, Spearman only, same population,
-`results/figures/d_human_correlations.png`):
+`results/figures/d_human_correlations_qwen2.5_7b_instruct.png`):
 
 | signal | Spearman ρ | 95% CI |
 |---|---|---|
