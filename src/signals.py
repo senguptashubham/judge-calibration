@@ -304,7 +304,8 @@ def judge_output_len(rows: list[dict]) -> int | None:
       The AB-greedy call's `reasoning_len`, or None if that call or its
       value is missing.
     """
-    raise NotImplementedError("task 5.2: _find_call(rows, 'AB', 0)['reasoning_len']")
+    call = _find_call(rows, "AB", 0)
+    return call["reasoning_len"] if call is not None else None
 
 
 def verdict_margin(rows: list[dict]) -> float | None:
@@ -318,7 +319,10 @@ def verdict_margin(rows: list[dict]) -> float | None:
       abs(2*p_a - 1) for the AB-greedy call, or None if that call or its
       p_a is missing.
     """
-    raise NotImplementedError("task 5.2: abs(2 * _find_call(rows, 'AB', 0)['p_a'] - 1)")
+    call = _find_call(rows, "AB", 0)
+    if call is None or call["p_a"] is None:
+        return None
+    return abs(2 * call["p_a"] - 1)
 
 
 def cot_aggregates_greedy(rows: list[dict]) -> dict:
@@ -333,10 +337,10 @@ def cot_aggregates_greedy(rows: list[dict]) -> dict:
       cot_entropy_mean_greedy, n_cot_tokens_greedy - all None if the
       AB-greedy call is missing.
     """
-    raise NotImplementedError(
-        "task 5.2: {f'{field}_greedy': _find_call(rows, 'AB', 0)[field] for field in _COT_FIELDS}, "
-        "with a None-call guard"
-    )
+    call = _find_call(rows, "AB", 0)
+    if call is None:
+        return {f"{field}_greedy": None for field in _COT_FIELDS}
+    return {f"{field}_greedy": call[field] for field in _COT_FIELDS}
 
 
 def cot_aggregates_sampled(rows: list[dict], k_sc: int) -> dict:
@@ -354,9 +358,20 @@ def cot_aggregates_sampled(rows: list[dict], k_sc: int) -> dict:
       this file's own module docstring already establishes for conf_sc/
       conf_ens applies here too, don't special-case it away).
     """
-    raise NotImplementedError(
-        "task 5.2: mean each _COT_FIELDS entry across [_find_call(rows, 'AB', i) for i in range(1, k_sc + 1)]"
-    )
+    sampled_calls = [_find_call(rows, "AB", i) for i in range(1, k_sc + 1)]
+    sampled_calls = [call for call in sampled_calls if call is not None]
+
+    result = {}
+    for field in _COT_FIELDS:
+        # Filter None per-field, not just per-call: a sampled call can
+        # exist but still have this field as None (e.g. no identifiable
+        # reasoning/verdict token at all in a degenerate draw - same
+        # compute_logprob_signals() behavior every greedy call is also
+        # subject to). Mean over whatever values survive; None only when
+        # nothing does.
+        values = [call[field] for call in sampled_calls if call[field] is not None]
+        result[f"{field}_sampled_t07"] = sum(values) / len(values) if values else None
+    return result
 
 
 def len_ratio(len_a: int | None, len_b: int | None) -> float | None:
@@ -365,7 +380,8 @@ def len_ratio(len_a: int | None, len_b: int | None) -> float | None:
     18 Sep 2026) or either length is missing - propagate, don't fabricate
     inf or a smoothed value.
     """
-    raise NotImplementedError("task 5.2: len_a / len_b, None if len_b in (0, None) or len_a is None")
+    ratio = None if len_b in (0, None) or len_a is None else (len_a / len_b)
+    return ratio
 
 
 def longer_is_chosen(judge_verdict_value: str | None, len_a: int | None, len_b: int | None) -> bool | None:
@@ -374,9 +390,10 @@ def longer_is_chosen(judge_verdict_value: str | None, len_a: int | None, len_b: 
     no "longer" side to have been chosen, so False would misreport a real
     non-answer as a negative finding (task 5.2 discussion, 18 Sep 2026).
     """
-    raise NotImplementedError(
-        "task 5.2: judge_verdict_value == ('A' if len_a > len_b else 'B'), None if tied or either input missing"
-    )
+    if len_a is None or len_b is None or len_a == len_b:
+        return None
+    else:
+        return judge_verdict_value == ('A' if len_a > len_b else 'B')
 
 
 def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc: int) -> pd.DataFrame:
