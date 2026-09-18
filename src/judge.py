@@ -41,6 +41,22 @@ from src.prompts import prompt_hash, render_prompt
 # temperatures *are* tunable and come from config.
 
 
+# The structured-output JSON schema every real call is constrained to
+# (matches prompts.py's own JSON output contract - reasoning/verdict/
+# confidence, in that order). Module-level so src/ablation_decoding.py
+# (task 4.5) can import the exact same schema for its "constrained" arm,
+# rather than risking a second, silently-drifted copy.
+VERDICT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reasoning": {"type": "string"},
+        "verdict": {"type": "string", "enum": ["A", "B"]},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
+    "required": ["reasoning", "verdict", "confidence"],
+}
+
+
 @dataclass(frozen=True)
 class CallSpec:
     condition: str
@@ -70,6 +86,26 @@ def call_schedule(config: Config) -> list[CallSpec]:
 
 def git_sha() -> str:
     return subprocess.check_output(["git", "rev-parse", "HEAD"]).decode("utf-8").strip()
+
+
+def load_full_items_df(config: Config) -> "pd.DataFrame":
+    """Every non-tie item, with conversation content joined back in - the
+    same population this module's own CLI builds, factored out so
+    src/ablation_decoding.py (task 4.5) can reuse it exactly rather than
+    risking a second, silently-drifted copy of this join.
+    """
+    from src.data import build_items, load_votes
+
+    votes = load_votes(config.dataset)
+    items_labels = build_items(votes, tie_policy=config.tie_policy)
+    # build_items() doesn't carry conversation_a/conversation_b - join them
+    # back in from votes (one row per (question_id, model_a, model_b, turn)
+    # is enough, conversation content is identical across a group's votes).
+    conv_cols = votes[
+        ["question_id", "model_a", "model_b", "turn", "conversation_a", "conversation_b"]
+    ].drop_duplicates(subset=["question_id", "model_a", "model_b", "turn"])
+    items_df = items_labels.merge(conv_cols, on=["question_id", "model_a", "model_b", "turn"])
+    return items_df[~items_df["is_tie"]]  # D2: no ground truth for tied items
 
 
 def checkpoint_key(item: str, condition: str, prompt_variant: str, order: str, sample_idx: int) -> str:
@@ -258,16 +294,6 @@ def _run_generation(
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
 
-    verdict_schema = {
-        "type": "object",
-        "properties": {
-            "reasoning": {"type": "string"},
-            "verdict": {"type": "string", "enum": ["A", "B"]},
-            "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-        },
-        "required": ["reasoning", "verdict", "confidence"],
-    }
-
     llm = LLM(model=config.judge_model)
     completed = load_completed_keys(checkpoint_path)
     sha = git_sha()
@@ -286,7 +312,7 @@ def _run_generation(
                 logprobs=config.logprobs,
                 temperature=config.temperature_canonical if spec.sample_idx == 0 else config.temperature_sc,
                 seed=config.seed + spec.sample_idx,
-                structured_outputs=StructuredOutputsParams(json=verdict_schema),
+                structured_outputs=StructuredOutputsParams(json=VERDICT_SCHEMA),
             )
             for _, _, spec in batch
         ]
@@ -355,18 +381,7 @@ if __name__ == "__main__":
 
     cfg = Config.from_yaml(args.config)
 
-    from src.data import build_items, load_votes
-
-    votes = load_votes(cfg.dataset)
-    items_labels = build_items(votes, tie_policy=cfg.tie_policy)
-    # build_items() doesn't carry conversation_a/conversation_b - join them
-    # back in from votes (one row per (question_id, model_a, model_b, turn)
-    # is enough, conversation content is identical across a group's votes).
-    conv_cols = votes[
-        ["question_id", "model_a", "model_b", "turn", "conversation_a", "conversation_b"]
-    ].drop_duplicates(subset=["question_id", "model_a", "model_b", "turn"])
-    items_df = items_labels.merge(conv_cols, on=["question_id", "model_a", "model_b", "turn"])
-    items_df = items_df[~items_df["is_tie"]]  # D2: no ground truth for tied items
+    items_df = load_full_items_df(cfg)
 
     if args.n_items is not None:
         # Seeded, not the first N - a naive head() risks clustering on a
