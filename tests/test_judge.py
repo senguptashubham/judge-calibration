@@ -15,6 +15,8 @@ from src.config import Config
 from src.data import item_id
 from src.judge import (
     CallSpec,
+    _build_prompts,
+    _conversations_for_condition,
     append_checkpoint,
     call_schedule,
     checkpoint_key,
@@ -24,6 +26,7 @@ from src.judge import (
     pending_calls,
     write_logprobs,
 )
+from src.perturb import verbose_pad
 
 
 @pytest.fixture
@@ -67,6 +70,64 @@ def test_filter_schedule_restricts_to_requested_variants(config):
     assert all(s.prompt_variant == "P1" for s in filtered)
     # Task 1.6's pilot expects exactly 6 clean/P1 calls (2 greedy + 4 sampled).
     assert len(filtered) == 6
+
+
+# --- _conversations_for_condition / _build_prompts --------------------------
+#
+# Regression guards for task 4.1b's finding (18 Sep 2026): verbose_pad()
+# existed, was tested, and was never actually wired into judge.py's real
+# generation path - 40 "verbose" generations were quietly unpadded clean-
+# style prompts, only caught after burning real GPU time on a smoke test.
+# These tests are what should have caught it locally, for zero GPU cost.
+
+
+def test_conversations_for_condition_applies_verbose_pad_for_verbose():
+    conv_a = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello there. Nice to meet you."}]
+    conv_b = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hey. Good day to you."}]
+
+    result_a, result_b = _conversations_for_condition("verbose", conv_a, conv_b)
+
+    assert result_a == verbose_pad(conv_a)
+    assert result_b == verbose_pad(conv_b)
+    # The actual bug: prompts silently NOT differing between conditions.
+    assert result_a != conv_a
+    assert result_b != conv_b
+
+
+def test_conversations_for_condition_leaves_clean_unchanged():
+    conv_a = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hello."}]
+    conv_b = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "Hey."}]
+
+    result_a, result_b = _conversations_for_condition("clean", conv_a, conv_b)
+
+    assert result_a == conv_a
+    assert result_b == conv_b
+
+
+def test_build_prompts_differs_between_clean_and_verbose_for_the_same_item():
+    # End-to-end: same item, same order/variant, only condition differs -
+    # the rendered prompt text itself must differ. This is the exact
+    # assertion that would have failed before the fix (both conditions
+    # rendered byte-identical prompts).
+    item_row = pd.Series({
+        "conversation_a": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "Hello there. Nice to meet you. How can I help?"},
+        ],
+        "conversation_b": [
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "Hey. Good day. What do you need?"},
+        ],
+        "turn": 1,
+    })
+    clean_spec = CallSpec("clean", "P1", "AB", 0)
+    verbose_spec = CallSpec("verbose", "P1", "AB", 0)
+
+    clean_prompts = _build_prompts([("item1", item_row, clean_spec)])
+    verbose_prompts = _build_prompts([("item1", item_row, verbose_spec)])
+
+    assert clean_prompts[0] != verbose_prompts[0]
+    assert len(verbose_prompts[0]) > len(clean_prompts[0])
 
 
 def test_checkpoint_key_deterministic():

@@ -31,6 +31,7 @@ import pandas as pd
 
 from src.config import Config
 from src.data import item_id
+from src.perturb import verbose_pad
 from src.prompts import prompt_hash, render_prompt
 
 # The per-item call schedule (DECISIONS.md D19) - 12 calls/item. Encoded as
@@ -133,6 +134,52 @@ def filter_schedule(specs: list[CallSpec], prompt_variants: list[str] | None) ->
     return [s for s in specs if s.prompt_variant in prompt_variants]
 
 
+def _conversations_for_condition(
+    condition: str, model_a_conversation: list[dict], model_b_conversation: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """Applies `condition`'s perturbation to both sides' conversations,
+    in canonical model_a/model_b identity, BEFORE order gets applied and
+    the prompt gets rendered. `"verbose"` -> `verbose_pad()` (task 4.1,
+    D18); every other condition (`"clean"`) -> passed through unchanged.
+
+    Pulled out as its own pure function, not inlined into the batch-
+    building loop, specifically so this condition -> perturbation mapping
+    is unit-testable without vllm installed (D17) - same reason
+    pending_calls() is its own function. This is exactly the kind of
+    thing that otherwise only surfaces empirically, after burning real
+    GPU time on a mislabeled run: task 4.1b's smoke test (18 Sep 2026)
+    found 40 "verbose" generations that were actually unpadded, because
+    the condition was never wired to verbose_pad() at all anywhere in
+    this file. A test on this function is what would have caught that
+    locally, before any Colab session, for zero GPU cost.
+    """
+    if condition == "verbose":
+        return verbose_pad(model_a_conversation), verbose_pad(model_b_conversation)
+    return model_a_conversation, model_b_conversation
+
+
+def _build_prompts(batch: list[tuple[str, "pd.Series", CallSpec]]) -> list[str]:
+    """Renders the full prompt text for one batch of pending calls -
+    applying each call's condition perturbation (_conversations_for_condition)
+    before rendering, not after. Pulled out of _run_generation as its own
+    pure function so the ENTIRE prompt-construction step (condition
+    perturbation + order + template rendering together) is testable
+    without vllm installed, not just the perturbation mapping in isolation -
+    closes the gap between "the helper function is correct" and "the
+    helper function is actually wired into the real call site", which is
+    exactly where the missing-verbose_pad() bug lived.
+    """
+    return [
+        render_prompt(
+            spec.prompt_variant,
+            spec.order,
+            *_conversations_for_condition(spec.condition, item_row["conversation_a"], item_row["conversation_b"]),
+            item_row["turn"],
+        )
+        for _, item_row, spec in batch
+    ]
+
+
 def logprobs_path(runs_dir: str, item: str, condition: str, prompt_variant: str, order: str, sample_idx: int) -> Path:
     """Where one call's full per-token logprobs get saved (D4, amended
     4 Sep 2026: every call, not a 10% sample - directory renamed from
@@ -232,16 +279,7 @@ def _run_generation(
 
     for batch_start in range(0, len(pending), batch_size):
         batch = pending[batch_start : batch_start + batch_size]
-        prompts = [
-            render_prompt(
-                spec.prompt_variant,
-                spec.order,
-                item_row["conversation_a"],
-                item_row["conversation_b"],
-                item_row["turn"],
-            )
-            for _, item_row, spec in batch
-        ]
+        prompts = _build_prompts(batch)
         sampling_params = [
             SamplingParams(
                 max_tokens=config.max_tokens,
