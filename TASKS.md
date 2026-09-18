@@ -1,7 +1,7 @@
 # TASKS.md
 
 Atomic tasks with a definition of done. Feed one at a time to Claude Code: *"Do task 1.4 from TASKS.md."*
-Read `CLAUDE.md` §2 (invariants) and `DECISIONS.md` (D4–D24) before any task touching statistics or the harness.
+Read `CLAUDE.md` §2 (invariants) and `DECISIONS.md` (D4–D26) before any task touching statistics or the harness.
 
 Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning · **⛔** gate
 
@@ -44,7 +44,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **0.9 [A]** Compute **human–human Cohen's κ** on items with ≥2 non-tie votes (pair up votes, or Krippendorff's α if the vote counts are ragged).
   **DoD:** a number, with N, written into `PREREGISTRATION.md`. This is the ceiling on everything downstream.
 
-- [x] **0.10 [W]** Write `PREREGISTRATION.md`: the five RQs (RQ5 added 31 Aug 2026); decisions **D1** (tie policy), **D2** (label construction + the ≥150-item fallback), **D3** (whether RewardBench 2 augmentation is needed), plus every ⚑-marked decision D4–D24; the primary endpoint; which analyses are exploratory.
+- [x] **0.10 [W]** Write `PREREGISTRATION.md`: the five RQs (RQ5 added 31 Aug 2026); decisions **D1** (tie policy), **D2** (label construction + the ≥150-item fallback), **D3** (whether RewardBench 2 augmentation is needed), plus every ⚑-marked decision D4–D25 (as of `PREREGISTRATION.md`'s own settled date, 1 Sep 2026 — D26 postdates it); the primary endpoint; which analyses are exploratory.
   **DoD:** committed. Written *before* looking at any judge output.
 
 - [x] ⛔ **GATE 0** — passed. N total=2396, N non-tie=1904, N≥2 votes=761, **N unanimous=2273, N contested=123**, human–human κ=0.683 (N=536). D1–D3 decided and committed (`PREREGISTRATION.md`). N contested ≥100, so H4's bucketed secondary test stays viable — the `<100` contingency did not trigger.
@@ -98,9 +98,9 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 ## Week 2 · Sep 7–13 · 13h — Clean run (P1+P2+P3) + RQ1
 
 - [x] **2.1 [C]** Full run: `clean` condition, all items, **all three prompt variants** (D19 — there is no `swap` or `attribution` condition, D5/D18).
-  **DoD:** `results/calls.parquet` complete for `clean`. Row count = **N × 10 calls** (P1's 6: 2 greedy across orders + 4 sampled in AB; P2's 2 + P3's 2: greedy, both orders, no sampling). No missing keys. All CoT aggregate columns populated for every `(clean, P1)` row.
+  **DoD:** `results/calls_{model_slug}.parquet` complete for `clean` (`results/calls_qwen2.5_7b_instruct.parquet` for this run - D26). Row count = **N × 10 calls** (P1's 6: 2 greedy across orders + 4 sampled in AB; P2's 2 + P3's 2: greedy, both orders, no sampling). No missing keys. All CoT aggregate columns populated for every `(clean, P1)` row.
 
-- [x] **2.2 [C]** `src/signals.py` CLI: `calls.parquet` → `results/items.parquet` per `CLAUDE.md` §3.
+- [x] **2.2 [C]** `src/signals.py` CLI: `calls_{model_slug}.parquet` → `results/items_{model_slug}.parquet` per `CLAUDE.md` §3 (D26).
   **⚠️ Grain is now `(item_id, condition, prompt_variant)`, not `(item_id, condition)` (D20).** `correct` populated. Schema asserted in a test, including a check that `prompt_variant ∈ {P1, P2, P3}` for `clean` rows and `prompt_variant == P1` for every `verbose` row (since `verbose` never collects P2/P3).
 
 - [x] **2.2b [C]** `src/signals.py::conf_ens()` — the judge-level entropy decomposition (D20), computed from the three variants' greedy `p_a` on `clean` items only: **Total** = H[mean(p_a across P1,P2,P3)], **Aleatoric** = mean(H[p_a]) across the three, **Epistemic** = Total − Aleatoric. Store all three (`ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic`) plus `conf_ens = 1 - ens_entropy_total`.
@@ -118,7 +118,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **2.6 [A]** **RQ1**: for each of the four original signals — reliability diagram (quantile bins), ECE, MCE, Brier + decomposition, overconfidence gap, accuracy, κ. All with cluster-bootstrap CIs.
   **⚠️ Filter to `condition == "clean" AND prompt_variant == "P1"` before this analysis reads `items.parquet`** (invariant 14) — P2/P3 rows inflate sample size, and once `verbose` runs land in W4, `prompt_variant == "P1"` alone would also mix in `(verbose, P1)` rows.
   Report headline numbers for **both** `judge_verdict` (canonical AB, the deployed case) and `verdict_bidir` (order-averaged) per D7. **The gap between them quantifies what debiasing-by-averaging buys — that's a finding, not bookkeeping.**
-  **DoD:** `results/figures/reliability_{signal}.png` ×4, plus `results/rq1_table.csv` with both verdict definitions, computed on `(clean, P1)` only.
+  **DoD:** `results/figures/reliability_{signal}_{model_slug}.png` ×4, plus `results/rq1_table_{model_slug}.csv` with both verdict definitions, computed on `(clean, P1)` only (`{model_slug}` = `qwen2.5_7b_instruct` for this run, D26).
 
 - [x] **2.6b [L]** Read A8 (Dark Current) and A6 (Reliability without Validity).
   **DoD:** you can state why κ is mandatory and what the "true vacuum" probe tests.
@@ -139,13 +139,13 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **DoD:** unit-tested against a synthetic signal where the answer is known by construction. Works on `conf_ens`'s `ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic` independently.
 
 - [x] **3.2 [A]** **RQ2**: risk–coverage per signal + oracle on one axis, on `(clean, P1)` only (invariant 14 — `prompt_variant == "P1"` alone isn't enough once `verbose` exists). AURC, accuracy@{90,75,50}% coverage, **κ@coverage**, AUROC(uncertainty→error). Cluster-bootstrap CIs.
-  **DoD:** `results/figures/risk_coverage.png` — **this is the thesis figure.** Plus `results/rq2_table.csv`.
+  **DoD:** `results/figures/risk_coverage_{model_slug}.png` — **this is the thesis figure.** Plus `results/rq2_table_{model_slug}.csv` (`{model_slug}` = `qwen2.5_7b_instruct` for this run, D26).
 
 - [x] **3.2b [A]** **RQ5 threshold sweep** (D20, D23): run 3.1b's threshold sweep on `ens_entropy_total`, `ens_entropy_aleatoric`, `ens_entropy_epistemic` separately, on `clean` items (where `conf_ens` exists). **Test the preregistered prediction:** epistemic thresholding beats total thresholding, since epistemic is the reducible part.
-  **DoD:** `results/figures/entropy_threshold_sweep.png` (all three curves + oracle) and a one-sentence verdict on whether the preregistered prediction held.
+  **DoD:** `results/figures/entropy_threshold_sweep_{model_slug}.png` (all three curves + oracle) and a one-sentence verdict on whether the preregistered prediction held.
 
 - [x] **3.3 [A]** Human-disagreement decomposition. **Primary: continuous** — regress judge correctness on `d_human`, and judge confidence on `d_human`, with cluster-bootstrap CIs (D9). **Secondary: bucketed** (unanimous / strong majority / contested) *only if Gate 0 found ≥100 contested items.*
-  **DoD:** `results/figures/human_disagreement.png` + the finding as one sentence.
+  **DoD:** `results/figures/human_disagreement_{model_slug}.png` + the finding as one sentence.
 
 - [x] **3.4 [A]** Does judge uncertainty track *human* uncertainty at all? Correlation between each of the four original confidence signals and `d_human`.
   **DoD:** four correlations with CIs in `REPORT.md`. **This is the aleatoric/epistemic result — if judge confidence is uncorrelated with human consensus, the judge is not modelling task ambiguity at all, only its own.** (The equivalent check for `conf_ens`'s aleatoric component specifically is D23's dedicated validation, task 5.9e — kept in W5 alongside the rest of RQ5 rather than duplicated here, even though it reuses this same `d_human` machinery.)
@@ -159,7 +159,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 - [x] **3.5 [W]** `REPORT.md` RQ2 section, including the entropy threshold-sweep result (3.2b).
   **DoD:** written.
 
-- [x] ⛔ **GATE 3** — passed. RQ2 answered on `(clean, P1)`, N=1836: oracle AURC 0.0295 vs. every real signal 1.3–4.7x higher; `conf_bpe` best on AUROC (0.794) and every accuracy@coverage/κ@coverage cut, `conf_sc` best on AURC (0.038, driven by its own 5-value discreteness, not cleaner discrimination) — the two rankings disagree and both are reported, not reconciled into one "winner." Entropy threshold-sweep prediction (D23, epistemic beats total) tested and **rejected**: epistemic AURC 0.273 vs. total 0.098, paired gap +0.175 [0.141, 0.207]; mechanism confirmed (65% of items have ~zero epistemic entropy, but accuracy among the lowest-decile-epistemic items is only 46% vs. 75.7% overall — ensemble agreement isn't ensemble correctness). `results/figures/risk_coverage.png` is the thesis figure. 3.4b/3.4c (reading) intentionally left open — not gating, owner's own pace.
+- [x] ⛔ **GATE 3** — passed. RQ2 answered on `(clean, P1)`, N=1836: oracle AURC 0.0295 vs. every real signal 1.3–4.7x higher; `conf_bpe` best on AUROC (0.794) and every accuracy@coverage/κ@coverage cut, `conf_sc` best on AURC (0.038, driven by its own 5-value discreteness, not cleaner discrimination) — the two rankings disagree and both are reported, not reconciled into one "winner." Entropy threshold-sweep prediction (D23, epistemic beats total) tested and **rejected**: epistemic AURC 0.273 vs. total 0.098, paired gap +0.175 [0.141, 0.207]; mechanism confirmed (65% of items have ~zero epistemic entropy, but accuracy among the lowest-decile-epistemic items is only 46% vs. 75.7% overall — ensemble agreement isn't ensemble correctness). `results/figures/risk_coverage_qwen2.5_7b_instruct.png` is the thesis figure (filename updated 18 Sep 2026 - D26, model-namespaced paths). 3.4b/3.4c (reading) intentionally left open — not gating, owner's own pace.
 
 ---
 
@@ -173,13 +173,13 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **DoD:** updated estimate in `PLAN.md`. If it exceeds the remaining Colab units, **cut N before cutting conditions** (D12).
 
 - [ ] **4.2 [C]** Run for `verbose`, P1 only, both orders, greedy — **2 calls per item** (D19; no sampling, no P2/P3 for `verbose`).
-  **DoD:** `calls.parquet` extended; `items.parquet` rebuilt at its `(item_id, condition, prompt_variant)` grain. `conf_sc` and `conf_ens` (+ components) are null for every `verbose` row — expected, not a bug (D21).
+  **DoD:** `calls_{model_slug}.parquet` extended; `items_{model_slug}.parquet` rebuilt at its `(item_id, condition, prompt_variant)` grain (D26). `conf_sc` and `conf_ens` (+ components) are null for every `verbose` row — expected, not a bug (D21).
 
 - [ ] **4.3 [A]** **RQ3a** — position bias, computed **within `(clean, P1)`** (D5, D19; it is not a separate run, and stays P1-filtered per invariant 14): flip rate between orders; **mean confidence on flipped vs unflipped items**, paired cluster-bootstrap CI on the difference.
   **DoD:** the RQ3 money sentence, with a CI, in `REPORT.md`.
 
 - [ ] **4.4 [A]** **RQ3b** — verbosity only (`attribution` is cut, D18): paired ΔECE, Δaccuracy, ΔAUROC clean(P1)→verbose(P1). **`conf_sc`'s clean→verbose comparison is dropped — no data on the `verbose` side (D21).** `conf_verb`, `conf_lp`, `conf_bpe` are unaffected.
-  **DoD:** `results/rq3_table.csv` with paired CIs for the three signals that survive; a one-line note in `REPORT.md`'s limitations explaining why `conf_sc` isn't in this table.
+  **DoD:** `results/rq3_table_{model_slug}.csv` (D26) with paired CIs for the three signals that survive; a one-line note in `REPORT.md`'s limitations explaining why `conf_sc` isn't in this table.
 
 - [ ] **4.5 [A]** Ablation: constrained vs free-form decoding on 100 items — parse rate and verdict agreement.
   **DoD:** a limitations paragraph in `REPORT.md` saying whether constraining moved the verdicts.
@@ -209,7 +209,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **DoD:** null AUROC centres on ~0.5; your observed value reported as a percentile of the null.
 
 - [ ] **5.5 [A]** Tier ablation A → B → C, both frequentist models, restricted to items where **`human_agreed`** is true (D16 — `human_unanimous AND n_human_votes >= 2`; single-vote items are excluded, not counted as agreed). Baseline = best single signal's AUROC from RQ2.
-  **DoD:** `results/rq4_ablation.csv` + a bar chart with CIs and the baseline drawn as a line.
+  **DoD:** `results/rq4_ablation_{model_slug}.csv` (D26) + a bar chart with CIs and the baseline drawn as a line.
 
 - [ ] **5.6 [A]** **H4**, continuous form (D9): test the **interaction** between `d_human` and the (frequentist) predictor's output on judge correctness, using every item with ≥2 votes. Hypothesis: the predictor's edge grows with human consensus — error is learnable where humans agree (epistemic) and not where they don't (aleatoric).
   Bucketed agreed-vs-contested comparison **only if Gate 0 found ≥100 contested items**. If even the continuous version is thin, fall back to comparing mean predicted P(wrong) across consensus strata with a cluster-bootstrap on group means — no CV needed.
@@ -224,7 +224,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **DoD:** per-category held-out AUROC; states whether the predictor generalises or learns "coding is hard".
 
 - [ ] **5.9 [A]** Meta-model calibration (frequentist): reliability diagram + ECE of the predictor's own P(judge is wrong). Logistic-regression coefficients with CIs.
-  **DoD:** `results/figures/rq4_coefficients.png` — **the coefficients are the result, more than the AUROC is.**
+  **DoD:** `results/figures/rq4_coefficients_{model_slug}.png` (D26) — **the coefficients are the result, more than the AUROC is.**
 
 - [ ] **5.9b [C]** `src/bayesian.py` — the hierarchical logistic regression (D22): `correct ~ Bernoulli(σ(α + α_q[question] + Xβ))`, `α_q ~ Normal(0, σ_q)`, `σ_q ~ HalfNormal(1)`, `β ~ Normal(0, 1)`. Fit with NumPyro/NUTS under the **same** `StratifiedGroupKFold(5)`×10-seed protocol as 5.3. **Fallback ladder, preregistered:** NUTS → Laplace approximation (MAP via sklearn + Hessian) → bootstrap ensemble of logistic regressions — state which rung was used.
   **⚠️ Held-out random-intercept marginalization is mandatory:** a held-out question's `α_q` is drawn from the population prior (`α_q_new ~ Normal(0, σ_q)`), never its would-be fitted value — the hierarchical-model analogue of the `GroupKFold` leak D8 prevents for the frequentist model.
@@ -232,7 +232,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **DoD:** `tests/test_bayesian.py` asserts a held-out fold's predictions do not depend on that fold's fitted `α_q` (mirrors `test_predictor.py`'s no-leakage assertion). Convergence diagnostics reported for every fit; any fit with R-hat > 1.01 or divergences is flagged, not silently included. Runtime for the full 50-fit protocol measured and recorded — if too slow, the repeat count for this arm specifically is reduced and the reduction is preregistered in `PREREGISTRATION.md`, not discovered mid-week.
 
 - [ ] **5.9c [A]** Head-to-head table: frequentist `LogisticRegression` vs the Bayesian model (5.9b) — AUROC, ECE, Brier, NLL, 90% credible-interval coverage. NLL/coverage exist only for the Bayesian arm.
-  **DoD:** `results/rq4_bayesian_comparison.csv` + a reliability diagram for the Bayesian model's own P(judge is wrong), alongside the frequentist one from 5.9.
+  **DoD:** `results/rq4_bayesian_comparison_{model_slug}.csv` (D26) + a reliability diagram for the Bayesian model's own P(judge is wrong), alongside the frequentist one from 5.9.
 
 - [ ] **5.9d [A]** **RQ5 distillation comparison** (D23): compare the 3-prompt ensemble's predictive distribution (mean + spread of `p_a` across P1/P2/P3) against the single-call Bayesian model's (5.9b) own posterior predictive spread, trained on P1-only features. **Headline:** how much of the ensemble's AUROC/ECE/entropy-quality benefit survives at 1 call vs 3.
   **DoD:** a table or figure showing the ensemble-vs-single-call gap, and the headline sentence stated with a number.
@@ -256,7 +256,7 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 ## Week 6 · Oct 5–11 · 12h — Demo + writeup
 
 - [ ] **6.1 [L]** Course: Gradio (`LEARNING.md` B3).
-- [ ] **6.2 [C]** Demo, offline-first: load `items.parquet` (P1 rows), browse items, show all five signals (including `conf_ens`) and the verdict. **Build the "trick the judge" toggle first** — flip the response order or apply verbosity padding, watch the verdict change and the confidence not.
+- [ ] **6.2 [C]** Demo, offline-first: load `items_{model_slug}.parquet` (P1 rows, D26), browse items, show all five signals (including `conf_ens`) and the verdict. **Build the "trick the judge" toggle first** — flip the response order or apply verbosity padding, watch the verdict change and the confidence not.
   **DoD:** runs on the Nitro 5 with no network. The toggle demonstrates the thesis in under 10 seconds.
 - [ ] **6.3 [C]** Optional live call: 4-bit Qwen2.5-1.5B/3B via `bitsandbytes`, one item on demand.
   **DoD:** works, or is cleanly disabled by a config flag.

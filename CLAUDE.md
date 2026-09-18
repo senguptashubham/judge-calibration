@@ -2,7 +2,7 @@
 
 Read this before doing anything in this repo. It is the contract, not a summary.
 
-**Also read `DECISIONS.md`** — it carries D4–D24 from the Week-0 design review and the 31 Aug 2026 professor-feedback integration (`PROFESSORFEEDBACK.md`), which override anything here that contradicts them.
+**Also read `DECISIONS.md`** — it carries D4–D26 from the Week-0 design review and the 31 Aug 2026 professor-feedback integration (`PROFESSORFEEDBACK.md`), which override anything here that contradicts them.
 
 ---
 
@@ -65,6 +65,17 @@ Violating any of these silently corrupts a result. Never do it, never suggest it
 ---
 
 ## 3. Data schemas
+
+**A note on the paths below before reading further (D26):** every path shown here
+(`results/calls.parquet`, `results/items.parquet`, `runs/logprobs/`, ...) is the
+*logical* name — what the schema describes, not literally what's on disk. In
+practice, every file that depends on which judge model produced it carries a
+`_{model_slug}` suffix (`Config.model_slug`, e.g. `calls_qwen2.5_7b_instruct.parquet`),
+and `runs/` is namespaced by model as a subfolder (`runs/{model_slug}/`) rather than
+suffixed filenames, since `runs/logprobs/` holds one file per call. The one
+exception is `results/items_labels.parquet`, never suffixed — it's built from human
+votes alone and doesn't depend on the judge model at all. This is what makes adding
+a second judge model later a one-field config change, not a refactor.
 
 ### `results/calls.parquet` — one row per model call
 ```
@@ -186,7 +197,7 @@ README.md
 LICENSE
 PLAN.md      design rationale, RQ definitions, week plan
 TASKS.md     atomic tasks with definition-of-done
-DECISIONS.md resolutions from the design reviews, D4–D24
+DECISIONS.md resolutions from the design reviews, D4–D26
 LEARNING.md  reading / courses / skills tracker
 PREREGISTRATION.md   frozen before the Week 2 full run
 REPORT.md    written incrementally, not at the end

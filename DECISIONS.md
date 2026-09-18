@@ -379,3 +379,20 @@ Fit with NumPyro/NUTS. **Fallback ladder, preregistered, not improvised mid-week
 2. For the vacuum test (task 1.8) and generally: `conf_verb` (the model's own stated confidence, not mechanically derived from token renormalization) is the primary "is the judge falsely confident" signal. `conf_lp`/`p_a`-derived signals stay in use but are understood as reporting an upper bound on true confidence, not an exact measurement, wherever `conf_lp` specifically is involved.
 3. **Task 4.5's constrained-vs-free-form ablation is the real resolution path** — it will produce actual evidence on how large this gap is. If it turns out to be large, that's a well-justified, evidence-based reason to revisit a version bump for a deliberate re-run (or a future vLLM release may ship `logprobs_mode` by then). Revisiting speculatively, without that evidence, is not.
 
+---
+
+## D26 ⚑ — Every model-dependent output filename carries `Config.model_slug` *(owner asked whether a second judge model could be added later without touching existing results, 18 Sep 2026)*
+
+**The question.** A second (or third) judge model is cut from this pass (drop-order item 1, `PLAN.md` §4; `configs/models.yaml`'s own note) but not ruled out for later, *if time permits*. The owner wanted the option kept open without a structural refactor deep into the project, and without hand-maintained per-model config duplication ("config stitching").
+
+**Decision:**
+1. `Config.model_slug` (`src/config.py`) derives a filesystem-safe tag from `judge_model` — org prefix stripped, lowercased, hyphens to underscores (`"Qwen/Qwen2.5-7B-Instruct"` → `"qwen2.5_7b_instruct"`). One field (`judge_model`) is the single source of truth; nothing else needs to be hand-specified per model.
+2. **`runs/` gets a subfolder per model** (`runs/{model_slug}/`), not suffixed filenames — `runs/logprobs/` holds one gzipped file per call (~19k in the first run alone), and suffixing thousands of individual filenames per model would be unworkable. `config.paths.runs_dir` is simply set to `runs/{model_slug}` per model config; `judge.py`/`parse.py` needed no code changes since `runs_dir` was already threaded through as a parameter, never hardcoded.
+3. **`results/` stays ONE shared directory**; individual filenames carry the `_{model_slug}` suffix instead (`calls_{model_slug}.parquet`, `rq1_table_{model_slug}.csv`, every figure). Deliberately not subfoldered like `runs/` — `results/` holds a handful of aggregate files, small enough that a future cross-model comparison can `glob("results/rq1_table_*.csv")` and concatenate, rather than needing a hardcoded list of per-model directories.
+4. **`items_labels.parquet` is the one deliberate exception — never suffixed.** It's built from human votes alone (`src/data.py`) and doesn't depend on `judge_model` at all; suffixing it would just create a driftable duplicate per model for no reason.
+5. Filename length was checked empirically, not assumed safe: worst case today (`results/figures/reliability_conf_verb_qwen2.5_7b_instruct.png`) is ~63 characters, full path ~125 — nowhere near Windows' 260-character `MAX_PATH`, and this holds for any realistically long future model name too.
+
+**What this did NOT require:** no changes to `judge.py`, `signals.py`, `data.py`, or `vacuum_test.py` — all of them already read every path from `config.paths.*`, nothing was hardcoded. The only code touched was `src/plots.py` (figure filenames) and the four `analysis/*.py` scripts' own table-writing calls.
+
+**Applied retroactively to the existing single-model (Qwen) results**, not just banked as a design for later: the real `runs/judge_clean.jsonl`, `runs/vacuum.jsonl`, and all 19,100 `runs/logprobs/*.jsonl.gz` files were moved (not regenerated — no GPU involved) into `runs/qwen2.5_7b_instruct/`, and every derived file (`calls.parquet`, `items.parquet`, every RQ1/RQ2/RQ5/human-disagreement table and figure) was regenerated from there and diffed number-for-number against what was already committed in `REPORT.md` before anything old was deleted. Nothing shifted.
+
