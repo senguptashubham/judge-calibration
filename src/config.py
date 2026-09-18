@@ -71,6 +71,21 @@ class Config:
                 "variant RQ1-RQ4 use alone (DECISIONS.md D19, D20)."
             )
 
+    @property
+    def model_slug(self) -> str:
+        """Filesystem-safe tag for `judge_model`, used to namespace every
+        model-DEPENDENT output filename (calls.parquet, items.parquet,
+        every rq*_table.csv, every figure) so a second judge model never
+        overwrites the first - "Qwen/Qwen2.5-7B-Instruct" -> "qwen2.5_7b_instruct"
+        (org prefix stripped, lowercased, hyphens -> underscores).
+
+        `items_labels.parquet` is the one deliberate exception - it's built
+        from human votes alone, doesn't depend on judge_model at all, and
+        is never suffixed by this or anything else.
+        """
+        name = self.judge_model.split("/")[-1]
+        return name.lower().replace("-", "_")
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "Config":
         with open(path, "r", encoding="utf-8") as f:

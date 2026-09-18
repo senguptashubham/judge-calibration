@@ -21,9 +21,12 @@ answering a comparable question ("how calibrated is the ensemble's own
 confidence on what THIS filter keeps"), rather than three different,
 unrelated calibration stories.
 
-Writes results/rq5_threshold_sweep_table.csv (long format, one row per
-(entropy_signal, threshold)) and results/figures/entropy_threshold_sweep.png
-(src/plots.py's plot_risk_coverage, reused as-is - task 3.2b's DoD figure).
+Writes results/rq5_threshold_sweep_table_{model_slug}.csv (long format, one
+row per (entropy_signal, threshold)) and
+results/figures/entropy_threshold_sweep_{model_slug}.png (src/plots.py's
+plot_risk_coverage, reused as-is - task 3.2b's DoD figure). model_slug =
+Config.model_slug, so a second judge model never overwrites the first's
+output.
 
 Prints the preregistered-prediction verdict (D23): epistemic thresholding
 should beat total thresholding on AURC, since epistemic is the reducible
@@ -127,13 +130,14 @@ def main(config_path: str) -> None:
 
     plot_risk_coverage(
         curves, oracle_curve,
-        filename="entropy_threshold_sweep.png",
+        filename=f"entropy_threshold_sweep_{config.model_slug}.png",
         title="Entropy threshold sweep: RQ5",
     )
 
     full_table = pd.concat(tables, ignore_index=True)
-    full_table.to_csv("results/rq5_threshold_sweep_table.csv", index=False)
-    print(f"Wrote {len(full_table)} rows to results/rq5_threshold_sweep_table.csv")
+    table_path = f"results/rq5_threshold_sweep_table_{config.model_slug}.csv"
+    full_table.to_csv(table_path, index=False)
+    print(f"Wrote {len(full_table)} rows to {table_path}")
 
     for signal, value in aurc_by_signal.items():
         print(f"AURC({signal}) = {value:.4f}")

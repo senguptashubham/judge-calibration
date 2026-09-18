@@ -69,3 +69,13 @@ def test_attribution_condition_is_rejected():
 def test_prompt_variants_must_include_p1():
     with pytest.raises(ValueError):
         _config(prompt_variants=["P2", "P3"])
+
+
+def test_model_slug_strips_org_prefix_lowercases_and_underscores():
+    config = _config(judge_model="Qwen/Qwen2.5-7B-Instruct")
+    assert config.model_slug == "qwen2.5_7b_instruct"
+
+
+def test_model_slug_handles_no_org_prefix():
+    config = _config(judge_model="Llama-3.1-8B-Instruct")
+    assert config.model_slug == "llama_3.1_8b_instruct"

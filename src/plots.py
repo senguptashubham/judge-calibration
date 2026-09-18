@@ -145,6 +145,7 @@ def plot_reliability_diagram(
     correct: np.ndarray,
     signal_name: str,
     n_bins: int,
+    model_slug: str,
     strategy: str = "auto",
     correct_bidir: np.ndarray | None = None,
 ) -> Figure:
@@ -173,15 +174,17 @@ def plot_reliability_diagram(
         correct: whether the judge was actually right, per item (aligned
             with `confidences` - typically the `judge_verdict` definition).
         signal_name: e.g. "conf_verb" - used in the title and the saved
-            filename (results/figures/reliability_{signal_name}.png).
+            filename (results/figures/reliability_{signal_name}_{model_slug}.png).
         n_bins: requested number of bins - see get_bin_edges.
+        model_slug: Config.model_slug - namespaces the saved filename so a
+            second judge model never overwrites the first's figure.
         strategy: one of "uniform", "quantile", "auto" (default).
         correct_bidir: optional second correctness array (the
             `verdict_bidir` definition) to overlay as a second curve.
 
     Returns:
         The Figure (also saved to
-        results/figures/reliability_{signal_name}.png).
+        results/figures/reliability_{signal_name}_{model_slug}.png).
     """
     confidences_arr = np.asarray(confidences, dtype=float)
     correct_arr = np.asarray(correct, dtype=float)
@@ -243,7 +246,7 @@ def plot_reliability_diagram(
     fig.tight_layout()
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"reliability_{signal_name}.png", dpi=150)
+    fig.savefig(FIGURES_DIR / f"reliability_{signal_name}_{model_slug}.png", dpi=150)
     return fig
 
 
@@ -366,6 +369,7 @@ def plot_human_disagreement(
     correct: np.ndarray,
     confidence: np.ndarray,
     n_bins: int,
+    model_slug: str,
 ) -> Figure:
     """RQ2/task 3.3's figure (D9): does judge accuracy, and separately the
     judge's stated confidence, track human consensus strength (d_human)?
@@ -394,9 +398,12 @@ def plot_human_disagreement(
             see analysis/human_disagreement.py's module docstring for why).
         n_bins: requested number of bins for the binned view (see
             get_bin_edges - may bin exactly, not just approximately).
+        model_slug: Config.model_slug - namespaces the saved filename so a
+            second judge model never overwrites the first's figure.
 
     Returns:
-        The Figure (also saved to results/figures/human_disagreement.png).
+        The Figure (also saved to
+        results/figures/human_disagreement_{model_slug}.png).
     """
     # Rounded to 6dp before binning: d_human = |frac_prefer_a - 0.5| computed
     # from small vote-count fractions (e.g. 1/3 vs 2/3) can land on adjacent
@@ -460,7 +467,7 @@ def plot_human_disagreement(
     fig.tight_layout()
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / "human_disagreement.png", dpi=150)
+    fig.savefig(FIGURES_DIR / f"human_disagreement_{model_slug}.png", dpi=150)
     return fig
 
 
@@ -469,6 +476,7 @@ def plot_d_human_correlations(
     spearman: np.ndarray,
     ci_low: np.ndarray,
     ci_high: np.ndarray,
+    model_slug: str,
 ) -> Figure:
     """Task 3.4's figure: a forest/coefficient plot of the four signals'
     Spearman rho against d_human, each with its cluster-bootstrap CI as an
@@ -486,9 +494,12 @@ def plot_d_human_correlations(
         signals: signal names, in display order (top to bottom).
         spearman: point estimate per signal, same order.
         ci_low, ci_high: CI bounds per signal, same order.
+        model_slug: Config.model_slug - namespaces the saved filename so a
+            second judge model never overwrites the first's figure.
 
     Returns:
-        The Figure (also saved to results/figures/d_human_correlations.png).
+        The Figure (also saved to
+        results/figures/d_human_correlations_{model_slug}.png).
     """
     signals = list(signals)
     spearman_arr = np.asarray(spearman, dtype=float)
@@ -523,7 +534,7 @@ def plot_d_human_correlations(
     fig.tight_layout()
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / "d_human_correlations.png", dpi=150)
+    fig.savefig(FIGURES_DIR / f"d_human_correlations_{model_slug}.png", dpi=150)
     return fig
 
 

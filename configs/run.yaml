@@ -32,9 +32,17 @@ n_bins: 10                   # default bin count for ece()'s auto strategy (D14)
 
 paths:
   results_dir: results
-  runs_dir: runs
-  figures_dir: results/figures
-  calls_parquet: results/calls.parquet
-  items_parquet: results/items.parquet
+  runs_dir: runs/qwen2.5_7b_instruct        # model-namespaced: raw per-call data
+                                             # (checkpoints, logprobs/) never mixes
+                                             # across judge models. Config.model_slug
+                                             # is the derived form of this same tag.
+  figures_dir: results/figures              # shared across models - individual
+                                             # figure filenames carry the model_slug
+                                             # suffix instead (see src/plots.py).
+  calls_parquet: results/calls_qwen2.5_7b_instruct.parquet
+  items_parquet: results/items_qwen2.5_7b_instruct.parquet
   items_labels_parquet: results/items_labels.parquet   # task 0.8's own output,
-                                                         # distinct from items_parquet (task 2.2)
+                                                         # distinct from items_parquet (task 2.2).
+                                                         # Deliberately NOT model-namespaced -
+                                                         # built from human votes alone, so it's
+                                                         # shared across every judge model.

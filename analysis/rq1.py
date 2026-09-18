@@ -16,9 +16,11 @@ deployed single-pass case) and verdict_bidir/correct_bidir (order-
 averaged). Every metric ships with a cluster-bootstrap CI (grouped on
 question_id, invariant 2) - never a bare point estimate.
 
-Writes results/rq1_table.csv and results/figures/reliability_{signal}.png
-x4 (src/plots.py's plot_reliability_diagram, one figure per signal,
-judge_verdict and verdict_bidir overlaid on each).
+Writes results/rq1_table_{model_slug}.csv and
+results/figures/reliability_{signal}_{model_slug}.png x4 (src/plots.py's
+plot_reliability_diagram, one figure per signal, judge_verdict and
+verdict_bidir overlaid on each) - model_slug = Config.model_slug, so a
+second judge model never overwrites the first's output.
 """
 
 import argparse
@@ -248,6 +250,7 @@ def main(config_path: str) -> None:
             items["correct"].to_numpy(),
             signal_name=signal,
             n_bins=config.n_bins,
+            model_slug=config.model_slug,
             correct_bidir=items["correct_bidir"].to_numpy(),
         )
 
@@ -259,8 +262,9 @@ def main(config_path: str) -> None:
     )
 
     table = pd.DataFrame.from_records(rows)
-    table.to_csv("results/rq1_table.csv", index=False)
-    print(f"Wrote {len(table)} rows to results/rq1_table.csv")
+    table_path = f"results/rq1_table_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
 
 
 if __name__ == "__main__":

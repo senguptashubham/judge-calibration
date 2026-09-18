@@ -18,15 +18,20 @@ d_human = |frac_prefer_a - 0.5| (continuous consensus strength, D9):
   - correct ~ d_human      (does accuracy trend with how contested the item was?)
   - conf_verb ~ d_human    (does the judge's STATED confidence track it?)
 conf_verb is used here as the one representative signal for the figure.
-Writes results/figures/human_disagreement.png (src/plots.py's
-plot_human_disagreement).
+Writes results/figures/human_disagreement_{model_slug}.png (src/plots.py's
+plot_human_disagreement) and results/human_disagreement_table_{model_slug}.csv.
 
 Task 3.4: Spearman-only (not also an OLS slope, unlike 3.3) correlation
 between EACH of the four original confidence signals and d_human. Spearman
 only, for consistency with 3.3's own finding that d_human's near-categorical,
 3-value/95%-imbalanced shape favors a monotonic-only assumption over a
 linear one - repeating the OLS slope four more times would just repeat that
-caveat without adding anything new. No figure requirement (TASKS.md).
+caveat without adding anything new. Writes
+results/d_human_correlations_table_{model_slug}.csv and
+results/figures/d_human_correlations_{model_slug}.png.
+
+model_slug = Config.model_slug throughout, so a second judge model never
+overwrites the first's output.
 """
 
 import argparse
@@ -218,6 +223,7 @@ def main(config_path: str) -> None:
         correct=items["correct"].to_numpy(),
         confidence=items["conf_verb"].to_numpy(),
         n_bins=config.n_bins,
+        model_slug=config.model_slug,
     )
 
     print(
@@ -246,8 +252,9 @@ def main(config_path: str) -> None:
         {"target": "correct", **correct_result},
         {"target": "conf_verb", **conf_verb_result},
     ])
-    regression_table.to_csv("results/human_disagreement_table.csv", index=False)
-    print(f"Wrote {len(regression_table)} rows to results/human_disagreement_table.csv")
+    regression_table_path = f"results/human_disagreement_table_{config.model_slug}.csv"
+    regression_table.to_csv(regression_table_path, index=False)
+    print(f"Wrote {len(regression_table)} rows to {regression_table_path}")
 
     print("\n--- task 3.4: signal vs. d_human, Spearman only ---")
     correlation_rows = []
@@ -260,14 +267,16 @@ def main(config_path: str) -> None:
         correlation_rows.append({"signal": signal, **result})
 
     correlation_table = pd.DataFrame.from_records(correlation_rows)
-    correlation_table.to_csv("results/d_human_correlations_table.csv", index=False)
-    print(f"Wrote {len(correlation_table)} rows to results/d_human_correlations_table.csv")
+    correlation_table_path = f"results/d_human_correlations_table_{config.model_slug}.csv"
+    correlation_table.to_csv(correlation_table_path, index=False)
+    print(f"Wrote {len(correlation_table)} rows to {correlation_table_path}")
 
     plot_d_human_correlations(
         signals=correlation_table["signal"].tolist(),
         spearman=correlation_table["spearman"].to_numpy(),
         ci_low=correlation_table["spearman_ci_low"].to_numpy(),
         ci_high=correlation_table["spearman_ci_high"].to_numpy(),
+        model_slug=config.model_slug,
     )
 
 

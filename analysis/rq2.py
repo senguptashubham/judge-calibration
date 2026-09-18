@@ -23,9 +23,11 @@ separate script reusing threshold_sweep()) - computes:
   - AUROC(uncertainty -> error)
 every scalar with a cluster-bootstrap CI (question_id, invariant 2).
 
-Writes results/rq2_table.csv (one row per signal) and
-results/figures/risk_coverage.png (src/plots.py's plot_risk_coverage - all
-four signals + the oracle, one axis - task 3.2's thesis figure).
+Writes results/rq2_table_{model_slug}.csv (one row per signal) and
+results/figures/risk_coverage_{model_slug}.png (src/plots.py's
+plot_risk_coverage - all four signals + the oracle, one axis - task 3.2's
+thesis figure). model_slug = Config.model_slug, so a second judge model
+never overwrites the first's output.
 """
 
 import argparse
@@ -163,11 +165,12 @@ def main(config_path: str) -> None:
         uncertainty = 1 - items[signal].to_numpy(dtype=float)
         curves[signal] = risk_coverage(uncertainty, items[correct_col].to_numpy())
 
-    plot_risk_coverage(curves, oracle_curve)
+    plot_risk_coverage(curves, oracle_curve, filename=f"risk_coverage_{config.model_slug}.png")
 
     table = pd.DataFrame.from_records(rows)
-    table.to_csv("results/rq2_table.csv", index=False)
-    print(f"Wrote {len(table)} rows to results/rq2_table.csv")
+    table_path = f"results/rq2_table_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
 
 
 if __name__ == "__main__":
