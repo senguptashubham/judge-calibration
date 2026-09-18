@@ -181,19 +181,23 @@ either way).
 
 ## RQ3 — Does uncertainty flag bias-induced errors, or is the fooled judge confident?
 
-*Written 18 Sep 2026. RQ3a only so far — RQ3b (verbosity, task 4.4) needs the
-`verbose` run and will be added to this section once that data lands, not written
-as a separate one. Data: same population as RQ1/RQ2 — `results/items_qwen2.5_7b_instruct.parquet`
+*Written 18 Sep 2026, RQ3b added same day once the `verbose` run (task 4.2) landed.
+RQ3a data: same population as RQ1/RQ2 — `results/items_qwen2.5_7b_instruct.parquet`
 filtered to `(clean, P1)` and `human_label` non-null, **N = 1836**. This is a
 deliberate scope choice, not a data requirement: flip rate and confidence-on-flipped
 don't need `human_label` at all (they're pure judge-behavior signals, nothing to do
 with correctness) — the maximal population would be all 1904 clean/P1 items. RQ1's
 1836-item population is reused instead so the whole report cites one canonical N
 across every RQ1–RQ4 core analysis, rather than a second, 68-item-different
-population for no analytical reason. Analysis: `analysis/rq3.py`. Figure:
-`results/figures/rq3a_confidence_gap_qwen2.5_7b_instruct.png`. Table:
-`results/rq3a_table_qwen2.5_7b_instruct.csv`. CI is a cluster bootstrap, B=2000,
-grouped on `question_id` (invariant 2).*
+population for no analytical reason. RQ3b data: the same 1836 items, paired —
+`(clean, P1)` vs. `(verbose, P1)`, both filtered identically; task 4.2 confirmed the
+two conditions share an exactly identical 1904-item population, so filtering each
+side the same way keeps them paired 1:1. Analysis: `analysis/rq3.py`. Figure:
+`results/figures/rq3a_confidence_gap_qwen2.5_7b_instruct.png`. Tables:
+`results/rq3a_table_qwen2.5_7b_instruct.csv` (RQ3a), `results/rq3_table_qwen2.5_7b_instruct.csv`
+(RQ3b). CI is a cluster bootstrap, B=2000, grouped on `question_id` (invariant 2);
+RQ3b's deltas use the *paired* cluster bootstrap (invariant 3) since both sides are
+the same items scored twice, not independent samples.*
 
 **RQ3a — position bias.** The judge's canonical verdict flips between presentation
 orders (AB vs. BA) on **27.8% [24.8%, 30.8%]** of items — a large, common failure
@@ -241,6 +245,40 @@ twice — `paired_cluster_bootstrap()` (used elsewhere for e.g. `judge_verdict` 
 gap and its CI instead come from a single `cluster_bootstrap()` call with a
 group-difference `stat_fn` computed inside each resampled replicate — the standard
 tool for a two-disjoint-subgroup comparison under clustering.
+
+**RQ3b — verbosity bias.** Same N = 1836 items, each scored under both `clean` and
+`verbose` (Zheng et al.'s repetitive-list padding). Unlike RQ3a, this *is* a genuine
+paired comparison — same items, two conditions — so the deltas below are
+`paired_cluster_bootstrap()` CIs on `stat_fn(verbose) − stat_fn(clean)` (invariant 3).
+`conf_sc` is excluded — self-consistency sampling only runs for `clean/P1` (D19/D21),
+so `verbose` has no `conf_sc` values to compare at all, not a smaller or noisier
+sample of them; `conf_verb`, `conf_lp`, and `conf_bpe` are unaffected, since each only
+needs the greedy call at both orders, which `verbose` does collect.
+
+| signal | ECE clean | ECE verbose | Δ ECE (verb−clean) | 95% CI | AUROC clean | AUROC verbose | Δ AUROC | 95% CI |
+|---|---|---|---|---|---|---|---|---|
+| `conf_verb` | 0.192 | 0.182 | −0.0098 | [−0.0268, 0.0079] | 0.639 | 0.611 | −0.0276 | [−0.0571, −0.0023] |
+| `conf_lp` | 0.242 | 0.232 | −0.0106 | [−0.0279, 0.0074] | 0.715 | 0.670 | −0.0447 | [−0.0740, −0.0170] |
+| `conf_bpe` | 0.115 | 0.159 | **+0.0432** | **[0.0144, 0.0516]** | 0.794 | 0.766 | −0.0278 | [−0.0494, −0.0064] |
+
+Accuracy itself barely moves and isn't significant for any signal (0.757 → 0.768,
+Δ +0.0109 [−0.0070, 0.0281], identical across all three rows since accuracy only
+depends on `judge_verdict`, not the signal) — verbosity padding doesn't measurably
+change how often the judge is *right*.
+
+**Headline: verbosity doesn't fool the judge into more wrong verdicts, but it
+quietly breaks the uncertainty signals meant to flag them.** All three surviving
+signals' AUROC(uncertainty → error) drops significantly under `verbose` — their CIs
+sit entirely below zero. The signal-specific story is sharper still: `conf_bpe` was
+RQ1/RQ2's best performer on clean data (lowest ECE, highest AUROC of the four
+original signals), and it is the *only* signal whose calibration itself significantly
+degrades under verbose (ECE +0.043, CI excludes 0) — while `conf_verb` and `conf_lp`'s
+ECE shifts are numerically negative but not significant. Read together with RQ3a:
+position bias barely moves confidence at all (a ~2pp gap); verbosity moves accuracy
+even less, but erodes exactly the signal — cross-order agreement — that RQ1/RQ2
+found most useful for catching errors on clean data. An abstention policy tuned on
+`clean` data and deployed where responses vary in verbosity would silently lose
+reliability without any accuracy-side symptom to warn it.
 
 ---
 
