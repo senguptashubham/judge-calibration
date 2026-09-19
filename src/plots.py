@@ -939,5 +939,95 @@ def plot_rq4_permutation_nulls(
     return fig
 
 
+def plot_h4_interaction(
+    oof_score: np.ndarray,
+    oof_score_grid: np.ndarray,
+    d_human_values: list[float],
+    predicted_curves: list[np.ndarray],
+    log_odds_curves: list[np.ndarray],
+    model_slug: str,
+) -> Figure:
+    """Task 5.6's optional figure (requested 19 Sep 2026, after the
+    numeric interaction result): predicted P(correct) as a function of
+    the predictor's out-of-fold score, one curve per distinct d_human
+    level actually present in the data (analysis/rq4.py's
+    compute_h4_interaction_curves() - NOT a min/median/max summary,
+    which collapses under this population's real skew).
+
+    TWO panels, not one - checked empirically (19 Sep 2026) that the
+    probability panel alone undersells the fitted interaction (+2.3752
+    [1.6849, 3.0739]): the model's log-odds slope w.r.t. oof_score
+    genuinely increases with d_human (that's what the positive
+    interaction coefficient means, directly), but in probability space
+    that gets compressed by sigmoid saturation specifically in the
+    high-oof_score region where most of this project's real data sits
+    (most judge calls are high-confidence) - higher-d_human curves sit
+    closer to the probability ceiling there, where the sigmoid is
+    flattest, visually muting a slope difference that reads as large and
+    unambiguous on the log-odds scale, where the model is literally
+    linear and the interaction coefficient IS the slope difference,
+    undistorted.
+
+    Left panel: probability space (intuitive - P(correct) is directly
+    meaningful) with a rug plot of the real oof_score values along the
+    bottom, so the curves aren't read as equally well-supported across
+    their full domain. Right panel: log-odds (the linear predictor) -
+    same three lines, undistorted, visibly diverging in slope as
+    d_human rises. Together: "here's what it means" and "here's why the
+    number says it's real," not two redundant views of one thing.
+
+    Args:
+        oof_score: the real, per-item averaged OOF scores (for the left
+            panel's rug plot only, not the curves themselves).
+        oof_score_grid: shared x-axis grid every curve is evaluated on.
+        d_human_values: the distinct d_human levels, ascending - one
+            legend entry each, shared across both panels.
+        predicted_curves: one P(correct) array per d_human_values entry,
+            same order, each the same length as oof_score_grid.
+        log_odds_curves: the same curves on the linear-predictor scale,
+            same order/length.
+        model_slug: Config.model_slug - namespaces the saved filename so
+            a second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/h4_interaction_{model_slug}.png).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    cmap = plt.get_cmap("viridis")
+    colors = [cmap(i / max(len(d_human_values) - 1, 1)) for i in range(len(d_human_values))]
+
+    ax = axes[0]
+    for color, d_human_value, curve in zip(colors, d_human_values, predicted_curves):
+        ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
+    # Rug: real oof_score values along the bottom, outside the [0,1]
+    # probability axis so it never overlaps the curves themselves.
+    ax.plot(
+        oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color="black", alpha=0.3,
+        markersize=8, clip_on=False,
+    )
+    ax.set_xlim(0, 1)
+    ax.set_ylim(-0.08, 1.02)
+    ax.set_xlabel("predictor's out-of-fold score (P(correct))")
+    ax.set_ylabel("predicted P(correct)")
+    ax.set_title("Probability scale")
+    ax.legend(loc="upper left", fontsize=9, title="human consensus (d_human)")
+
+    ax = axes[1]
+    for color, d_human_value, curve in zip(colors, d_human_values, log_odds_curves):
+        ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
+    ax.set_xlim(0, 1)
+    ax.set_xlabel("predictor's out-of-fold score (P(correct))")
+    ax.set_ylabel("log-odds of correct (linear predictor)")
+    ax.set_title("Log-odds scale (undistorted slope)")
+
+    fig.suptitle("H4: the predictor's edge grows with human consensus (task 5.6)")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"h4_interaction_{model_slug}.png", dpi=150)
+    return fig
+
+
 if __name__ == "__main__":
     plot_ece_auroc_orthogonal()

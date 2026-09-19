@@ -89,7 +89,7 @@ from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.features import build_tier_a, load_rq4_population
 from src.metrics import auroc_error
-from src.plots import plot_rq4_ablation, plot_rq4_permutation_nulls, plot_rq4_progression
+from src.plots import plot_h4_interaction, plot_rq4_ablation, plot_rq4_permutation_nulls, plot_rq4_progression
 from src.predictor import MODEL_FACTORIES, TIER_BUILDERS, build_xyg, permutation_null, percentile_of_null, run_predictor
 
 
@@ -341,6 +341,33 @@ def compute_h4_oof_score(population: pd.DataFrame, seed: int) -> np.ndarray:
     return np.mean([r.oof_pred for r in results], axis=0)
 
 
+def _h4_design_matrix(oof_score: np.ndarray, d_human: np.ndarray) -> np.ndarray:
+    """[oof_score, d_human, oof_score*d_human] - the shared 3-column
+    design both fit_interaction_coefficient() (per bootstrap replicate)
+    and fit_h4_interaction_model() (once, for the figure) build, kept in
+    one place so the two fits can never silently drift apart.
+    """
+    return np.column_stack([oof_score, d_human, oof_score * d_human])
+
+
+def build_h4_predictions_df(population: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """question_id/correct/d_human/oof_score, built once - shared by
+    compute_h4_interaction() (the bootstrap CI) and
+    compute_h4_interaction_curves() (the optional figure), so the
+    expensive 10x5-fold OOF computation (compute_h4_oof_score) only
+    ever runs once per main_h4() invocation, not twice.
+    """
+    oof_score = compute_h4_oof_score(population, seed)
+    return pd.DataFrame(
+        {
+            "question_id": population["question_id"].to_numpy(),
+            "correct": population["correct"].to_numpy(),
+            "d_human": population["d_human"].to_numpy(),
+            "oof_score": oof_score,
+        }
+    )
+
+
 def fit_interaction_coefficient(df: pd.DataFrame) -> float:
     """correct ~ oof_score * d_human (D9/PLAN.md §2.3): a 3-feature
     logistic regression - oof_score, d_human, and their product - with
@@ -351,38 +378,102 @@ def fit_interaction_coefficient(df: pd.DataFrame) -> float:
     each resample is mandatory, not just resampling a precomputed
     coefficient), so this must stay a real fit, not a shortcut.
     """
-    X = np.column_stack([df["oof_score"], df["d_human"], df["oof_score"] * df["d_human"]])
+    X = _h4_design_matrix(df["oof_score"].to_numpy(), df["d_human"].to_numpy())
     y = df["correct"].astype(int).to_numpy()
     model = LogisticRegression(C=1.0)
     model.fit(X, y)
     return float(model.coef_[0][-1])
 
 
-def compute_h4_interaction(population: pd.DataFrame, seed: int) -> dict:
-    """The full H4 pipeline: averaged OOF score -> interaction fit ->
-    cluster-bootstrap CI on the interaction coefficient (D15's mandated
-    method - see this module's own docstring for the three-step recipe).
+def compute_h4_interaction(predictions_df: pd.DataFrame, seed: int) -> dict:
+    """The bootstrap half of the H4 pipeline: cluster-bootstrap CI on
+    the interaction coefficient (D15's mandated method - see this
+    module's own docstring for the three-step recipe).
 
     Args:
-        population: load_h4_population()'s output.
+        predictions_df: build_h4_predictions_df()'s output.
         seed: config.seed.
 
     Returns:
         dict with n (population size), interaction_coef, ci_low, ci_high.
     """
-    oof_score = compute_h4_oof_score(population, seed)
-    predictions_df = pd.DataFrame(
-        {
-            "question_id": population["question_id"].to_numpy(),
-            "correct": population["correct"].to_numpy(),
-            "d_human": population["d_human"].to_numpy(),
-            "oof_score": oof_score,
-        }
-    )
     point, ci_low, ci_high = cluster_bootstrap(
         predictions_df, fit_interaction_coefficient, "question_id", n=2000, seed=seed
     )
     return {"n": len(predictions_df), "interaction_coef": point, "ci_low": ci_low, "ci_high": ci_high}
+
+
+def fit_h4_interaction_model(predictions_df: pd.DataFrame) -> LogisticRegression:
+    """Fits correct ~ oof_score * d_human ONCE on the real (non-
+    bootstrapped) data - the same design fit_interaction_coefficient()
+    uses per bootstrap replicate, but returned whole here for
+    compute_h4_interaction_curves()'s predicted-probability curves
+    (task 5.6's optional figure, requested 19 Sep 2026 after the numeric
+    result). Presentation only - the coefficient's own CI always comes
+    from compute_h4_interaction()'s bootstrap, never from this fit's own
+    (uncorrected, i.i.d.-assuming) standard errors.
+    """
+    X = _h4_design_matrix(predictions_df["oof_score"].to_numpy(), predictions_df["d_human"].to_numpy())
+    y = predictions_df["correct"].astype(int).to_numpy()
+    model = LogisticRegression(C=1.0)
+    model.fit(X, y)
+    return model
+
+
+def compute_h4_interaction_curves(predictions_df: pd.DataFrame, n_grid: int = 100) -> dict:
+    """Predicted P(correct) vs. oof_score curves at each DISTINCT
+    d_human level actually present in the data - NOT a min/median/max
+    summary, which collapses under this population's real skew (564/595
+    items sit at d_human=0.5, so the median trivially equals the max -
+    confirmed empirically, 19 Sep 2026). This dataset has exactly 3
+    distinct levels (~0.167, ~0.25, 0.5 - vote-count-driven discreteness,
+    not a design choice); using them directly shows the interaction
+    faithfully rather than forcing a 3-point summary onto data that has
+    no meaningfully continuous median.
+
+    ALSO returns the same curves on the log-odds (linear-predictor)
+    scale, not just probability - checked empirically (19 Sep 2026) that
+    the probability-space curves alone visually undersell the fitted
+    interaction: the model's log-odds slope w.r.t. oof_score genuinely
+    increases with d_human (that's what the positive interaction
+    coefficient means), but in probability space that gets compressed by
+    sigmoid saturation, specifically in the high-oof_score region where
+    most of this project's real data actually sits (most judge calls are
+    high-confidence) - higher-d_human curves sit closer to the ceiling
+    there, where the sigmoid is flattest, visually muting a slope
+    difference that's actually large and clear on the log-odds scale
+    (where the model is literally linear and the interaction IS the
+    slope difference, undistorted).
+
+    Args:
+        predictions_df: build_h4_predictions_df()'s output.
+        n_grid: number of oof_score grid points per curve (100).
+
+    Returns:
+        dict with oof_score (the real, per-item values, for a rug plot),
+        oof_score_grid, d_human_values (the distinct levels, ascending),
+        predicted_curves (list of P(correct) arrays, one per
+        d_human_values entry, same order), log_odds_curves (the same
+        curves on the linear-predictor scale).
+    """
+    model = fit_h4_interaction_model(predictions_df)
+    d_human_values = sorted(predictions_df["d_human"].round(4).unique())
+    oof_score_grid = np.linspace(0, 1, n_grid)
+
+    predicted_curves = []
+    log_odds_curves = []
+    for d_human_value in d_human_values:
+        X_grid = _h4_design_matrix(oof_score_grid, np.full(n_grid, d_human_value))
+        predicted_curves.append(model.predict_proba(X_grid)[:, 1])
+        log_odds_curves.append(model.decision_function(X_grid))
+
+    return {
+        "oof_score": predictions_df["oof_score"].to_numpy(),
+        "oof_score_grid": oof_score_grid,
+        "d_human_values": d_human_values,
+        "predicted_curves": predicted_curves,
+        "log_odds_curves": log_odds_curves,
+    }
 
 
 def main_h4(config_path: str) -> None:
@@ -390,7 +481,9 @@ def main_h4(config_path: str) -> None:
     population = load_h4_population(config.paths.items_parquet)
     print(f"H4 population: N={len(population)} (clean/P1, human_label present, n_human_votes >= 2, D9)")
 
-    result = compute_h4_interaction(population, config.seed)
+    predictions_df = build_h4_predictions_df(population, config.seed)
+
+    result = compute_h4_interaction(predictions_df, config.seed)
     print(
         f"H4 interaction coefficient (oof_score x d_human): {result['interaction_coef']:.4f} "
         f"[{result['ci_low']:.4f}, {result['ci_high']:.4f}]"
@@ -401,6 +494,16 @@ def main_h4(config_path: str) -> None:
         print("CI excludes 0 (negative): the predictor's edge SHRINKS with human consensus - contradicts H4.")
     else:
         print("CI includes 0: no detectable interaction at this sample size - H4 neither supported nor refuted.")
+
+    curves = compute_h4_interaction_curves(predictions_df)
+    plot_h4_interaction(
+        oof_score=curves["oof_score"],
+        oof_score_grid=curves["oof_score_grid"],
+        d_human_values=curves["d_human_values"],
+        predicted_curves=curves["predicted_curves"],
+        log_odds_curves=curves["log_odds_curves"],
+        model_slug=config.model_slug,
+    )
 
 
 def main_ablation(config_path: str) -> None:
