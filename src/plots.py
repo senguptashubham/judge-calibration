@@ -888,7 +888,10 @@ def plot_rq4_permutation_nulls(
     check already serves in text.
 
     Args:
-        tiers: tier label per cell, e.g. ["A","A","B","B","C","C"].
+        tiers: tier label per cell, e.g. ["A","A","B","B","C","C"] - any
+            input order accepted, the grid below re-sorts into columns
+            by tier regardless (so a caller's tier-major or model-major
+            list order never changes the figure).
         models: model label per cell, same order/length as `tiers`.
         observed: this cell's real (unshuffled) AUROC, same order.
         null_distributions: this cell's null_aurocs array (n=50 values
@@ -901,23 +904,28 @@ def plot_rq4_permutation_nulls(
         The Figure (also saved to
         results/figures/rq4_permutation_nulls_{model_slug}.png).
     """
-    n_cells = len(tiers)
-    ncols = 3
-    nrows = -(-n_cells // ncols)  # ceil division - a grid that fits n_cells with no assumption it's a multiple of 3
+    # Grid is (model) rows x (tier) columns - every model's panels read
+    # left-to-right as A->B->C on one row, and every tier's two models
+    # stack in one column, rather than a flat sequential fill (which
+    # mixed tiers and models across a row with no visual grouping).
+    tier_order = [t for t in ["A", "B", "C"] if t in tiers]
+    model_order = sorted(set(models))
+    nrows, ncols = len(model_order), len(tier_order)
+
+    by_cell = {(t, m): i for i, (t, m) in enumerate(zip(tiers, models))}
 
     fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
 
-    for i in range(nrows * ncols):
-        ax = axes[i // ncols][i % ncols]
-        if i >= n_cells:
-            ax.axis("off")  # unused grid cell (n_cells not a multiple of ncols)
-            continue
+    for row, model in enumerate(model_order):
+        for col, tier in enumerate(tier_order):
+            ax = axes[row][col]
+            i = by_cell[(tier, model)]
 
-        ax.hist(null_distributions[i], bins=15, color="tab:gray", alpha=0.8, edgecolor="white")
-        ax.axvline(observed[i], color="tab:red", linestyle="--", linewidth=2)
-        ax.set_title(f"Tier {tiers[i]}, {models[i]}", fontsize=10)
-        ax.set_xlabel("null AUROC")
-        ax.set_xlim(0, 1)
+            ax.hist(null_distributions[i], bins=15, color="tab:gray", alpha=0.8, edgecolor="white")
+            ax.axvline(observed[i], color="tab:red", linestyle="--", linewidth=2)
+            ax.set_title(f"Tier {tier}, {model}", fontsize=10)
+            ax.set_xlabel("null AUROC")
+            ax.set_xlim(0, 1)
 
     legend_handles = [
         Line2D([0], [0], color="tab:red", linestyle="--", linewidth=2, label="observed AUROC"),
