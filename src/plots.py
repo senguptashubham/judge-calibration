@@ -716,5 +716,96 @@ def plot_rq3b_deltas(
     return fig
 
 
+def plot_rq4_ablation(
+    tiers: list[str],
+    models: list[str],
+    auroc_mean: np.ndarray,
+    auroc_low: np.ndarray,
+    auroc_high: np.ndarray,
+    baseline: float,
+    baseline_ci_low: float,
+    baseline_ci_high: float,
+    baseline_label: str,
+    model_slug: str,
+) -> Figure:
+    """Task 5.5's figure: grouped bar chart, one bar per (tier, model)
+    combination, with the best-single-signal baseline (recomputed on the
+    SAME human_agreed population the ablation itself uses - see
+    analysis/rq4.py's own module docstring for why reusing RQ2's stored
+    number would compare across two different populations) drawn as a
+    horizontal reference line with its own CI as a shaded band.
+
+    Bars are grouped by tier (A/B/C) on the x-axis, colored by model -
+    this reading order puts "does the next tier beat the last one" (the
+    RQ4 headline question) directly adjacent on the page, with "does
+    either model beat the cheap single-signal baseline" answered by
+    whether a bar clears the reference line.
+
+    Args:
+        tiers: tier label per bar, e.g. ["A","B","C","A","B","C"].
+        models: model label per bar, same order/length as `tiers`, e.g.
+            ["logreg"]*3 + ["histgbm"]*3.
+        auroc_mean: point estimate per bar (mean across the 10 D8
+            repeats), same order.
+        auroc_low, auroc_high: the across-repeat spread bounds per bar
+            (D8's own headline-uncertainty convention - NOT a bootstrap
+            CI), same order.
+        baseline: the best single signal's AUROC on this task's own
+            population.
+        baseline_ci_low, baseline_ci_high: that baseline's own CI
+            (cluster-bootstrap, matching RQ2's convention).
+        baseline_label: which signal the baseline is (e.g. "conf_bpe"),
+            used in the legend.
+        model_slug: Config.model_slug - namespaces the saved filename so
+            a second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to results/figures/rq4_ablation_{model_slug}.png).
+    """
+    tier_order = ["A", "B", "C"]
+    model_order = sorted(set(models))
+    bar_width = 0.8 / max(len(model_order), 1)
+
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    ax.axhspan(baseline_ci_low, baseline_ci_high, color="gray", alpha=0.15, zorder=0)
+    ax.axhline(
+        baseline, linestyle="--", color="black", linewidth=1.5, zorder=1,
+        label=f"best single signal ({baseline_label}) = {baseline:.3f}",
+    )
+
+    for i, model in enumerate(model_order):
+        model_mask = [m == model for m in models]
+        model_tiers = [t for t, keep in zip(tiers, model_mask) if keep]
+        model_means = [v for v, keep in zip(auroc_mean, model_mask) if keep]
+        model_low = [v for v, keep in zip(auroc_low, model_mask) if keep]
+        model_high = [v for v, keep in zip(auroc_high, model_mask) if keep]
+
+        # Reorders this model's own (tier, value) rows into tier_order -
+        # the caller's row order isn't assumed to already be tier-sorted.
+        by_tier = dict(zip(model_tiers, zip(model_means, model_low, model_high)))
+        ordered = [by_tier[t] for t in tier_order if t in by_tier]
+        means = np.array([v[0] for v in ordered])
+        err_low = means - np.array([v[1] for v in ordered])
+        err_high = np.array([v[2] for v in ordered]) - means
+
+        x = np.arange(len(ordered)) + (i - (len(model_order) - 1) / 2) * bar_width
+        ax.bar(x, means, width=bar_width, label=model, zorder=2)
+        ax.errorbar(
+            x, means, yerr=[err_low, err_high], fmt="none", ecolor="black", capsize=4, zorder=3
+        )
+
+    ax.set_xticks(np.arange(len(tier_order)))
+    ax.set_xticklabels([f"Tier {t}" for t in tier_order])
+    ax.set_ylabel("AUROC (uncertainty/features → judge error)")
+    ax.set_title("RQ4 tier ablation: A → B → C (task 5.5)")
+    ax.legend(loc="lower right", fontsize=9)
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq4_ablation_{model_slug}.png", dpi=150)
+    return fig
+
+
 if __name__ == "__main__":
     plot_ece_auroc_orthogonal()
