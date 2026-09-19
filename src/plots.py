@@ -827,5 +827,109 @@ def plot_rq4_ablation(
     return fig
 
 
+def plot_rq4_progression(
+    comparisons: list[str],
+    auroc_diff: np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+    model_slug: str,
+) -> Figure:
+    """Task 5.5's paired-comparison figure: forest plot of each tier-
+    progression step's AUROC delta (baseline->A, A->B, B->C, per model -
+    analysis/rq4.py::compare_tier_progression()), against a zero
+    reference line. Thin wrapper over _forest_plot() - same point+CI-vs-
+    zero shape as plot_rq3a_confidence_gap()/plot_d_human_correlations().
+
+    A CI excluding 0 means that step's change is real. Every CI crossing
+    0 (the actual result, 18 Sep 2026) means the ablation bar chart's
+    apparent A > B > C decline does not survive a paired test - this
+    figure is what makes that visible at a glance, instead of reading it
+    off a 6-row CSV.
+
+    Args:
+        comparisons: label per row, e.g. "logreg: A - baseline", in
+            display order (top to bottom).
+        auroc_diff: point estimate per row (higher tier's AUROC minus
+            lower tier's), same order.
+        ci_low, ci_high: CI bounds per row, same order.
+        model_slug: Config.model_slug - namespaces the saved filename so
+            a second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq4_progression_{model_slug}.png).
+    """
+    return _forest_plot(
+        labels=comparisons,
+        values=auroc_diff,
+        ci_low=ci_low,
+        ci_high=ci_high,
+        xlabel="Δ AUROC (higher tier - lower tier)",
+        title="RQ4 tier-progression paired comparison (task 5.5)",
+        filename=f"rq4_progression_{model_slug}.png",
+    )
+
+
+def plot_rq4_permutation_nulls(
+    tiers: list[str],
+    models: list[str],
+    observed: np.ndarray,
+    null_distributions: list[np.ndarray],
+    model_slug: str,
+) -> Figure:
+    """Task 5.5's permutation-null sanity-check figure: one small
+    histogram per (tier, model) cell's null AUROC distribution
+    (analysis/rq4.py::compute_permutation_null_summary()), with the real,
+    observed AUROC marked as a vertical line. Less essential than
+    plot_rq4_progression() - the result here is unambiguous (every cell
+    at the 100th percentile) - but a visual confirmation that each null
+    genuinely centers near 0.5 (not just a printed mean) is cheap and
+    catches a leaking pipeline at a glance, the same role the numeric
+    check already serves in text.
+
+    Args:
+        tiers: tier label per cell, e.g. ["A","A","B","B","C","C"].
+        models: model label per cell, same order/length as `tiers`.
+        observed: this cell's real (unshuffled) AUROC, same order.
+        null_distributions: this cell's null_aurocs array (n=50 values
+            each, compute_permutation_null_summary()'s own `n`), same
+            order.
+        model_slug: Config.model_slug - namespaces the saved filename so
+            a second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq4_permutation_nulls_{model_slug}.png).
+    """
+    n_cells = len(tiers)
+    ncols = 3
+    nrows = -(-n_cells // ncols)  # ceil division - a grid that fits n_cells with no assumption it's a multiple of 3
+
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
+
+    for i in range(nrows * ncols):
+        ax = axes[i // ncols][i % ncols]
+        if i >= n_cells:
+            ax.axis("off")  # unused grid cell (n_cells not a multiple of ncols)
+            continue
+
+        ax.hist(null_distributions[i], bins=15, color="tab:gray", alpha=0.8, edgecolor="white")
+        ax.axvline(observed[i], color="tab:red", linestyle="--", linewidth=2)
+        ax.set_title(f"Tier {tiers[i]}, {models[i]}", fontsize=10)
+        ax.set_xlabel("null AUROC")
+        ax.set_xlim(0, 1)
+
+    legend_handles = [
+        Line2D([0], [0], color="tab:red", linestyle="--", linewidth=2, label="observed AUROC"),
+    ]
+    fig.legend(handles=legend_handles, loc="upper right", fontsize=9)
+    fig.suptitle("Permutation null distributions vs. observed AUROC (task 5.5)")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq4_permutation_nulls_{model_slug}.png", dpi=150)
+    return fig
+
+
 if __name__ == "__main__":
     plot_ece_auroc_orthogonal()

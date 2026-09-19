@@ -39,7 +39,7 @@ from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.features import load_rq4_population
 from src.metrics import auroc_error
-from src.plots import plot_rq4_ablation
+from src.plots import plot_rq4_ablation, plot_rq4_permutation_nulls, plot_rq4_progression
 from src.predictor import MODEL_FACTORIES, TIER_BUILDERS, build_xyg, permutation_null, percentile_of_null, run_predictor
 
 
@@ -153,7 +153,10 @@ def compute_permutation_null_summary(
 
     Returns:
         dict with tier, model, observed_auroc, null_mean, null_std,
-        percentile (observed's percentile of the null distribution).
+        percentile (observed's percentile of the null distribution), and
+        null_aurocs (the raw n-length array itself, for
+        plot_rq4_permutation_nulls() - NOT written to the summary CSV,
+        see main()).
     """
     X, y, groups = build_xyg(population, TIER_BUILDERS[tier_name])
     observed = compute_tier_model_result(population, tier_name, model_name, seed)["auroc_mean"]
@@ -165,6 +168,7 @@ def compute_permutation_null_summary(
         "null_mean": float(null_aurocs.mean()),
         "null_std": float(null_aurocs.std()),
         "percentile": percentile_of_null(observed, null_aurocs),
+        "null_aurocs": null_aurocs,
     }
 
 
@@ -315,10 +319,24 @@ def main(config_path: str) -> None:
                 f"null mean={null_summary['null_mean']:.4f} (std={null_summary['null_std']:.4f}), "
                 f"percentile={null_summary['percentile']:.1%}"
             )
-    null_table = pd.DataFrame.from_records(null_rows)
+
+    # null_aurocs (the raw per-permutation array) is plot-only - excluded
+    # from the CSV, which stays one summary row per cell, not one column
+    # per permutation.
+    null_table = pd.DataFrame.from_records(
+        [{k: v for k, v in row.items() if k != "null_aurocs"} for row in null_rows]
+    )
     null_table_path = f"results/rq4_ablation_null_{config.model_slug}.csv"
     null_table.to_csv(null_table_path, index=False)
     print(f"Wrote {len(null_table)} rows to {null_table_path}")
+
+    plot_rq4_permutation_nulls(
+        tiers=[row["tier"] for row in null_rows],
+        models=[row["model"] for row in null_rows],
+        observed=np.array([row["observed_auroc"] for row in null_rows]),
+        null_distributions=[row["null_aurocs"] for row in null_rows],
+        model_slug=config.model_slug,
+    )
 
     # Step 2: is the apparent baseline->A->B->C progression real, or
     # spread-bar overlap noise?
@@ -333,6 +351,14 @@ def main(config_path: str) -> None:
             f"Δauroc={row['auroc_diff']:.4f} [{row['ci_low']:.4f}, {row['ci_high']:.4f}]"
         )
     print(f"Wrote {len(progression)} rows to {progression_path}")
+
+    plot_rq4_progression(
+        comparisons=[f"{row['model']}: {row['comparison']}" for _, row in progression.iterrows()],
+        auroc_diff=progression["auroc_diff"].to_numpy(),
+        ci_low=progression["ci_low"].to_numpy(),
+        ci_high=progression["ci_high"].to_numpy(),
+        model_slug=config.model_slug,
+    )
 
 
 if __name__ == "__main__":
