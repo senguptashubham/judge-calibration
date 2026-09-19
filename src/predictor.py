@@ -22,7 +22,15 @@ headline uncertainty this file's callers should report is the
 ACROSS-REPEAT spread of each repeat's whole-population AUROC, never a
 single split's own CI.
 
-`python -m src.predictor --config configs/run.yaml --tier B --model logreg`
+Also `permutation_null()` (task 5.4, invariant 12): every RQ4 result
+ships with a permutation null, or an AUROC like 0.62 is not
+distinguishable from what a feature set with no real relationship to
+`correct` would produce under this exact same pipeline. Shuffles `y`
+globally, reruns a single 5-fold CV per permutation, n=200 times - the
+standard permutation-test construction (same shape as sklearn's own
+`permutation_test_score`).
+
+`python -m src.predictor --config configs/run.yaml --tier B --model logreg [--permutation-null]`
 """
 
 import argparse
@@ -205,6 +213,82 @@ def repeated_stratified_group_kfold(
     return results
 
 
+def permutation_null(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    groups: np.ndarray,
+    make_model: Callable[[int], object],
+    n: int = 200,
+    n_splits: int = 5,
+    seed: int = 0,
+) -> np.ndarray:
+    """Invariant 12: every RQ4 result ships with a permutation null.
+    Without it, an AUROC like 0.62 isn't distinguishable from what a
+    feature set with NO real relationship to `correct` would produce
+    under this exact same pipeline.
+
+    One permutation = shuffle `y` GLOBALLY (breaking any real X-y
+    relationship at the row level), then run ONE 5-fold
+    StratifiedGroupKFold CV (not the full 10-repeat protocol - n=200
+    permutations x 5 folds is already 1000 fits, matching standard
+    permutation-test practice, e.g. sklearn's own
+    `permutation_test_score`, which also uses one CV pass per
+    permutation). Reuses repeated_stratified_group_kfold with
+    n_repeats=1 rather than a second, parallel CV loop.
+
+    Why a GLOBAL shuffle of y, not shuffling only each fold's own
+    training labels: permuting y once, before the split, is the
+    textbook permutation-test construction, and it leaves `groups`
+    completely untouched - shuffling VALUES never changes which
+    question_id a row belongs to, so the grouping constraint is exactly
+    as valid on permuted data as on real data. A correctly-implemented,
+    leak-free pipeline should center this null at AUROC ~= 0.5 either
+    way; the global-shuffle form is the well-established standard
+    construction, not a bespoke technique invented for this project.
+
+    Args:
+        X, y, groups: same shapes as repeated_stratified_group_kfold's -
+            y is the REAL target; shuffling happens internally, fresh
+            per permutation.
+        make_model: seed -> a fresh, unfitted estimator/Pipeline.
+        n: number of permutations (200, invariant 12/task 5.4).
+        n_splits: folds per permutation (5, matching the real protocol).
+        seed: base seed - permutation i uses seed + i for BOTH the
+            label-shuffle rng and the fold split's random_state, so
+            every permutation is an independent, reproducible draw.
+
+    Returns:
+        Array of n null AUROCs, one per permutation.
+    """
+    y = np.asarray(y)
+    null_aurocs = np.empty(n)
+
+    for i in range(n):
+        permutation_seed = seed + i
+        y_shuffled = np.random.default_rng(permutation_seed).permutation(y)
+
+        [result] = repeated_stratified_group_kfold(
+            X, y_shuffled, groups, make_model, n_splits=n_splits, n_repeats=1, seed=permutation_seed
+        )
+        null_aurocs[i] = result.auroc
+
+    return null_aurocs
+
+
+def percentile_of_null(observed: float, null_distribution: np.ndarray) -> float:
+    """Where the REAL, observed AUROC falls within its own permutation
+    null distribution - e.g. 0.97 means only 3% of label-shuffled runs
+    scored as well as the real result by chance.
+
+    The empirical percentile, not a parametric p-value formula: AUROC's
+    null isn't guaranteed normal/symmetric (it's bounded in [0,1], and
+    this project's specific population/pipeline shape its exact form) -
+    reading the empirical rank directly avoids assuming a parametric
+    null shape nobody has checked holds here.
+    """
+    return float(np.mean(null_distribution <= observed))
+
+
 TIER_BUILDERS = {"A": build_tier_a, "B": build_tier_b, "C": build_tier_c}
 
 
@@ -237,13 +321,27 @@ def run_predictor(
     if model_name not in MODEL_FACTORIES:
         raise ValueError(f"model_name must be one of {list(MODEL_FACTORIES)}, got {model_name!r}")
 
-    X = encode_features(tier_builder(population))
-    y = population["correct"].astype(int).to_numpy()
-    groups = population["question_id"].to_numpy()
+    X, y, groups = build_xyg(population, tier_builder)
 
     return repeated_stratified_group_kfold(
         X, y, groups, MODEL_FACTORIES[model_name], n_splits=n_splits, n_repeats=n_repeats, seed=seed
     )
+
+
+def build_xyg(
+    population: pd.DataFrame, tier_builder: Callable[[pd.DataFrame], pd.DataFrame]
+) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """The (X, y, groups) triple every CV entry point needs - encoded
+    tier features, the `correct` target (D7's single-pass definition),
+    and `question_id` as the grouping column. Factored out of
+    run_predictor() so permutation_null() can be pointed at the exact
+    same X/y/groups the real result used, from the CLI, without
+    duplicating this three-line construction.
+    """
+    X = encode_features(tier_builder(population))
+    y = population["correct"].astype(int).to_numpy()
+    groups = population["question_id"].to_numpy()
+    return X, y, groups
 
 
 if __name__ == "__main__":
@@ -251,6 +349,14 @@ if __name__ == "__main__":
     parser.add_argument("--config", required=True)
     parser.add_argument("--tier", required=True, choices=list(TIER_BUILDERS))
     parser.add_argument("--model", required=True, choices=list(MODEL_FACTORIES))
+    parser.add_argument(
+        "--permutation-null",
+        action="store_true",
+        help="Also run the n=200 permutation null (invariant 12) and report the real result's "
+        "percentile against it. Off by default - it's ~20x the model fits of the real result "
+        "alone (200 permutations x 5 folds vs. 10 repeats x 5 folds), not something to pay for "
+        "on every invocation.",
+    )
     args = parser.parse_args()
 
     config = Config.from_yaml(args.config)
@@ -262,3 +368,13 @@ if __name__ == "__main__":
     print(f"Tier {args.tier}, {args.model}, N={len(population)}, {len(repeats)} repeats:")
     print(f"  AUROC mean={aurocs.mean():.4f}, spread=[{aurocs.min():.4f}, {aurocs.max():.4f}]")
     print("  (D8: the across-repeat spread is the headline uncertainty, not a within-split CI)")
+
+    if args.permutation_null:
+        X, y, groups = build_xyg(population, TIER_BUILDERS[args.tier])
+        null_aurocs = permutation_null(X, y, groups, MODEL_FACTORIES[args.model], n=200, seed=config.seed)
+        percentile = percentile_of_null(aurocs.mean(), null_aurocs)
+        print(
+            f"  Permutation null (n=200): mean={null_aurocs.mean():.4f}, "
+            f"std={null_aurocs.std():.4f} (invariant 12: should center near 0.5)"
+        )
+        print(f"  Observed AUROC ({aurocs.mean():.4f}) is at the {percentile:.1%} percentile of the null")

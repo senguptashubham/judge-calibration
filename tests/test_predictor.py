@@ -1,6 +1,6 @@
 """Tests for src/predictor.py: the repeated StratifiedGroupKFold
-protocol (D8/CLAUDE.md invariant 1) and feature encoding. See TASKS.md
-task 5.3.
+protocol (D8/CLAUDE.md invariant 1), feature encoding, and the
+permutation null (invariant 12). See TASKS.md tasks 5.3, 5.4.
 """
 
 import numpy as np
@@ -12,6 +12,8 @@ from src.predictor import (
     make_fold_splits,
     make_histgbm,
     make_logreg,
+    percentile_of_null,
+    permutation_null,
     repeated_stratified_group_kfold,
     run_predictor,
 )
@@ -171,3 +173,37 @@ def test_run_predictor_full_wiring_tier_a_logreg():
     for r in results:
         assert not np.isnan(r.oof_pred).any()
         assert 0.0 <= r.auroc <= 1.0
+
+
+# --- permutation_null / percentile_of_null (invariant 12) --------------
+
+
+def test_permutation_null_returns_n_values_in_range():
+    X, y, groups = _synthetic_rq4_data()
+    null = permutation_null(X, y, groups, make_logreg, n=15, seed=0)
+    assert null.shape == (15,)
+    assert np.all((null >= 0.0) & (null <= 1.0))
+
+
+def test_permutation_null_centers_near_chance_even_with_a_real_signal():
+    # A strong real X-y relationship (the unshuffled fit scores well
+    # above 0.5) - shuffling y must still destroy it completely, or the
+    # grouping/fold structure is leaking the real relationship back in.
+    X, y, groups = _synthetic_rq4_data(n_groups=40, rows_per_group=3, seed=1)
+    null = permutation_null(X, y, groups, make_logreg, n=30, seed=0)
+    assert 0.3 < null.mean() < 0.7
+
+
+def test_permutation_null_uses_independent_permutations_not_one_repeated_shuffle():
+    X, y, groups = _synthetic_rq4_data()
+    null = permutation_null(X, y, groups, make_logreg, n=10, seed=0)
+    # A shuffle-that-doesn't-shuffle bug would make every permutation
+    # identical - confirm real variation exists across permutations.
+    assert len(set(np.round(null, 6))) > 1
+
+
+def test_percentile_of_null_basic():
+    null = np.array([0.5, 0.6, 0.7, 0.8, 0.9])
+    assert percentile_of_null(0.75, null) == pytest.approx(0.6)  # 3/5 <= 0.75
+    assert percentile_of_null(1.0, null) == pytest.approx(1.0)
+    assert percentile_of_null(0.0, null) == pytest.approx(0.0)
