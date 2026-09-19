@@ -78,11 +78,25 @@ def compute_baseline_auroc(population: pd.DataFrame, seed: int) -> dict:
         dict with signal (the winning signal's name), auroc, auroc_ci_low,
         auroc_ci_high.
     """
-    raise NotImplementedError(
-        "task 5.5: for each signal in SIGNALS, cluster_bootstrap a stat_fn computing "
-        "auroc_error(1 - df[signal], df['correct']) over `population`, grouped on question_id; "
-        "return the signal with the highest point estimate"
-    )
+    def _auroc(df: pd.DataFrame) -> float:
+        uncertainty = 1 - df[signal].to_numpy(dtype=float)
+        return auroc_error(uncertainty, df["correct"].to_numpy())
+
+    winning_signal = {"signal": None, "auroc": float("-inf"), "auroc_ci_low": None, "auroc_ci_high": None}
+    for signal in SIGNALS:
+        point, ci_low, ci_high = cluster_bootstrap(population, _auroc, "question_id", seed=seed)
+        # Selection is on the point estimate ALONE - the CI is reported
+        # for whichever signal wins, never used to decide who wins (a
+        # signal with a genuinely higher point estimate but a wider/
+        # noisier CI must still win; comparing CI bounds here could
+        # silently reject the actual best signal).
+        if point > winning_signal["auroc"]:
+            winning_signal["signal"] = signal
+            winning_signal["auroc"] = point
+            winning_signal["auroc_ci_low"] = ci_low
+            winning_signal["auroc_ci_high"] = ci_high
+
+    return winning_signal
 
 
 def compute_tier_model_result(population: pd.DataFrame, tier_name: str, model_name: str, seed: int) -> dict:
@@ -104,10 +118,16 @@ def compute_tier_model_result(population: pd.DataFrame, tier_name: str, model_na
         dict with tier, model, auroc_mean, auroc_low, auroc_high,
         n_repeats.
     """
-    raise NotImplementedError(
-        "task 5.5: results = run_predictor(population, TIER_BUILDERS[tier_name], model_name, seed); "
-        "aurocs = [r.auroc for r in results]; report mean/min/max"
-    )
+    results = run_predictor(population, TIER_BUILDERS[tier_name], model_name, seed)
+    aurocs = [r.auroc for r in results]
+    return {
+        "tier": tier_name,
+        "model": model_name,
+        "auroc_mean": sum(aurocs) / len(aurocs),
+        "auroc_low": min(aurocs),
+        "auroc_high": max(aurocs),
+        "n_repeats": len(results),
+    }
 
 
 def main(config_path: str) -> None:
