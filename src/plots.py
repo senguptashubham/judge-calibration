@@ -729,17 +729,21 @@ def plot_rq4_ablation(
     model_slug: str,
 ) -> Figure:
     """Task 5.5's figure: grouped bar chart, one bar per (tier, model)
-    combination, with the best-single-signal baseline (recomputed on the
-    SAME human_agreed population the ablation itself uses - see
-    analysis/rq4.py's own module docstring for why reusing RQ2's stored
-    number would compare across two different populations) drawn as a
-    horizontal reference line with its own CI as a shaded band.
+    combination, PLUS a standalone bar for the best-single-signal
+    baseline (recomputed on the SAME human_agreed population the
+    ablation itself uses - see analysis/rq4.py's own module docstring
+    for why reusing RQ2's stored number would compare across two
+    different populations) in its own distinct color, so "does combining
+    signals into a tier actually beat the single best signal alone" is a
+    direct bar-to-bar height comparison, not a bar-vs-line one. A thin
+    reference line at the same height is kept too, so that comparison
+    stays easy even for the tiers sitting furthest from the baseline bar.
 
     Bars are grouped by tier (A/B/C) on the x-axis, colored by model -
     this reading order puts "does the next tier beat the last one" (the
     RQ4 headline question) directly adjacent on the page, with "does
     either model beat the cheap single-signal baseline" answered by
-    whether a bar clears the reference line.
+    whether a bar clears the baseline bar's own height.
 
     Args:
         tiers: tier label per bar, e.g. ["A","B","C","A","B","C"].
@@ -755,7 +759,7 @@ def plot_rq4_ablation(
         baseline_ci_low, baseline_ci_high: that baseline's own CI
             (cluster-bootstrap, matching RQ2's convention).
         baseline_label: which signal the baseline is (e.g. "conf_bpe"),
-            used in the legend.
+            used as that bar's own x-axis label and legend entry.
         model_slug: Config.model_slug - namespaces the saved filename so
             a second judge model never overwrites the first's figure.
 
@@ -766,12 +770,26 @@ def plot_rq4_ablation(
     model_order = sorted(set(models))
     bar_width = 0.8 / max(len(model_order), 1)
 
-    fig, ax = plt.subplots(figsize=(7, 5))
+    fig, ax = plt.subplots(figsize=(8, 5))
 
-    ax.axhspan(baseline_ci_low, baseline_ci_high, color="gray", alpha=0.15, zorder=0)
-    ax.axhline(
-        baseline, linestyle="--", color="black", linewidth=1.5, zorder=1,
-        label=f"best single signal ({baseline_label}) = {baseline:.3f}",
+    # Thin reference line at the baseline's height, threaded across the
+    # whole plot - a cheap way to judge clearance for the tiers sitting
+    # far from the baseline's own bar, without competing visually with it
+    # (thinner + no shaded band, since the bar itself now carries the CI).
+    ax.axhline(baseline, linestyle="--", color="tab:gray", linewidth=1, zorder=1)
+
+    # The baseline bar itself sits at x=0, in its own distinct color (not
+    # reused from the model color cycle below) so it reads as "a single
+    # signal alone", never mistaken for a third model.
+    baseline_err_low = baseline - baseline_ci_low
+    baseline_err_high = baseline_ci_high - baseline
+    ax.bar(
+        [0], [baseline], width=0.7, color="tab:green", zorder=2,
+        label=f"best single signal ({baseline_label})",
+    )
+    ax.errorbar(
+        [0], [baseline], yerr=[[baseline_err_low], [baseline_err_high]],
+        fmt="none", ecolor="black", capsize=4, zorder=3,
     )
 
     for i, model in enumerate(model_order):
@@ -789,14 +807,16 @@ def plot_rq4_ablation(
         err_low = means - np.array([v[1] for v in ordered])
         err_high = np.array([v[2] for v in ordered]) - means
 
-        x = np.arange(len(ordered)) + (i - (len(model_order) - 1) / 2) * bar_width
+        # +1 shifts every tier group one slot right of the baseline bar
+        # at x=0.
+        x = 1 + np.arange(len(ordered)) + (i - (len(model_order) - 1) / 2) * bar_width
         ax.bar(x, means, width=bar_width, label=model, zorder=2)
         ax.errorbar(
             x, means, yerr=[err_low, err_high], fmt="none", ecolor="black", capsize=4, zorder=3
         )
 
-    ax.set_xticks(np.arange(len(tier_order)))
-    ax.set_xticklabels([f"Tier {t}" for t in tier_order])
+    ax.set_xticks([0] + list(1 + np.arange(len(tier_order))))
+    ax.set_xticklabels([baseline_label] + [f"Tier {t}" for t in tier_order])
     ax.set_ylabel("AUROC (uncertainty/features → judge error)")
     ax.set_title("RQ4 tier ablation: A → B → C (task 5.5)")
     ax.legend(loc="lower right", fontsize=9)
