@@ -1,8 +1,17 @@
-"""RQ4 task 5.5: tier ablation A -> B -> C, both frequentist models,
-against the best-single-signal baseline. See TASKS.md task 5.5,
-PLAN.md §2.2's reframe ("which feature family carries the signal").
+"""RQ4 tasks 5.5 (tier ablation) and 5.6 (H4, the continuous
+disagreement interaction) - same RQ, same file, mirroring how
+analysis/rq3.py holds both of RQ3's sub-tasks (4.3, 4.4) rather than
+splitting per-task. See TASKS.md tasks 5.5/5.6, PLAN.md §2.2's reframe
+("which feature family carries the signal") and §2.3 ("the label
+problem").
 
-`python -m analysis.rq4 --config configs/run.yaml`.
+`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4}`
+- each task is its own CLI invocation, not run together, since the
+ablation alone is already several hundred model fits; running both on
+every invocation would silently double that cost for no reason most of
+the time.
+
+--- Task 5.5 (tier ablation) ---
 
 Population: features.py::load_rq4_population() (N=1819, the shared
 base every RQ4 tier uses), further restricted to `human_agreed == True`
@@ -27,17 +36,58 @@ Writes results/rq4_ablation_{model_slug}.csv (one row per (tier, model)
 pair) and results/figures/rq4_ablation_{model_slug}.png
 (src/plots.py::plot_rq4_ablation - grouped bar chart, baseline as a
 reference line + shaded CI band).
+
+--- Task 5.6 (H4, continuous form, D9) ---
+
+Population: clean/P1, human_label not null, n_human_votes >= 2 - D9's
+own population, NOT task 5.5's human_agreed-restricted one and NOT
+features.py::load_rq4_population()'s len_ratio-filtered one either. H4
+is specifically about whether predictability trades off CONTINUOUSLY
+against human consensus strength (d_human), so it deliberately keeps
+every contested item 5.5 excluded - that's the whole point of using
+every item with >=2 votes rather than only the agreed ones. Confirmed
+empirically: N=595, 79/80 question_id groups (larger than D9's own
+rough ~350-item estimate, made before real data existed).
+
+"The predictor" (PLAN.md §2.3) is Tier A + logreg specifically, not a
+free choice among all 6 tier/model combinations - documented in
+compute_h4_oof_score()'s own docstring: task 5.5 found no significant
+difference between any tier or model (every paired-progression CI
+crossed zero), so Tier A is representative, not arbitrary, and it
+avoids a second population restriction (Tier B/C need
+len_ratio/longer_is_chosen, undefined for 17 items - task 5.2 - which
+would shrink H4's already-small ~600-item population for no reason tied
+to H4 itself). logreg over histgbm because H4's own interaction model
+is itself a logistic regression - keeping "the predictor" and "the
+interaction test" in one coherent model family.
+
+Method (PLAN.md §2.3, D15 - mandatory, not a default choice):
+  1. Out-of-fold P(correct) from the fixed 10x5 repeated CV (D8),
+     averaged across repeats to one score per item - IN-SAMPLE
+     predictions would bias the interaction before the CI method even
+     matters.
+  2. Fit `correct ~ oof_score * d_human` - a 3-feature logistic
+     regression (oof_score, d_human, their product), reading off the
+     product term's own coefficient.
+  3. Cluster-bootstrap over question_id, B=2000, REFITTING each
+     resample, percentile CI on the interaction coefficient - never a
+     statsmodels/sklearn default standard error (those assume i.i.d.
+     rows; rows cluster inside ~80 questions, invariant 2).
+
+DoD: the interaction coefficient with its cluster-bootstrap CI, and the
+aleatoric/epistemic reading in one sentence - no figure required.
 """
 
 import argparse
 
 import numpy as np
 import pandas as pd
+from sklearn.linear_model import LogisticRegression
 
 from analysis.rq1 import SIGNALS
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
-from src.features import load_rq4_population
+from src.features import build_tier_a, load_rq4_population
 from src.metrics import auroc_error
 from src.plots import plot_rq4_ablation, plot_rq4_permutation_nulls, plot_rq4_progression
 from src.predictor import MODEL_FACTORIES, TIER_BUILDERS, build_xyg, permutation_null, percentile_of_null, run_predictor
@@ -266,7 +316,94 @@ def compare_tier_progression(population: pd.DataFrame, baseline_signal: str, see
     return pd.DataFrame.from_records(rows)
 
 
-def main(config_path: str) -> None:
+def load_h4_population(items_parquet: str) -> pd.DataFrame:
+    """D9's own population for H4: clean/P1, human_label not null,
+    n_human_votes >= 2. Deliberately NOT load_ablation_population()'s
+    human_agreed-restricted population, and NOT
+    features.py::load_rq4_population()'s len_ratio-filtered one either -
+    see this module's own docstring for why H4 needs every contested
+    item, not just the agreed ones.
+    """
+    items = pd.read_parquet(items_parquet)
+    items = items[(items["condition"] == "clean") & (items["prompt_variant"] == "P1")]
+    items = items[items["human_label"].notna()]
+    return items[items["n_human_votes"] >= 2]
+
+
+def compute_h4_oof_score(population: pd.DataFrame, seed: int) -> np.ndarray:
+    """Tier A + logreg's averaged out-of-fold P(correct) across the 10
+    D8 repeats - "the predictor's output" H4 tests the interaction
+    against (PLAN.md §2.3). See this module's own docstring for why
+    Tier A + logreg specifically, not a free choice among all six tier/
+    model combinations.
+    """
+    results = run_predictor(population, build_tier_a, "logreg", seed)
+    return np.mean([r.oof_pred for r in results], axis=0)
+
+
+def fit_interaction_coefficient(df: pd.DataFrame) -> float:
+    """correct ~ oof_score * d_human (D9/PLAN.md §2.3): a 3-feature
+    logistic regression - oof_score, d_human, and their product - with
+    the product term's own coefficient read off as the H4 statistic.
+    LogisticRegression(C=1.0), matching predictor.py's own established
+    hyperparameter choice rather than a special-cased fit for this one
+    test. Called once per cluster-bootstrap replicate (D15 - refitting
+    each resample is mandatory, not just resampling a precomputed
+    coefficient), so this must stay a real fit, not a shortcut.
+    """
+    X = np.column_stack([df["oof_score"], df["d_human"], df["oof_score"] * df["d_human"]])
+    y = df["correct"].astype(int).to_numpy()
+    model = LogisticRegression(C=1.0)
+    model.fit(X, y)
+    return float(model.coef_[0][-1])
+
+
+def compute_h4_interaction(population: pd.DataFrame, seed: int) -> dict:
+    """The full H4 pipeline: averaged OOF score -> interaction fit ->
+    cluster-bootstrap CI on the interaction coefficient (D15's mandated
+    method - see this module's own docstring for the three-step recipe).
+
+    Args:
+        population: load_h4_population()'s output.
+        seed: config.seed.
+
+    Returns:
+        dict with n (population size), interaction_coef, ci_low, ci_high.
+    """
+    oof_score = compute_h4_oof_score(population, seed)
+    predictions_df = pd.DataFrame(
+        {
+            "question_id": population["question_id"].to_numpy(),
+            "correct": population["correct"].to_numpy(),
+            "d_human": population["d_human"].to_numpy(),
+            "oof_score": oof_score,
+        }
+    )
+    point, ci_low, ci_high = cluster_bootstrap(
+        predictions_df, fit_interaction_coefficient, "question_id", n=2000, seed=seed
+    )
+    return {"n": len(predictions_df), "interaction_coef": point, "ci_low": ci_low, "ci_high": ci_high}
+
+
+def main_h4(config_path: str) -> None:
+    config = Config.from_yaml(config_path)
+    population = load_h4_population(config.paths.items_parquet)
+    print(f"H4 population: N={len(population)} (clean/P1, human_label present, n_human_votes >= 2, D9)")
+
+    result = compute_h4_interaction(population, config.seed)
+    print(
+        f"H4 interaction coefficient (oof_score x d_human): {result['interaction_coef']:.4f} "
+        f"[{result['ci_low']:.4f}, {result['ci_high']:.4f}]"
+    )
+    if result["ci_low"] > 0:
+        print("CI excludes 0 (positive): the predictor's edge grows with human consensus - supports H4.")
+    elif result["ci_high"] < 0:
+        print("CI excludes 0 (negative): the predictor's edge SHRINKS with human consensus - contradicts H4.")
+    else:
+        print("CI includes 0: no detectable interaction at this sample size - H4 neither supported nor refuted.")
+
+
+def main_ablation(config_path: str) -> None:
     config = Config.from_yaml(config_path)
     population = load_ablation_population(config.paths.items_parquet)
     print(f"RQ4 ablation population: N={len(population)} (human_agreed items only, D16)")
@@ -364,5 +501,9 @@ def main(config_path: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--task", required=True, choices=["ablation", "h4"])
     args = parser.parse_args()
-    main(args.config)
+    if args.task == "ablation":
+        main_ablation(args.config)
+    else:
+        main_h4(args.config)
