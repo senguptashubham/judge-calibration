@@ -479,6 +479,7 @@ def _draw_forest(
     ci_high: np.ndarray,
     xlabel: str,
     colors: list[str] | None = None,
+    annotate: bool = True,
 ) -> None:
     """Draws one forest/coefficient panel - point estimate + CI error bar
     per label, plus a reference line at 0 - onto an existing `ax`. No
@@ -497,6 +498,14 @@ def _draw_forest(
             family, task 5.9's plot_rq4_coefficients). Defaults to a
             single "tab:blue" for every point - every existing caller
             omits this and is unaffected.
+        annotate: whether to draw the exact-value text label above each
+            point (default True, matching every existing caller). False
+            for a DENSE many-row panel (task 5.9's "appendix" full-
+            feature-set figure) - the text labels are what force a tall
+            per-row pitch in the first place (see the annotation loop's
+            own comment), and with 30+ rows the exact values are already
+            in the companion CSV, so the geometry alone (which points
+            clear zero) is the figure's job at that row count.
     """
     labels = list(labels)
     values_arr = np.asarray(values, dtype=float)
@@ -533,19 +542,23 @@ def _draw_forest(
     # stays legible even where the geometry doesn't. Placed above each
     # point, not to the side, so the label never competes with the CI
     # whiskers or gets clipped at the axis edge for an extreme value.
-    for x, y, lo, hi in zip(values_arr, y_pos, ci_low_arr, ci_high_arr):
-        ax.annotate(
-            f"{x:.3f} [{lo:.3f}, {hi:.3f}]",
-            xy=(x, y), xytext=(0, 10), textcoords="offset points",
-            ha="center", fontsize=8, color="dimgray",
-        )
+    if annotate:
+        for x, y, lo, hi in zip(values_arr, y_pos, ci_low_arr, ci_high_arr):
+            ax.annotate(
+                f"{x:.3f} [{lo:.3f}, {hi:.3f}]",
+                xy=(x, y), xytext=(0, 10), textcoords="offset points",
+                ha="center", fontsize=8, color="dimgray",
+            )
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels)
-    # Extra headroom above the top point and below the bottom one -
-    # without it, the topmost label's value annotation (offset 10 points
-    # above its marker) gets clipped by the axes border itself.
-    ax.set_ylim(len(labels) - 0.5, -0.75)
+    # Headroom above the top point and below the bottom one. Only the
+    # annotate=True case needs the larger 0.75 pad (room for the value
+    # label offset 10 points above the topmost marker, or it clips
+    # against the axes border) - annotate=False has nothing above the
+    # marker to protect, so a tight 0.5 pad keeps the dense panel compact.
+    pad = 0.75 if annotate else 0.5
+    ax.set_ylim(len(labels) - 0.5, -pad)
     ax.set_xlabel(xlabel)
 
 
@@ -1185,6 +1198,34 @@ def plot_rq4_category_transfer(
 _FEATURE_FAMILY_COLORS = {"A": "tab:blue", "B": "tab:green", "C": "tab:purple"}
 
 
+def _sort_coefficient_rows(
+    features: list[str], coef: np.ndarray, ci_low: np.ndarray, ci_high: np.ndarray, family: list[str]
+) -> pd.DataFrame:
+    """Shared row-ordering for both coefficient figures: family ascending
+    (A, then B, then C), |coefficient| descending within each family
+    block. _draw_forest() renders list index 0 at the TOP of the figure
+    (its own set_ylim puts y=0 nearest the top), so this order is already
+    "Tier A first, largest-magnitude-first within each block, reading top
+    to bottom" with no further reversal needed - a bug in an earlier
+    version added one anyway and rendered every block backwards (Tier C
+    on top), caught on visual review, 20 Sep 2026.
+    """
+    df = pd.DataFrame(
+        {"feature": features, "coef": coef, "ci_low": ci_low, "ci_high": ci_high, "family": family}
+    )
+    df["abs_coef"] = df["coef"].abs()
+    df["family"] = pd.Categorical(df["family"], categories=["A", "B", "C"], ordered=True)
+    return df.sort_values(["family", "abs_coef"], ascending=[True, False]).reset_index(drop=True)
+
+
+def _family_legend_handles(families_present: list[str]) -> list[Line2D]:
+    return [
+        Line2D([0], [0], marker="o", linestyle="", color=_FEATURE_FAMILY_COLORS[f], label=f"Tier {f}")
+        for f in ["A", "B", "C"]
+        if f in families_present
+    ]
+
+
 def plot_rq4_coefficients(
     features: list[str],
     coef: np.ndarray,
@@ -1194,77 +1235,129 @@ def plot_rq4_coefficients(
     model_slug: str,
 ) -> Figure:
     """Task 5.9's headline figure - DoD's own words: "the coefficients
-    are the result, more than the AUROC is." One row per Tier C
-    (encoded) feature - the fitted LogisticRegression(C=1.0) coefficient
-    on the standardized scale, with its cluster-bootstrap CI
-    (analysis/rq4.py::bootstrap_coefficient_cis, question_id, B=2000,
-    REFITTING each resample - never a statsmodels/sklearn default SE,
-    invariant 2) - plus a reference line at 0.
+    are the result, more than the AUROC is." Deliberately shows ONLY the
+    coefficients whose cluster-bootstrap CI excludes 0 (analysis/rq4.py::
+    bootstrap_coefficient_cis, question_id, B=2000, REFITTING each
+    resample - never a statsmodels/sklearn default SE, invariant 2), not
+    all ~37 Tier C features: at the full row count the figure is
+    unusably tall for a slide or a PDF page (0.9in/row x 37 rows), and
+    the CSV (results/rq4_coefficients_{model_slug}.csv, already written
+    by analysis/rq4.py's caller) is the complete record - this figure's
+    job is to make the headline readable, not to be the only place the
+    full table lives. The full 37-row picture is
+    plot_rq4_coefficients_full() (added 20 Sep 2026, on request, after
+    the first all-37-row version proved too tall for presentation use).
 
-    Colored by feature FAMILY (A/B/C, analysis/rq4.py::_feature_family)
-    rather than left uniform: this is the direct, per-feature answer to
-    "which feature family carries the signal" (PLAN.md §2.2's reframe) -
+    Colored by feature FAMILY (A/B/C, analysis/rq4.py::_feature_family):
     5.5 already found the tiers statistically indistinguishable at the
-    whole-model AUROC level (every paired-progression CI crossed 0), so
-    seeing whether Tier B/C's own coefficients individually clear 0 (or
-    sit near it while Tier A's don't) is the sharper, complementary
-    reading this coefficient-level view can give that the tier-level
-    ablation couldn't.
-
-    Rows are grouped by family (A, then B, then C) and sorted by
-    |coefficient| descending WITHIN each family block - so the largest,
-    most legible effects in each family read first, rather than an
-    arbitrary or alphabetical feature order.
-
-    Reuses _draw_forest() (task 4.3/5.5's shared forest-panel drawing
-    primitive) with its new optional per-point `colors` - the drawing
-    logic itself doesn't change, only that this caller passes a color.
+    whole-model AUROC level (every paired-progression CI crossed 0), and
+    the significant-only view here makes the sharper, coefficient-level
+    echo of that finding immediate - which families, if any, actually
+    have individually-nonzero features (as of 20 Sep 2026: only A and B
+    do; not one Tier C feature clears 0, so it never appears here).
 
     Args:
-        features: encoded feature name per row (predictor.py::
-            encode_features()'s column names - one-hot category dummies
-            included).
-        coef: fitted coefficient per row, same order.
-        ci_low, ci_high: cluster-bootstrap CI bounds per row, same order.
-        family: "A"/"B"/"C" per row, same order.
+        features, coef, ci_low, ci_high, family: the FULL coefficient
+            table (same shape/order as compute_meta_coefficients()'s
+            output) - filtering to the significant subset happens here,
+            not in the caller, so "significant" has exactly one
+            definition used consistently by both figures.
         model_slug: Config.model_slug - namespaces the saved filename so
             a second judge model never overwrites the first's figure.
 
     Returns:
         The Figure (also saved to
-        results/figures/rq4_coefficients_{model_slug}.png).
+        results/figures/rq4_coefficients_{model_slug}.png). If NO
+        coefficient is significant, the figure still renders (an empty
+        panel with just the zero line) rather than raising - a null
+        result is a real result, not an error.
     """
-    df = pd.DataFrame(
-        {"feature": features, "coef": coef, "ci_low": ci_low, "ci_high": ci_high, "family": family}
-    )
-    df["abs_coef"] = df["coef"].abs()
-    df["family"] = pd.Categorical(df["family"], categories=["A", "B", "C"], ordered=True)
-    # _draw_forest() renders list index 0 at the TOP of the figure (its
-    # own set_ylim puts y=0 nearest the top) - so this sort order
-    # (family ascending, |coef| descending within family) is already
-    # "Tier A first, largest-magnitude-first within each block, reading
-    # top to bottom" with no further reversal needed.
-    df = df.sort_values(["family", "abs_coef"], ascending=[True, False]).reset_index(drop=True)
+    df = _sort_coefficient_rows(features, coef, ci_low, ci_high, family)
+    df = df[(df["ci_low"] > 0) | (df["ci_high"] < 0)].reset_index(drop=True)
 
     colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
 
-    # 0.9in/row, matching _forest_plot()'s own established spacing - with
-    # ~37 Tier C features this makes for a tall figure, but the per-point
-    # value annotation (_draw_forest's own) needs that much room to stay
-    # legible and non-overlapping at this row count.
-    fig, ax = plt.subplots(figsize=(7, 0.9 * len(df) + 1.5))
-    _draw_forest(ax, df["feature"].tolist(), df["coef"].to_numpy(), df["ci_low"].to_numpy(), df["ci_high"].to_numpy(), "coefficient (standardized scale)", colors=colors)
+    # 0.9in/row, matching _forest_plot()'s own established spacing - safe
+    # here because this panel only ever holds the significant subset
+    # (8 of 37, as of 20 Sep 2026), not the full feature count.
+    fig, ax = plt.subplots(figsize=(7, 0.9 * max(len(df), 1) + 1.5))
+    _draw_forest(
+        ax,
+        df["feature"].tolist(),
+        df["coef"].to_numpy(),
+        df["ci_low"].to_numpy(),
+        df["ci_high"].to_numpy(),
+        "coefficient (standardized scale)",
+        colors=colors,
+    )
 
-    legend_handles = [
-        Line2D([0], [0], marker="o", linestyle="", color=_FEATURE_FAMILY_COLORS[f], label=f"Tier {f}")
-        for f in ["A", "B", "C"]
-    ]
-    ax.legend(handles=legend_handles, loc="lower right", fontsize=9)
-    ax.set_title(f"RQ4 meta-model coefficients, Tier C + logreg (task 5.9, {model_slug})")
+    ax.legend(handles=_family_legend_handles(sorted(df["family"].unique())), loc="lower right", fontsize=9)
+    ax.set_title(
+        f"RQ4 meta-model: significant coefficients only ({len(df)}/{len(features)} clear 0)\n"
+        f"Tier C + logreg (task 5.9, {model_slug})"
+    )
     fig.tight_layout()
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURES_DIR / f"rq4_coefficients_{model_slug}.png", dpi=150)
+    return fig
+
+
+def plot_rq4_coefficients_full(
+    features: list[str],
+    coef: np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+    family: list[str],
+    model_slug: str,
+) -> Figure:
+    """The appendix companion to plot_rq4_coefficients(): every Tier C
+    (encoded) feature, not just the significant ones - same data, same
+    family coloring and sort order, but dense (annotate=False, tight
+    row pitch) rather than presentation-sized, since exact values belong
+    to results/rq4_coefficients_{model_slug}.csv, not to this figure's
+    text labels. Whether each CI clears 0 is still visible from the
+    whisker geometry alone.
+
+    Args:
+        Same as plot_rq4_coefficients() - the FULL table, unfiltered.
+        model_slug: Config.model_slug - namespaces the saved filename.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq4_coefficients_full_{model_slug}.png).
+    """
+    df = _sort_coefficient_rows(features, coef, ci_low, ci_high, family)
+    colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
+
+    # 0.22in/row (vs. the headline figure's 0.9in/row) - affordable only
+    # because annotate=False drops the per-point text label that forces
+    # the taller pitch elsewhere. ~37 rows -> ~9.6in tall: dense, but
+    # fits a single presentation slide or PDF page, unlike the ~35in the
+    # same row count would need at the annotated spacing.
+    fig, ax = plt.subplots(figsize=(8, 0.22 * len(df) + 1.2))
+    _draw_forest(
+        ax,
+        df["feature"].tolist(),
+        df["coef"].to_numpy(),
+        df["ci_low"].to_numpy(),
+        df["ci_high"].to_numpy(),
+        "coefficient (standardized scale)",
+        colors=colors,
+        annotate=False,
+    )
+    ax.tick_params(axis="y", labelsize=7)
+
+    ax.legend(handles=_family_legend_handles(["A", "B", "C"]), loc="lower right", fontsize=9)
+    ax.set_title(
+        f"RQ4 meta-model coefficients, full Tier C feature set (task 5.9, {model_slug})\n"
+        f"exact values: results/rq4_coefficients_{model_slug}.csv",
+        fontsize=9,
+    )
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq4_coefficients_full_{model_slug}.png", dpi=150)
     return fig
 
 

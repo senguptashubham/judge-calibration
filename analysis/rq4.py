@@ -147,6 +147,7 @@ from src.plots import (
     plot_rq4_ablation,
     plot_rq4_category_transfer,
     plot_rq4_coefficients,
+    plot_rq4_coefficients_full,
     plot_rq4_permutation_nulls,
     plot_rq4_progression,
     plot_rq4_transfer,
@@ -1089,7 +1090,21 @@ def main_calibration(config_path: str) -> None:
         family_significant = int(((family_rows["ci_low"] > 0) | (family_rows["ci_high"] < 0)).sum())
         print(f"  Tier {family}: {family_significant}/{len(family_rows)} coefficients have a CI excluding 0")
 
+    # Headline figure: significant coefficients only (plot_rq4_coefficients
+    # itself does the CI-excludes-0 filtering, so "significant" has one
+    # definition shared by both figures) - the full 37-row table is
+    # unusably tall for a slide/PDF at the annotated forest-plot spacing
+    # (20 Sep 2026 discussion). Full breakdown: the CSV above, plus a
+    # dense (unannotated) appendix figure with the same row ordering.
     plot_rq4_coefficients(
+        features=coef_table["feature"].tolist(),
+        coef=coef_table["coef"].to_numpy(),
+        ci_low=coef_table["ci_low"].to_numpy(),
+        ci_high=coef_table["ci_high"].to_numpy(),
+        family=coef_table["family"].tolist(),
+        model_slug=config.model_slug,
+    )
+    plot_rq4_coefficients_full(
         features=coef_table["feature"].tolist(),
         coef=coef_table["coef"].to_numpy(),
         ci_low=coef_table["ci_low"].to_numpy(),
