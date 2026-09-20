@@ -91,7 +91,13 @@ from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.features import TIER_A_COLUMNS, build_tier_a, load_rq4_population
 from src.metrics import auroc_error
-from src.plots import plot_h4_interaction, plot_rq4_ablation, plot_rq4_permutation_nulls, plot_rq4_progression
+from src.plots import (
+    plot_h4_interaction,
+    plot_rq4_ablation,
+    plot_rq4_permutation_nulls,
+    plot_rq4_progression,
+    plot_rq4_transfer,
+)
 from src.predictor import (
     MODEL_FACTORIES,
     TIER_BUILDERS,
@@ -647,6 +653,17 @@ def main_transfer(config_path: str) -> None:
     table_path = f"results/rq4_transfer_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
+
+    plot_rq4_transfer(
+        models=table["model"].tolist(),
+        baseline_mean=table["baseline_auroc_mean"].to_numpy(),
+        baseline_low=table["baseline_auroc_low"].to_numpy(),
+        baseline_high=table["baseline_auroc_high"].to_numpy(),
+        transfer_mean=table["transfer_auroc"].to_numpy(),
+        transfer_low=table["transfer_ci_low"].to_numpy(),
+        transfer_high=table["transfer_ci_high"].to_numpy(),
+        model_slug=config.model_slug,
+    )
 
 
 def main_ablation(config_path: str) -> None:

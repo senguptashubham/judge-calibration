@@ -1029,5 +1029,81 @@ def plot_h4_interaction(
     return fig
 
 
+def plot_rq4_transfer(
+    models: list[str],
+    baseline_mean: np.ndarray,
+    baseline_low: np.ndarray,
+    baseline_high: np.ndarray,
+    transfer_mean: np.ndarray,
+    transfer_low: np.ndarray,
+    transfer_high: np.ndarray,
+    model_slug: str,
+) -> Figure:
+    """Task 5.7's figure: grouped bar chart, one group per model
+    (logreg/histgbm), each group showing two bars - in-domain (trained
+    AND tested on clean, D8's repeated-CV spread) vs. transfer (trained
+    on clean, frozen, evaluated on verbose, cluster-bootstrap CI) - same
+    grouped-bars-plus-whiskers shape as plot_rq4_ablation, just grouped
+    by model instead of by tier.
+
+    Makes the actual 20 Sep 2026 result legible at a glance: logreg's
+    two bars land at essentially the same height (ΔAUROC +0.0001) while
+    histgbm's transfer bar sits visibly, though not dramatically, below
+    its in-domain bar (ΔAUROC -0.0254) - refuting, not confirming, "the
+    safety net degrades under attack" as a clean, dramatic story.
+
+    Args:
+        models: model name per group, e.g. ["logreg", "histgbm"].
+        baseline_mean, baseline_low, baseline_high: in-domain AUROC and
+            its D8 across-repeat spread, same order as `models`.
+        transfer_mean, transfer_low, transfer_high: transfer AUROC and
+            its cluster-bootstrap CI, same order.
+        model_slug: Config.model_slug - namespaces the saved filename so
+            a second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq4_transfer_{model_slug}.png).
+    """
+    n = len(models)
+    x = np.arange(n)
+    bar_width = 0.35
+
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    baseline_mean_arr = np.asarray(baseline_mean, dtype=float)
+    transfer_mean_arr = np.asarray(transfer_mean, dtype=float)
+
+    ax.bar(
+        x - bar_width / 2, baseline_mean_arr, width=bar_width, label="in-domain (clean)", color="tab:blue", zorder=2
+    )
+    ax.errorbar(
+        x - bar_width / 2, baseline_mean_arr,
+        yerr=[baseline_mean_arr - np.asarray(baseline_low), np.asarray(baseline_high) - baseline_mean_arr],
+        fmt="none", ecolor="black", capsize=4, zorder=3,
+    )
+
+    ax.bar(
+        x + bar_width / 2, transfer_mean_arr, width=bar_width, label="transfer (clean → verbose)",
+        color="tab:red", zorder=2,
+    )
+    ax.errorbar(
+        x + bar_width / 2, transfer_mean_arr,
+        yerr=[transfer_mean_arr - np.asarray(transfer_low), np.asarray(transfer_high) - transfer_mean_arr],
+        fmt="none", ecolor="black", capsize=4, zorder=3,
+    )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(models)
+    ax.set_ylabel("AUROC (uncertainty/features → judge error)")
+    ax.set_title("RQ4 transfer test: clean → verbose (task 5.7)")
+    ax.legend(loc="lower right", fontsize=9)
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq4_transfer_{model_slug}.png", dpi=150)
+    return fig
+
+
 if __name__ == "__main__":
     plot_ece_auroc_orthogonal()
