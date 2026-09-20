@@ -694,14 +694,19 @@ def compute_category_held_out_auroc(population: pd.DataFrame, model_name: str, s
         DataFrame, one row per category: category, model, n (held-out
         row count), auroc.
     """
-    raise NotImplementedError(
-        "task 5.8: X = encode_features(build_tier_a(population)); "
-        "y = population['correct'].astype(int).to_numpy(); "
-        "groups = population['category'].to_numpy(); "
-        "for train_idx, test_idx in LeaveOneGroupOut().split(X, y, groups): "
-        "fit MODEL_FACTORIES[model_name](seed) on train, predict_proba on test, "
-        "roc_auc_score(y[test_idx], pred), record category=groups[test_idx][0]"
-    )
+    X = encode_features(build_tier_a(population))
+    y = population["correct"].astype(int).to_numpy()
+    groups = population["category"].to_numpy()
+
+    rows = []
+    for train_idx, test_idx in LeaveOneGroupOut().split(X, y, groups):
+        model = MODEL_FACTORIES[model_name](seed)
+        model.fit(X.iloc[train_idx], y[train_idx])
+        pred = model.predict_proba(X.iloc[test_idx])[:, 1]
+        auroc = roc_auc_score(y[test_idx], pred)
+        rows.append({"category": groups[test_idx][0], "model": model_name, "n": len(test_idx), "auroc": auroc})
+
+    return pd.DataFrame.from_records(rows)
 
 
 def main_category(config_path: str) -> None:
@@ -712,7 +717,24 @@ def main_category(config_path: str) -> None:
     says generalizes, one category cratering says shortcut) -> write
     results/rq4_category_transfer_{model_slug}.csv.
     """
-    raise NotImplementedError("task 5.8: see this function's own docstring for the pipeline")
+    config = Config.from_yaml(config_path)
+    population = load_rq4_population(config.paths.items_parquet)
+
+    tables = []
+    for model_name in MODEL_FACTORIES:
+        result = compute_category_held_out_auroc(population, model_name, config.seed)
+        tables.append(result)
+        for _, row in result.iterrows():
+            print(f"{model_name}, {row['category']}: n={row['n']}, AUROC={row['auroc']:.4f}")
+        print(
+            f"{model_name}: spread across categories = "
+            f"[{result['auroc'].min():.4f}, {result['auroc'].max():.4f}]"
+        )
+
+    table = pd.concat(tables, ignore_index=True)
+    table_path = f"results/rq4_category_transfer_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
 
 
 def main_ablation(config_path: str) -> None:
