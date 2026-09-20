@@ -478,6 +478,7 @@ def _draw_forest(
     ci_low: np.ndarray,
     ci_high: np.ndarray,
     xlabel: str,
+    colors: list[str] | None = None,
 ) -> None:
     """Draws one forest/coefficient panel - point estimate + CI error bar
     per label, plus a reference line at 0 - onto an existing `ax`. No
@@ -492,11 +493,16 @@ def _draw_forest(
         values: point estimate per label, same order.
         ci_low, ci_high: CI bounds per label, same order.
         xlabel: x-axis label (what the point estimates measure).
+        colors: optional per-label color (e.g. one color per feature
+            family, task 5.9's plot_rq4_coefficients). Defaults to a
+            single "tab:blue" for every point - every existing caller
+            omits this and is unaffected.
     """
     labels = list(labels)
     values_arr = np.asarray(values, dtype=float)
     ci_low_arr = np.asarray(ci_low, dtype=float)
     ci_high_arr = np.asarray(ci_high, dtype=float)
+    point_colors = list(colors) if colors is not None else ["tab:blue"] * len(labels)
 
     y_pos = np.arange(len(labels))
     # errorbar wants the half-widths from the point estimate, not the
@@ -505,16 +511,20 @@ def _draw_forest(
     err_high = ci_high_arr - values_arr
 
     ax.axvline(0, linestyle="--", color="gray", linewidth=1, zorder=1)
-    ax.errorbar(
-        values_arr, y_pos,
-        xerr=[err_low, err_high],
-        fmt="o",
-        color="tab:blue",
-        ecolor="tab:blue",
-        capsize=4,
-        markersize=7,
-        zorder=2,
-    )
+    # Drawn one point at a time (rather than one vectorized ax.errorbar
+    # call) SPECIFICALLY so each point can take its own color - a single
+    # errorbar() call only accepts one color for the whole series.
+    for x, y, lo_err, hi_err, color in zip(values_arr, y_pos, err_low, err_high, point_colors):
+        ax.errorbar(
+            [x], [y],
+            xerr=[[lo_err], [hi_err]],
+            fmt="o",
+            color=color,
+            ecolor=color,
+            capsize=4,
+            markersize=7,
+            zorder=2,
+        )
 
     # Exact-value text labels, not just the visual point+whisker: when one
     # label's magnitude dwarfs the others (e.g. task 4.3's conf_bpe, whose
@@ -1169,6 +1179,92 @@ def plot_rq4_category_transfer(
 
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURES_DIR / f"rq4_category_transfer_{model_slug}.png", dpi=150)
+    return fig
+
+
+_FEATURE_FAMILY_COLORS = {"A": "tab:blue", "B": "tab:green", "C": "tab:purple"}
+
+
+def plot_rq4_coefficients(
+    features: list[str],
+    coef: np.ndarray,
+    ci_low: np.ndarray,
+    ci_high: np.ndarray,
+    family: list[str],
+    model_slug: str,
+) -> Figure:
+    """Task 5.9's headline figure - DoD's own words: "the coefficients
+    are the result, more than the AUROC is." One row per Tier C
+    (encoded) feature - the fitted LogisticRegression(C=1.0) coefficient
+    on the standardized scale, with its cluster-bootstrap CI
+    (analysis/rq4.py::bootstrap_coefficient_cis, question_id, B=2000,
+    REFITTING each resample - never a statsmodels/sklearn default SE,
+    invariant 2) - plus a reference line at 0.
+
+    Colored by feature FAMILY (A/B/C, analysis/rq4.py::_feature_family)
+    rather than left uniform: this is the direct, per-feature answer to
+    "which feature family carries the signal" (PLAN.md §2.2's reframe) -
+    5.5 already found the tiers statistically indistinguishable at the
+    whole-model AUROC level (every paired-progression CI crossed 0), so
+    seeing whether Tier B/C's own coefficients individually clear 0 (or
+    sit near it while Tier A's don't) is the sharper, complementary
+    reading this coefficient-level view can give that the tier-level
+    ablation couldn't.
+
+    Rows are grouped by family (A, then B, then C) and sorted by
+    |coefficient| descending WITHIN each family block - so the largest,
+    most legible effects in each family read first, rather than an
+    arbitrary or alphabetical feature order.
+
+    Reuses _draw_forest() (task 4.3/5.5's shared forest-panel drawing
+    primitive) with its new optional per-point `colors` - the drawing
+    logic itself doesn't change, only that this caller passes a color.
+
+    Args:
+        features: encoded feature name per row (predictor.py::
+            encode_features()'s column names - one-hot category dummies
+            included).
+        coef: fitted coefficient per row, same order.
+        ci_low, ci_high: cluster-bootstrap CI bounds per row, same order.
+        family: "A"/"B"/"C" per row, same order.
+        model_slug: Config.model_slug - namespaces the saved filename so
+            a second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq4_coefficients_{model_slug}.png).
+    """
+    df = pd.DataFrame(
+        {"feature": features, "coef": coef, "ci_low": ci_low, "ci_high": ci_high, "family": family}
+    )
+    df["abs_coef"] = df["coef"].abs()
+    df["family"] = pd.Categorical(df["family"], categories=["A", "B", "C"], ordered=True)
+    # _draw_forest() renders list index 0 at the TOP of the figure (its
+    # own set_ylim puts y=0 nearest the top) - so this sort order
+    # (family ascending, |coef| descending within family) is already
+    # "Tier A first, largest-magnitude-first within each block, reading
+    # top to bottom" with no further reversal needed.
+    df = df.sort_values(["family", "abs_coef"], ascending=[True, False]).reset_index(drop=True)
+
+    colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
+
+    # 0.9in/row, matching _forest_plot()'s own established spacing - with
+    # ~37 Tier C features this makes for a tall figure, but the per-point
+    # value annotation (_draw_forest's own) needs that much room to stay
+    # legible and non-overlapping at this row count.
+    fig, ax = plt.subplots(figsize=(7, 0.9 * len(df) + 1.5))
+    _draw_forest(ax, df["feature"].tolist(), df["coef"].to_numpy(), df["ci_low"].to_numpy(), df["ci_high"].to_numpy(), "coefficient (standardized scale)", colors=colors)
+
+    legend_handles = [
+        Line2D([0], [0], marker="o", linestyle="", color=_FEATURE_FAMILY_COLORS[f], label=f"Tier {f}")
+        for f in ["A", "B", "C"]
+    ]
+    ax.legend(handles=legend_handles, loc="lower right", fontsize=9)
+    ax.set_title(f"RQ4 meta-model coefficients, Tier C + logreg (task 5.9, {model_slug})")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq4_coefficients_{model_slug}.png", dpi=150)
     return fig
 
 

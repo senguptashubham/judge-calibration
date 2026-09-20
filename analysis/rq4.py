@@ -1,11 +1,13 @@
 """RQ4 tasks 5.5 (tier ablation), 5.6 (H4, the continuous disagreement
-interaction), and 5.7 (transfer test 1: train on clean, test on verbose)
-- same RQ, same file, mirroring how analysis/rq3.py holds both of RQ3's
-sub-tasks (4.3, 4.4) rather than splitting per-task. See TASKS.md tasks
-5.5/5.6/5.7, PLAN.md §2.2's reframe ("which feature family carries the
+interaction), 5.7 (transfer test 1: train on clean, test on verbose),
+5.8 (transfer test 2: LeaveOneGroupOut over category), and 5.9
+(meta-model calibration: reliability diagram + coefficients) - same RQ,
+same file, mirroring how analysis/rq3.py holds both of RQ3's sub-tasks
+(4.3, 4.4) rather than splitting per-task. See TASKS.md tasks
+5.5-5.9, PLAN.md §2.2's reframe ("which feature family carries the
 signal"), §2.3 ("the label problem"), and §2.4 ("the transfer test").
 
-`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer}`
+`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration}`
 - each task is its own CLI invocation, not run together, since the
 ablation alone is already several hundred model fits; running all three
 on every invocation would silently multiply that cost for no reason most
@@ -76,6 +78,48 @@ Method (PLAN.md §2.3, D15 - mandatory, not a default choice):
 
 DoD: the interaction coefficient with its cluster-bootstrap CI, and the
 aleatoric/epistemic reading in one sentence - no figure required.
+
+--- Task 5.9 (meta-model calibration: reliability + coefficients) -----
+
+Population: features.py::load_rq4_population() (N=1819) - the same RQ4
+base 5.3-5.5 use, NOT H4's ≥2-votes population or 5.5's human_agreed-
+restricted one: this task is about the CORE predictor's own calibration
+and feature weights, not a sub-question scoped to a smaller population.
+
+Model: Tier C + logreg, not Tier A (task 5.6's choice) or a free pick
+among all 6 tier/model combinations. Tier C specifically because this
+task's whole point - the DoD's own words, "the coefficients are the
+result, more than the AUROC is" - is best answered by a model that
+actually CONTAINS all three feature families at once; Tier A alone
+couldn't show whether Tier B/C's surface/CoT features carry any weight.
+logreg (not histgbm) because raw coefficients are only directly
+interpretable for the linear model - HistGBM has no comparable
+per-feature weight.
+
+Reliability diagram: out-of-fold P(correct) from the standard 10x5
+repeated CV (D8), averaged across repeats - the SAME recipe
+compute_h4_oof_score() already established for H4, pointed at Tier C
+instead of Tier A - never in-sample predictions, which would look
+artificially well-calibrated. Plotted as P(judge is wrong) =
+1 - mean_oof_P(correct) against the actual wrong/right outcome, via
+src/plots.py's existing plot_reliability_diagram() (RQ1, task 2.6) -
+reused directly rather than a second implementation.
+
+Coefficients: LogisticRegression(C=1.0) fit ONCE on the FULL population
+(not averaged across CV folds - a coefficient is a property of one fit
+on the data, not a per-repeat quantity the way an AUROC is). CI via a
+cluster-bootstrap over question_id (invariant 2, D15's same standard-
+error discipline as H4) that resamples ONCE per replicate and refits
+the WHOLE coefficient vector together (bootstrap_coefficient_cis) -
+not src/boot.py's cluster_bootstrap() called once per feature, which
+would (a) refit ~37x more than necessary per replicate for no benefit,
+since one refit already yields every feature's replicate value at once,
+and (b) incorrectly treat each feature's bootstrap draw as independent
+when they share the same resampled rows.
+
+Writes results/rq4_coefficients_{model_slug}.csv and
+results/figures/rq4_coefficients_{model_slug}.png (D26/DoD) +
+results/figures/reliability_rq4_meta_model_{model_slug}.png.
 """
 
 import argparse
@@ -90,21 +134,30 @@ from analysis.rq1 import SIGNALS
 from analysis.rq3 import load_rq3b_items
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
-from src.features import TIER_A_COLUMNS, build_tier_a, load_rq4_population
-from src.metrics import auroc_error
+from src.features import (
+    TIER_A_COLUMNS,
+    TIER_C_EXTRA_COLUMNS,
+    build_tier_a,
+    build_tier_c,
+    load_rq4_population,
+)
+from src.metrics import auroc_error, ece
 from src.plots import (
     plot_h4_interaction,
     plot_rq4_ablation,
     plot_rq4_category_transfer,
+    plot_rq4_coefficients,
     plot_rq4_permutation_nulls,
     plot_rq4_progression,
     plot_rq4_transfer,
+    plot_reliability_diagram,
 )
 from src.predictor import (
     MODEL_FACTORIES,
     TIER_BUILDERS,
     build_xyg,
     encode_features,
+    make_logreg,
     permutation_null,
     percentile_of_null,
     repeated_stratified_group_kfold,
@@ -840,10 +893,216 @@ def main_ablation(config_path: str) -> None:
     )
 
 
+# --- Task 5.9 (meta-model calibration: reliability + coefficients) ----
+#
+# See this module's own docstring for the full population/model/CI
+# rationale.
+
+
+def compute_meta_oof_score(population: pd.DataFrame, seed: int) -> np.ndarray:
+    """Tier C + logreg's averaged out-of-fold P(correct) across the 10
+    D8 repeats - the reliability diagram's input. Same recipe as
+    compute_h4_oof_score(), pointed at Tier C instead of Tier A: this
+    task wants the calibration of the actual full-feature predictor,
+    not H4's specifically-Tier-A interaction predictor.
+    """
+    results = run_predictor(population, build_tier_c, "logreg", seed)
+    return np.mean([r.oof_pred for r in results], axis=0)
+
+
+def compute_meta_calibration(population: pd.DataFrame, seed: int, n_bins: int) -> dict:
+    """P(judge is wrong) = 1 - mean_oof_P(correct), and its ECE against
+    the actual wrong/right outcome (CLAUDE.md invariant 4 - ece() picks
+    its own binning strategy). Also reports the OOF AUROC alongside it
+    (invariant 6 - ECE never ships alone).
+
+    Args:
+        population: load_rq4_population()'s output.
+        seed: config.seed.
+        n_bins: config.n_bins.
+
+    Returns:
+        dict with p_wrong, is_wrong (both arrays, positionally aligned
+        to `population`), ece, n_effective_bins, auroc.
+    """
+    mean_oof_correct = compute_meta_oof_score(population, seed)
+    correct = population["correct"].astype(int).to_numpy()
+    p_wrong = 1 - mean_oof_correct
+    is_wrong = 1 - correct
+
+    ece_value, n_effective_bins = ece(p_wrong, is_wrong, n_bins)
+    auroc = float(roc_auc_score(correct, mean_oof_correct))
+
+    return {
+        "p_wrong": p_wrong,
+        "is_wrong": is_wrong,
+        "ece": ece_value,
+        "n_effective_bins": n_effective_bins,
+        "auroc": auroc,
+    }
+
+
+def _feature_family(feature_name: str) -> str:
+    """Tier-family label ("A"/"B"/"C") for one Tier C ENCODED feature
+    name - plot_rq4_coefficients()'s color grouping. Category's one-hot
+    dummies (pd.get_dummies's "category_<value>" naming, predictor.py::
+    encode_features()) fall through to Tier B, matching `category`'s own
+    (unencoded) tier membership rather than becoming a fourth family.
+    """
+    if feature_name in TIER_A_COLUMNS:
+        return "A"
+    if feature_name in TIER_C_EXTRA_COLUMNS:
+        return "C"
+    return "B"
+
+
+def fit_full_logreg_coefficients(population: pd.DataFrame) -> tuple[LogisticRegression, list[str]]:
+    """Fits make_logreg() ONCE on Tier C over the FULL population (no CV
+    split) - coefficients describe one model's read of the whole
+    dataset, not a per-fold quantity the way an AUROC is. Returns the
+    fitted classifier step (coef_ is on the STANDARDIZED scale, so
+    magnitudes are directly comparable across features - StandardScaler
+    lives inside make_logreg()'s own Pipeline) and the encoded feature
+    names in the SAME column order as coef_, so callers never re-derive
+    that alignment themselves.
+    """
+    X = encode_features(build_tier_c(population))
+    y = population["correct"].astype(int).to_numpy()
+    pipeline = make_logreg()
+    pipeline.fit(X, y)
+    return pipeline.named_steps["clf"], list(X.columns)
+
+
+def bootstrap_coefficient_cis(
+    population: pd.DataFrame, feature_names: list[str], n: int = 2000, ci: float = 0.95, seed: int = 0
+) -> tuple[np.ndarray, np.ndarray]:
+    """Cluster-bootstrap CI (question_id, invariant 2) on EVERY Tier C
+    coefficient AT ONCE - see this module's own docstring for why this
+    is its own loop rather than n calls to src/boot.py::cluster_bootstrap
+    (one refit per replicate yields every feature's draw together, and
+    keeps each replicate's features correlated the way the real fit's
+    features are, instead of bootstrapping each one independently).
+
+    One replicate: resample question_id values with replacement (same
+    mechanics as cluster_bootstrap's own docstring), refit make_logreg()
+    on Tier C over the resampled rows, record the whole coefficient
+    vector. `.reindex(columns=feature_names, fill_value=0)` guards
+    against the rare resample where some category dummy's rows didn't
+    get drawn at all - encode_features() would then simply omit that
+    column, so it's added back as an all-zero column rather than
+    silently misaligning every later column against feature_names.
+
+    Args:
+        population: load_rq4_population()'s output.
+        feature_names: fit_full_logreg_coefficients()'s own column order
+            - what boot_coefs' columns must align to.
+        n: bootstrap replicates (2000, D15's own convention).
+        ci: confidence level.
+        seed: required and explicit (CLAUDE.md sec 5).
+
+    Returns:
+        (ci_low, ci_high) - one value per feature_names entry, same
+        order.
+    """
+    rng = np.random.default_rng(seed)
+    groups = population["question_id"].unique()
+    n_groups = len(groups)
+    group_indices = {
+        group: population.index[population["question_id"] == group].to_numpy() for group in groups
+    }
+
+    boot_coefs = np.empty((n, len(feature_names)))
+    for i in range(n):
+        sampled_groups = rng.choice(groups, size=n_groups, replace=True)
+        sampled_indices = np.concatenate([group_indices[group] for group in sampled_groups])
+        resampled = population.loc[sampled_indices]
+
+        X = encode_features(build_tier_c(resampled)).reindex(columns=feature_names, fill_value=0)
+        y = resampled["correct"].astype(int).to_numpy()
+        pipeline = make_logreg()
+        pipeline.fit(X, y)
+        boot_coefs[i] = pipeline.named_steps["clf"].coef_[0]
+
+    alpha = 1 - ci
+    ci_low = np.quantile(boot_coefs, alpha / 2, axis=0)
+    ci_high = np.quantile(boot_coefs, 1 - alpha / 2, axis=0)
+    return ci_low, ci_high
+
+
+def compute_meta_coefficients(population: pd.DataFrame, seed: int, n_boot: int = 2000) -> pd.DataFrame:
+    """The full task 5.9 coefficient table: point estimate from ONE fit
+    on the real data (fit_full_logreg_coefficients), CI from
+    bootstrap_coefficient_cis - matching cluster_bootstrap()'s own
+    convention that the point estimate is the real fit, never the mean
+    of the bootstrap replicates (the replicates characterize spread,
+    they don't re-estimate the center).
+
+    Returns:
+        DataFrame: feature, family (A/B/C), coef, ci_low, ci_high - one
+        row per Tier C encoded feature.
+    """
+    clf, feature_names = fit_full_logreg_coefficients(population)
+    ci_low, ci_high = bootstrap_coefficient_cis(population, feature_names, n=n_boot, seed=seed)
+
+    return pd.DataFrame(
+        {
+            "feature": feature_names,
+            "family": [_feature_family(name) for name in feature_names],
+            "coef": clf.coef_[0],
+            "ci_low": ci_low,
+            "ci_high": ci_high,
+        }
+    )
+
+
+def main_calibration(config_path: str) -> None:
+    config = Config.from_yaml(config_path)
+    population = load_rq4_population(config.paths.items_parquet)
+    print(f"Meta-model calibration population: N={len(population)} (RQ4 base, Tier C + logreg)")
+
+    calibration = compute_meta_calibration(population, config.seed, config.n_bins)
+    print(f"OOF AUROC (D8, 10x5 repeated CV) = {calibration['auroc']:.4f}")
+    print(
+        f"ECE of P(judge is wrong) = {calibration['ece']:.4f} "
+        f"(n_effective_bins={calibration['n_effective_bins']})"
+    )
+
+    plot_reliability_diagram(
+        confidences=calibration["p_wrong"],
+        correct=calibration["is_wrong"],
+        signal_name="rq4_meta_model",
+        n_bins=config.n_bins,
+        model_slug=config.model_slug,
+    )
+
+    print()
+    print("Fitting Tier C + logreg coefficients on the full population, cluster-bootstrap CI (B=2000)...")
+    coef_table = compute_meta_coefficients(population, config.seed)
+    coef_path = f"results/rq4_coefficients_{config.model_slug}.csv"
+    coef_table.to_csv(coef_path, index=False)
+    print(f"Wrote {len(coef_table)} rows to {coef_path}")
+
+    n_significant = int(((coef_table["ci_low"] > 0) | (coef_table["ci_high"] < 0)).sum())
+    print(f"{n_significant}/{len(coef_table)} coefficients have a CI excluding 0")
+    for family in ["A", "B", "C"]:
+        family_rows = coef_table[coef_table["family"] == family]
+        family_significant = int(((family_rows["ci_low"] > 0) | (family_rows["ci_high"] < 0)).sum())
+        print(f"  Tier {family}: {family_significant}/{len(family_rows)} coefficients have a CI excluding 0")
+
+    plot_rq4_coefficients(
+        features=coef_table["feature"].tolist(),
+        coef=coef_table["coef"].to_numpy(),
+        ci_low=coef_table["ci_low"].to_numpy(),
+        ci_high=coef_table["ci_high"].to_numpy(),
+        family=coef_table["family"].tolist(),
+        model_slug=config.model_slug,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--task", required=True, choices=["ablation", "h4", "transfer", "category"])
+    parser.add_argument("--task", required=True, choices=["ablation", "h4", "transfer", "category", "calibration"])
     args = parser.parse_args()
     if args.task == "ablation":
         main_ablation(args.config)
@@ -851,5 +1110,7 @@ if __name__ == "__main__":
         main_h4(args.config)
     elif args.task == "transfer":
         main_transfer(args.config)
-    else:
+    elif args.task == "category":
         main_category(args.config)
+    else:
+        main_calibration(args.config)
