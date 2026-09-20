@@ -95,6 +95,7 @@ from src.metrics import auroc_error
 from src.plots import (
     plot_h4_interaction,
     plot_rq4_ablation,
+    plot_rq4_category_transfer,
     plot_rq4_permutation_nulls,
     plot_rq4_progression,
     plot_rq4_transfer,
@@ -735,6 +736,13 @@ def main_category(config_path: str) -> None:
     table_path = f"results/rq4_category_transfer_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
+
+    plot_rq4_category_transfer(
+        categories=table["category"].tolist(),
+        models=table["model"].tolist(),
+        auroc=table["auroc"].to_numpy(),
+        model_slug=config.model_slug,
+    )
 
 
 def main_ablation(config_path: str) -> None:
