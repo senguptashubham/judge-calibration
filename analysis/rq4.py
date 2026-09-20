@@ -1,15 +1,15 @@
-"""RQ4 tasks 5.5 (tier ablation) and 5.6 (H4, the continuous
-disagreement interaction) - same RQ, same file, mirroring how
-analysis/rq3.py holds both of RQ3's sub-tasks (4.3, 4.4) rather than
-splitting per-task. See TASKS.md tasks 5.5/5.6, PLAN.md §2.2's reframe
-("which feature family carries the signal") and §2.3 ("the label
-problem").
+"""RQ4 tasks 5.5 (tier ablation), 5.6 (H4, the continuous disagreement
+interaction), and 5.7 (transfer test 1: train on clean, test on verbose)
+- same RQ, same file, mirroring how analysis/rq3.py holds both of RQ3's
+sub-tasks (4.3, 4.4) rather than splitting per-task. See TASKS.md tasks
+5.5/5.6/5.7, PLAN.md §2.2's reframe ("which feature family carries the
+signal"), §2.3 ("the label problem"), and §2.4 ("the transfer test").
 
-`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4}`
+`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer}`
 - each task is its own CLI invocation, not run together, since the
-ablation alone is already several hundred model fits; running both on
-every invocation would silently double that cost for no reason most of
-the time.
+ablation alone is already several hundred model fits; running all three
+on every invocation would silently multiply that cost for no reason most
+of the time.
 
 --- Task 5.5 (tier ablation) ---
 
@@ -83,14 +83,25 @@ import argparse
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
 
 from analysis.rq1 import SIGNALS
+from analysis.rq3 import load_rq3b_items
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
-from src.features import build_tier_a, load_rq4_population
+from src.features import TIER_A_COLUMNS, build_tier_a, load_rq4_population
 from src.metrics import auroc_error
 from src.plots import plot_h4_interaction, plot_rq4_ablation, plot_rq4_permutation_nulls, plot_rq4_progression
-from src.predictor import MODEL_FACTORIES, TIER_BUILDERS, build_xyg, permutation_null, percentile_of_null, run_predictor
+from src.predictor import (
+    MODEL_FACTORIES,
+    TIER_BUILDERS,
+    build_xyg,
+    encode_features,
+    permutation_null,
+    percentile_of_null,
+    repeated_stratified_group_kfold,
+    run_predictor,
+)
 
 
 def load_ablation_population(items_parquet: str) -> pd.DataFrame:
@@ -506,6 +517,138 @@ def main_h4(config_path: str) -> None:
     )
 
 
+# --- Task 5.7 (transfer test 1: train on clean, test on verbose) -------
+#
+# "Does an abstention layer trained on well-behaved data still work when
+# the judge is under attack?" (PLAN.md §2.4). Population: analysis/rq3.py's
+# load_rq3b_items() - the SAME clean/P1 vs verbose/P1 paired population
+# RQ3b already established (N=1836), not re-derived a third time.
+#
+# Feature-parity fix (D21, mandatory - not a Bayesian-specific carve-out):
+# Tier A minus {conf_sc, conf_ens, ens_entropy_total, ens_entropy_aleatoric,
+# ens_entropy_epistemic} - verbose has none of these (D19: self-consistency
+# sampling and the P2/P3 ensemble are both clean/P1-only). What survives is
+# just conf_verb/conf_lp/conf_bpe.
+#
+# Two numbers, computed with the SAME reduced feature set so the
+# comparison isolates the TRANSFER effect, not the feature-drop effect:
+#   - in-domain baseline: repeated grouped CV (D8) on clean alone - "how
+#     good is this reduced-feature model within its own training
+#     distribution."
+#   - transfer: fit ONCE on all of clean (frozen, no CV - this is about
+#     one offline-trained model's real deployment behavior), evaluate on
+#     all of verbose. CI via cluster-bootstrap over verbose's own
+#     question_id (invariant 2) - resampling the TEST set only, since the
+#     model itself is fixed, not refit per resample.
+#
+# DoD: ΔAUROC (transfer - in-domain) reported, for both LogReg and
+# HistGBM (D21 - not one model only).
+
+TRANSFER_SAFE_COLUMNS = [
+    c
+    for c in TIER_A_COLUMNS
+    if c not in {"conf_sc", "conf_ens", "ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_epistemic"}
+]
+
+
+def build_transfer_xy(items: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+    """TRANSFER_SAFE_COLUMNS's features (D21), encoded (encode_features()
+    is a no-op on these three - all already numeric - kept for
+    consistency/robustness, not because it currently does anything), the
+    `correct` target, and `question_id` as the grouping column - the
+    (X, y, groups) triple both compute_transfer_baseline() and
+    compute_transfer_auroc() need, for either clean or verbose items.
+    """
+    X = encode_features(items[TRANSFER_SAFE_COLUMNS].copy())
+    y = items["correct"].astype(int).to_numpy()
+    groups = items["question_id"].to_numpy()
+    return X, y, groups
+
+
+def compute_transfer_baseline(clean_items: pd.DataFrame, model_name: str, seed: int) -> dict:
+    """In-domain baseline: repeated grouped CV (D8) on clean_items ALONE,
+    using the SAME reduced (transfer-safe) feature set the transfer test
+    itself uses. Holding the feature set fixed is what isolates the
+    transfer effect: D21's parity fix already costs some AUROC even
+    within clean (if conf_sc/conf_ens carried real signal), and without
+    this baseline using the identical reduced set, a ΔAUROC against the
+    full Tier A's own clean performance would conflate "moving to
+    verbose hurt" with "dropping two columns hurt."
+    """
+    X, y, groups = build_transfer_xy(clean_items)
+    results = repeated_stratified_group_kfold(X, y, groups, MODEL_FACTORIES[model_name], seed=seed)
+    aurocs = [r.auroc for r in results]
+    return {"auroc_mean": sum(aurocs) / len(aurocs), "auroc_low": min(aurocs), "auroc_high": max(aurocs)}
+
+
+def compute_transfer_auroc(clean_items: pd.DataFrame, verbose_items: pd.DataFrame, model_name: str, seed: int) -> dict:
+    """The real transfer number: fit ONCE on all of clean_items, evaluate
+    the frozen model on verbose_items. Deliberately not a CV protocol -
+    D21's question is about one offline-trained model's behavior under
+    attack, not about re-characterizing training variance.
+
+    CI via cluster-bootstrap over verbose_items' question_id (invariant
+    2) - the model is fixed/frozen going in, so each bootstrap replicate
+    only resamples which verbose items get evaluated, never refits the
+    model itself.
+    """
+    X_train, y_train, _ = build_transfer_xy(clean_items)
+    X_test, y_test, groups_test = build_transfer_xy(verbose_items)
+
+    model = MODEL_FACTORIES[model_name](seed)
+    model.fit(X_train, y_train)
+    pred = model.predict_proba(X_test)[:, 1]
+
+    eval_df = pd.DataFrame({"question_id": groups_test, "correct": y_test, "pred": pred})
+
+    def _auroc(df: pd.DataFrame) -> float:
+        return float(roc_auc_score(df["correct"].to_numpy(), df["pred"].to_numpy()))
+
+    point, ci_low, ci_high = cluster_bootstrap(eval_df, _auroc, "question_id", seed=seed)
+    return {"auroc": point, "ci_low": ci_low, "ci_high": ci_high}
+
+
+def main_transfer(config_path: str) -> None:
+    config = Config.from_yaml(config_path)
+    clean_items, verbose_items = load_rq3b_items(config.paths.items_parquet)
+    print(f"Transfer test population: N={len(clean_items)} paired items (clean/P1 vs verbose/P1)")
+    print(f"Feature set (D21 parity fix): {TRANSFER_SAFE_COLUMNS}")
+
+    rows = []
+    for model_name in MODEL_FACTORIES:
+        baseline = compute_transfer_baseline(clean_items, model_name, config.seed)
+        transfer = compute_transfer_auroc(clean_items, verbose_items, model_name, config.seed)
+        delta = transfer["auroc"] - baseline["auroc_mean"]
+
+        print(
+            f"{model_name}: in-domain (clean) AUROC={baseline['auroc_mean']:.4f} "
+            f"[{baseline['auroc_low']:.4f}, {baseline['auroc_high']:.4f}] (D8 across-repeat spread)"
+        )
+        print(
+            f"{model_name}: transfer (clean->verbose) AUROC={transfer['auroc']:.4f} "
+            f"[{transfer['ci_low']:.4f}, {transfer['ci_high']:.4f}] (cluster-bootstrap over verbose)"
+        )
+        print(f"{model_name}: ΔAUROC (transfer - in-domain) = {delta:.4f}")
+
+        rows.append(
+            {
+                "model": model_name,
+                "baseline_auroc_mean": baseline["auroc_mean"],
+                "baseline_auroc_low": baseline["auroc_low"],
+                "baseline_auroc_high": baseline["auroc_high"],
+                "transfer_auroc": transfer["auroc"],
+                "transfer_ci_low": transfer["ci_low"],
+                "transfer_ci_high": transfer["ci_high"],
+                "delta_auroc": delta,
+            }
+        )
+
+    table = pd.DataFrame.from_records(rows)
+    table_path = f"results/rq4_transfer_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+
 def main_ablation(config_path: str) -> None:
     config = Config.from_yaml(config_path)
     population = load_ablation_population(config.paths.items_parquet)
@@ -604,9 +747,11 @@ def main_ablation(config_path: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--task", required=True, choices=["ablation", "h4"])
+    parser.add_argument("--task", required=True, choices=["ablation", "h4", "transfer"])
     args = parser.parse_args()
     if args.task == "ablation":
         main_ablation(args.config)
-    else:
+    elif args.task == "h4":
         main_h4(args.config)
+    else:
+        main_transfer(args.config)
