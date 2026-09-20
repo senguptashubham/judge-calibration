@@ -1110,7 +1110,6 @@ def plot_rq4_category_transfer(
     models: list[str],
     auroc: np.ndarray,
     model_slug: str,
-    flag_category: str = "coding",
 ) -> Figure:
     """Task 5.8's figure: grouped bar chart, one group per MT-Bench
     category, one bar per model within each group - the held-out AUROC
@@ -1120,13 +1119,14 @@ def plot_rq4_category_transfer(
     Categories are sorted WEAKEST TO STRONGEST (by mean AUROC across
     models), not alphabetically - so "which categories does the
     predictor struggle on" reads directly off the x-axis without
-    needing to scan a table. `flag_category` (default "coding" - the
-    preregistered worry, PLAN.md §2.4: "is it learning 'coding
-    questions are hard'") gets a dashed black outline on its bars, so
-    the actual 20 Sep 2026 result - coding lands solidly mid-pack, NOT
-    among the weakest categories (writing and reasoning are) - is
-    visible as a direct contradiction of the hypothesis, not just a
-    number you have to already know to appreciate.
+    needing to scan a table. No category is singled out for highlight -
+    an earlier version flagged "coding" (PLAN.md §2.4's own illustrative
+    phrasing, "is it learning 'coding questions are hard'"), but that
+    turned out to be an unexamined example carried over into the plan
+    text, not a reasoned hypothesis about this specific judge/dataset
+    (20 Sep 2026 discussion) - singling it out visually would have kept
+    presenting it as the headline question when the plot itself is a
+    more honest, unprejudiced answer without picking a side beforehand.
 
     A dashed reference line at 0.5 (chance) gives a visual floor - the
     real story here is that every category clears it comfortably, no
@@ -1140,8 +1140,6 @@ def plot_rq4_category_transfer(
         auroc: held-out AUROC per row, same order.
         model_slug: Config.model_slug - namespaces the saved filename so
             a second judge model never overwrites the first's figure.
-        flag_category: which category gets the dashed-outline highlight
-            (the preregistered "expected hardest" category).
 
     Returns:
         The Figure (also saved to
@@ -1159,25 +1157,13 @@ def plot_rq4_category_transfer(
     for i, model in enumerate(model_order):
         model_df = df[df["model"] == model].set_index("category").reindex(category_order)
         x = np.arange(len(category_order)) + (i - (len(model_order) - 1) / 2) * bar_width
-        bars = ax.bar(x, model_df["auroc"].to_numpy(), width=bar_width, label=model, zorder=2)
-
-        # Dashed outline on the flagged category's bar only - visually
-        # separates "the category we worried about" from the rest
-        # without a separate legend entry per bar.
-        for category, bar in zip(category_order, bars):
-            if category == flag_category:
-                bar.set_edgecolor("black")
-                bar.set_linewidth(2.5)
-                bar.set_linestyle("--")
+        ax.bar(x, model_df["auroc"].to_numpy(), width=bar_width, label=model, zorder=2)
 
     ax.set_xticks(np.arange(len(category_order)))
     ax.set_xticklabels(category_order, rotation=30, ha="right")
     ax.set_ylim(0, 1)
     ax.set_ylabel("held-out AUROC (LeaveOneGroupOut)")
-    ax.set_title(
-        f"RQ4 transfer test 2: generalization across category (task 5.8)\n"
-        f"dashed outline = '{flag_category}', the preregistered 'expected hardest' category"
-    )
+    ax.set_title("RQ4 transfer test 2: generalization across category (task 5.8)")
     ax.legend(loc="lower right", fontsize=9)
     fig.tight_layout()
 
