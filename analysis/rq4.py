@@ -84,6 +84,7 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import LeaveOneGroupOut
 
 from analysis.rq1 import SIGNALS
 from analysis.rq3 import load_rq3b_items
@@ -666,6 +667,54 @@ def main_transfer(config_path: str) -> None:
     )
 
 
+# --- Task 5.8 (transfer test 2: LeaveOneGroupOut over category) --------
+#
+# Skeleton only - bodies TODO. Full Tier A (no exclusions - unlike 5.7,
+# this never leaves `clean`, so conf_sc/conf_ens stay valid on both
+# sides of every split). `category` is the GROUPING variable for the
+# split (LeaveOneGroupOut), never an input feature.
+
+
+def compute_category_held_out_auroc(population: pd.DataFrame, model_name: str, seed: int) -> pd.DataFrame:
+    """LeaveOneGroupOut over `category` (8 MT-Bench categories, D-none -
+    this is a new grouping axis, not question_id): for each category,
+    fit `model_name` on the other 7 categories' rows, evaluate on the
+    held-out category alone. No shuffle/random_state/repeats - unlike
+    StratifiedGroupKFold, LeaveOneGroupOut is fully deterministic (one
+    fixed split per unique group value), so there's nothing to average
+    over the way D8's 10-seed protocol does.
+
+    Args:
+        population: features.py::load_rq4_population()'s output.
+        model_name: "logreg" or "histgbm" (MODEL_FACTORIES's keys).
+        seed: config.seed - passed to the model factory (make_histgbm
+            uses it; make_logreg ignores it, see predictor.py).
+
+    Returns:
+        DataFrame, one row per category: category, model, n (held-out
+        row count), auroc.
+    """
+    raise NotImplementedError(
+        "task 5.8: X = encode_features(build_tier_a(population)); "
+        "y = population['correct'].astype(int).to_numpy(); "
+        "groups = population['category'].to_numpy(); "
+        "for train_idx, test_idx in LeaveOneGroupOut().split(X, y, groups): "
+        "fit MODEL_FACTORIES[model_name](seed) on train, predict_proba on test, "
+        "roc_auc_score(y[test_idx], pred), record category=groups[test_idx][0]"
+    )
+
+
+def main_category(config_path: str) -> None:
+    """TODO (task 5.8): load_rq4_population() -> compute_category_held_out_auroc()
+    for each model in MODEL_FACTORIES -> concat into one table -> print
+    each row + the min/max AUROC spread across categories (the DoD's
+    "generalizes, or learns 'coding is hard'" reading - a tight spread
+    says generalizes, one category cratering says shortcut) -> write
+    results/rq4_category_transfer_{model_slug}.csv.
+    """
+    raise NotImplementedError("task 5.8: see this function's own docstring for the pipeline")
+
+
 def main_ablation(config_path: str) -> None:
     config = Config.from_yaml(config_path)
     population = load_ablation_population(config.paths.items_parquet)
@@ -764,11 +813,13 @@ def main_ablation(config_path: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--task", required=True, choices=["ablation", "h4", "transfer"])
+    parser.add_argument("--task", required=True, choices=["ablation", "h4", "transfer", "category"])
     args = parser.parse_args()
     if args.task == "ablation":
         main_ablation(args.config)
     elif args.task == "h4":
         main_h4(args.config)
-    else:
+    elif args.task == "transfer":
         main_transfer(args.config)
+    else:
+        main_category(args.config)
