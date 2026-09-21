@@ -1361,5 +1361,56 @@ def plot_rq4_coefficients_full(
     return fig
 
 
+def plot_bayesian_convergence(max_rhat: np.ndarray, flagged: np.ndarray, model_slug: str) -> Figure:
+    """Task 5.9c's convergence-diagnostics figure: one point per real
+    fold-fit (50 of them, D8's 5-fold x 10-repeat protocol) - max R-hat
+    against D22's 1.01 threshold, flagged fits colored differently. This
+    is the picture 5.9b's own results were missing - "1/50 fold-fits
+    flagged" (TASKS.md 5.9b) was only ever a number in a terminal
+    printout/closeout note until now, not something checkable at a
+    glance.
+
+    Args:
+        max_rhat: max R-hat per fold-fit, in fit order (analysis/rq4.py::
+            compute_bayesian_arm()'s fold_diagnostics, flattened).
+        flagged: whether each fold-fit was flagged - convergence_
+            diagnostics()'s own definition (max_rhat > 1.01, max_rhat is
+            NaN, or divergences > 0), same order as max_rhat.
+        model_slug: Config.model_slug - namespaces the saved filename so
+            a second judge model never overwrites the first's figure.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq4_bayesian_convergence_{model_slug}.png).
+    """
+    max_rhat_arr = np.asarray(max_rhat, dtype=float)
+    flagged_arr = np.asarray(flagged, dtype=bool)
+    x = np.arange(len(max_rhat_arr))
+    point_colors = np.where(flagged_arr, "tab:red", "tab:blue")
+
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ax.axhline(1.01, linestyle="--", color="gray", linewidth=1, zorder=1)
+    ax.scatter(x, max_rhat_arr, c=point_colors, zorder=2)
+
+    n_flagged = int(flagged_arr.sum())
+    legend_handles = [
+        Line2D([0], [0], linestyle="--", color="gray", label="D22 threshold (1.01)"),
+        Line2D(
+            [0], [0], marker="o", linestyle="", color="tab:blue",
+            label=f"converged ({len(flagged_arr) - n_flagged})",
+        ),
+        Line2D([0], [0], marker="o", linestyle="", color="tab:red", label=f"flagged ({n_flagged})"),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=9)
+    ax.set_xlabel("fold-fit (50 total: 5 folds x 10 repeats, D8)")
+    ax.set_ylabel("max R-hat")
+    ax.set_title(f"Bayesian model convergence across all fold-fits (task 5.9c, {model_slug})")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq4_bayesian_convergence_{model_slug}.png", dpi=150)
+    return fig
+
+
 if __name__ == "__main__":
     plot_ece_auroc_orthogonal()

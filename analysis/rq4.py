@@ -1,17 +1,66 @@
 """RQ4 tasks 5.5 (tier ablation), 5.6 (H4, the continuous disagreement
 interaction), 5.7 (transfer test 1: train on clean, test on verbose),
-5.8 (transfer test 2: LeaveOneGroupOut over category), and 5.9
-(meta-model calibration: reliability diagram + coefficients) - same RQ,
-same file, mirroring how analysis/rq3.py holds both of RQ3's sub-tasks
-(4.3, 4.4) rather than splitting per-task. See TASKS.md tasks
-5.5-5.9, PLAN.md §2.2's reframe ("which feature family carries the
-signal"), §2.3 ("the label problem"), and §2.4 ("the transfer test").
+5.8 (transfer test 2: LeaveOneGroupOut over category), 5.9 (meta-model
+calibration: reliability diagram + coefficients), and 5.9c (frequentist
+vs Bayesian head-to-head) - same RQ, same file, mirroring how
+analysis/rq3.py holds both of RQ3's sub-tasks (4.3, 4.4) rather than
+splitting per-task. See TASKS.md tasks 5.5-5.9c, PLAN.md §2.2's reframe
+("which feature family carries the signal"), §2.3 ("the label
+problem"), and §2.4 ("the transfer test").
 
-`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration}`
+`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration,bayesian_comparison}`
 - each task is its own CLI invocation, not run together, since the
 ablation alone is already several hundred model fits; running all three
 on every invocation would silently multiply that cost for no reason most
 of the time.
+
+--- Task 5.9c (frequentist vs Bayesian head-to-head) -----------------
+
+Population/tier: load_rq4_population() (N=1819), Tier A - matching
+5.9b's own choice, NOT 5.9's Tier C. The comparison needs both arms on
+the SAME feature set or it conflates "Bayesian vs frequentist" with
+"different features" (same apples-to-apples discipline as 5.7's D21
+feature-parity fix) - 5.9's Tier C choice answered a different question
+(which feature family carries signal), not this one.
+
+AUROC: D8's own convention for BOTH arms - mean + across-repeat spread
+(min/max across the 10 repeats' own AUROCs), never a within-split CI.
+
+ECE/Brier: one P(correct) per item, averaged OOF across the 10 repeats
+(frequentist: run_predictor's own oof_pred, averaged; Bayesian:
+BayesianRepeatResult.oof_pred, averaged the same way) - reusing D8's
+established "average across repeats before scoring a per-item metric"
+recipe, not a new one.
+
+NLL/coverage_90 (Bayesian-only, D22 - "the last two exist only for the
+Bayesian arm, since the frequentist model has no native posterior"):
+  - Per-item posterior predictive draws are POOLED across all 10
+    repeats (np.concatenate, not averaged) - each repeat is an
+    independent full refit on a different fold partition, so pooling
+    combines posterior uncertainty AND partition variability into one
+    richer per-item predictive sample, rather than discarding 9 of the
+    10 repeats' worth of draws.
+  - NLL: the proper posterior-predictive log-likelihood per item -
+    average the BERNOULLI LIKELIHOOD across pooled draws FIRST, then
+    take -log. Never plug the mean probability into a point-NLL formula
+    - that would just be Brier with extra steps and throw away exactly
+    what makes this metric "Bayesian" (the draws' own spread).
+  - coverage_90: D22 doesn't specify how "credible-interval coverage"
+    applies to a BINARY outcome - a single 0/1 draw can't meaningfully
+    "fall inside" a probability interval the way a continuous value
+    can. Resolved (21 Sep 2026 discussion) via BIN-AGGREGATE coverage,
+    reusing ece()'s own quantile binning (get_bin_edges): per bin, does
+    the bin's EMPIRICAL accuracy (many real 0/1 outcomes aggregated
+    into one meaningful continuous quantity) fall inside that bin's OWN
+    pooled 90% credible interval (5th/95th percentile of every draw of
+    every item in the bin)? coverage_90 = fraction of bins where it
+    does - the same "turn per-item binary noise into a checkable
+    per-bin quantity" move ECE itself already makes.
+
+Writes results/rq4_bayesian_comparison_{model_slug}.csv (D26) +
+results/figures/reliability_rq4_bayesian_meta_model_{model_slug}.png +
+results/figures/rq4_bayesian_convergence_{model_slug}.png (the real
+50-fold-fit R-hat picture 5.9b's own results were missing).
 
 --- Task 5.5 (tier ablation) ---
 
@@ -141,8 +190,10 @@ from src.features import (
     build_tier_c,
     load_rq4_population,
 )
-from src.metrics import auroc_error, ece
+from src.bayesian import repeated_stratified_group_kfold_bayesian
+from src.metrics import auroc_error, brier, ece, get_bin_edges
 from src.plots import (
+    plot_bayesian_convergence,
     plot_h4_interaction,
     plot_rq4_ablation,
     plot_rq4_category_transfer,
@@ -724,7 +775,7 @@ def main_transfer(config_path: str) -> None:
 
 # --- Task 5.8 (transfer test 2: LeaveOneGroupOut over category) --------
 #
-# Skeleton only - bodies TODO. Full Tier A (no exclusions - unlike 5.7,
+# Full Tier A (no exclusions - unlike 5.7,
 # this never leaves `clean`, so conf_sc/conf_ens stay valid on both
 # sides of every split). `category` is the GROUPING variable for the
 # split (LeaveOneGroupOut), never an input feature.
@@ -765,7 +816,7 @@ def compute_category_held_out_auroc(population: pd.DataFrame, model_name: str, s
 
 
 def main_category(config_path: str) -> None:
-    """TODO (task 5.8): load_rq4_population() -> compute_category_held_out_auroc()
+    """load_rq4_population() -> compute_category_held_out_auroc()
     for each model in MODEL_FACTORIES -> concat into one table -> print
     each row + the min/max AUROC spread across categories (the DoD's
     "generalizes, or learns 'coding is hard'" reading - a tight spread
@@ -1114,10 +1165,198 @@ def main_calibration(config_path: str) -> None:
     )
 
 
+# --- Task 5.9c (frequentist vs Bayesian head-to-head) -------------------
+#
+# See this module's own docstring for the full population/tier/metric
+# rationale (especially the NLL and bin-aggregate coverage_90 methods,
+# neither of which D22 fully specifies).
+
+
+def compute_frequentist_arm(population: pd.DataFrame, seed: int) -> dict:
+    """Tier A + logreg's D8 repeated-CV result - the frequentist side of
+    5.9c's head-to-head. Calls run_predictor() directly rather than
+    reusing compute_h4_oof_score() (which only exposes the averaged OOF
+    array) since this needs BOTH the per-repeat AUROCs (for the D8
+    mean/spread) and the averaged OOF prediction (for ECE/Brier).
+    """
+    results = run_predictor(population, build_tier_a, "logreg", seed)
+    return {
+        "aurocs": np.array([r.auroc for r in results]),
+        "mean_oof_correct": np.mean([r.oof_pred for r in results], axis=0),
+    }
+
+
+def compute_bayesian_arm(
+    population: pd.DataFrame, seed: int, num_warmup: int = 500, num_samples: int = 1000, num_chains: int = 2
+) -> dict:
+    """Tier A Bayesian hierarchical model's D8 repeated-CV result (5.9b)
+    on the SAME population/tier as compute_frequentist_arm() - the
+    Bayesian side of the head-to-head. Settings default to 5.9b's own
+    real, measured (not guessed) protocol - TASKS.md 5.9b: 7.0 minutes
+    for the full 50-fold-fit run at these exact numbers.
+    """
+    X, y, groups = build_xyg(population, build_tier_a)
+    results = repeated_stratified_group_kfold_bayesian(
+        X, y, groups, seed=seed, num_warmup=num_warmup, num_samples=num_samples, num_chains=num_chains
+    )
+    return {
+        "aurocs": np.array([r.auroc for r in results]),
+        "mean_oof_correct": np.mean([r.oof_pred for r in results], axis=0),
+        # Pooled across all 10 repeats by concatenation, NOT averaging -
+        # see this module's own docstring for why: each repeat is an
+        # independent full refit on a different fold partition, so
+        # pooling combines posterior uncertainty AND partition
+        # variability into one richer per-item predictive sample.
+        # float32 - a real memory consideration at this scale (10
+        # repeats x 2000 draws x 1819 items), not just a style choice.
+        "pooled_draws": np.concatenate([r.oof_draws for r in results], axis=0).astype(np.float32),
+        "fold_diagnostics": [fold_diag for r in results for fold_diag in r.fold_diagnostics],
+    }
+
+
+def compute_bayesian_nll(pooled_draws: np.ndarray, is_wrong: np.ndarray) -> float:
+    """Proper posterior-predictive NLL, per item: average the BERNOULLI
+    LIKELIHOOD across pooled draws FIRST, then -log - never plug the
+    mean probability into a point-NLL formula, which would discard the
+    draws' own spread and just be Brier with extra steps (see this
+    module's own docstring).
+
+    Args:
+        pooled_draws: (n_pooled_draws, n_rows) - P(wrong) per draw per
+            item, compute_bayesian_arm()'s own pooled_draws framed as
+            "wrong" (1 - P(correct)).
+        is_wrong: (n_rows,) - 1 if the judge was wrong, 0 if correct.
+
+    Returns:
+        Mean NLL across items (lower is better).
+    """
+    is_wrong_arr = is_wrong.astype(np.float32)
+    likelihood_per_draw = is_wrong_arr[None, :] * pooled_draws + (1 - is_wrong_arr[None, :]) * (1 - pooled_draws)
+    mean_likelihood_per_item = likelihood_per_draw.mean(axis=0)
+    # An item every pooled draw got confidently wrong about would give
+    # mean_likelihood_per_item exactly 0 - log(0) = -inf. Clipped, not
+    # silently producing inf/nan in a headline number.
+    mean_likelihood_per_item = np.clip(mean_likelihood_per_item, 1e-12, 1.0)
+    return float(-np.mean(np.log(mean_likelihood_per_item)))
+
+
+def compute_bayesian_coverage(pooled_draws: np.ndarray, p_wrong: np.ndarray, is_wrong: np.ndarray, n_bins: int) -> float:
+    """Bin-aggregate 90% credible-interval coverage (21 Sep 2026
+    discussion - see this module's own docstring for why per-item
+    coverage isn't well-defined for a binary outcome, and why this
+    bin-aggregate form is the resolution).
+
+    Bins by p_wrong - the SAME quantity ece()/plot_reliability_diagram()
+    already bin by elsewhere in this project, via get_bin_edges() so the
+    binning strategy (quantile vs. discrete-unique-value) is identical
+    to every other reliability check here, not a bespoke one.
+
+    Args:
+        pooled_draws: (n_pooled_draws, n_rows) - P(wrong) per draw per
+            item.
+        p_wrong: (n_rows,) - mean P(wrong) per item, the binning
+            variable.
+        is_wrong: (n_rows,) - 1 if the judge was wrong, 0 if correct.
+        n_bins: config.n_bins.
+
+    Returns:
+        Fraction of bins whose empirical wrong-rate falls inside that
+        bin's own pooled 90% credible interval.
+    """
+    edges = get_bin_edges(p_wrong, n_bins, "auto")
+    bin_labels = np.digitize(p_wrong, edges)
+
+    covered = []
+    for bin_label in np.unique(bin_labels):
+        mask = bin_labels == bin_label
+        empirical_wrong_rate = is_wrong[mask].mean()
+        bin_draws = pooled_draws[:, mask]
+        lo, hi = np.percentile(bin_draws, [5, 95])
+        covered.append(lo <= empirical_wrong_rate <= hi)
+
+    return float(np.mean(covered))
+
+
+def main_bayesian_comparison(config_path: str) -> None:
+    config = Config.from_yaml(config_path)
+    population = load_rq4_population(config.paths.items_parquet)
+    is_wrong = 1 - population["correct"].astype(int).to_numpy()
+    print(f"Bayesian head-to-head population: N={len(population)} (RQ4 base, Tier A)")
+
+    print("Fitting frequentist arm (Tier A + logreg, D8 10x5 repeated CV)...")
+    freq = compute_frequentist_arm(population, config.seed)
+
+    print("Fitting Bayesian arm (Tier A hierarchical logit, D8 10x5 repeated CV - ~7 min, see TASKS.md 5.9b)...")
+    bayes = compute_bayesian_arm(population, config.seed)
+
+    freq_p_wrong = 1 - freq["mean_oof_correct"]
+    bayes_p_wrong = 1 - bayes["mean_oof_correct"]
+
+    freq_ece, _ = ece(freq_p_wrong, is_wrong, config.n_bins)
+    freq_brier = brier(freq_p_wrong, is_wrong)
+    bayes_ece, _ = ece(bayes_p_wrong, is_wrong, config.n_bins)
+    bayes_brier = brier(bayes_p_wrong, is_wrong)
+
+    bayes_pooled_wrong_draws = 1 - bayes["pooled_draws"]
+    bayes_nll = compute_bayesian_nll(bayes_pooled_wrong_draws, is_wrong)
+    bayes_coverage = compute_bayesian_coverage(bayes_pooled_wrong_draws, bayes_p_wrong, is_wrong, config.n_bins)
+
+    table = pd.DataFrame.from_records(
+        [
+            {
+                "model": "frequentist_logreg",
+                "auroc_mean": freq["aurocs"].mean(),
+                "auroc_low": freq["aurocs"].min(),
+                "auroc_high": freq["aurocs"].max(),
+                "ece": freq_ece,
+                "brier": freq_brier,
+                "nll": np.nan,
+                "coverage_90": np.nan,
+            },
+            {
+                "model": "bayesian_hierarchical",
+                "auroc_mean": bayes["aurocs"].mean(),
+                "auroc_low": bayes["aurocs"].min(),
+                "auroc_high": bayes["aurocs"].max(),
+                "ece": bayes_ece,
+                "brier": bayes_brier,
+                "nll": bayes_nll,
+                "coverage_90": bayes_coverage,
+            },
+        ]
+    )
+    table_path = f"results/rq4_bayesian_comparison_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(table.to_string(index=False))
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+    plot_reliability_diagram(
+        confidences=bayes_p_wrong,
+        correct=is_wrong,
+        signal_name="rq4_bayesian_meta_model",
+        n_bins=config.n_bins,
+        model_slug=config.model_slug,
+    )
+
+    all_diag = bayes["fold_diagnostics"]
+    n_flagged = sum(fold_diag["flagged"] for fold_diag in all_diag)
+    print(f"Bayesian convergence: {n_flagged}/{len(all_diag)} fold-fits flagged")
+
+    plot_bayesian_convergence(
+        max_rhat=np.array([fold_diag["max_rhat"] for fold_diag in all_diag]),
+        flagged=np.array([fold_diag["flagged"] for fold_diag in all_diag]),
+        model_slug=config.model_slug,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--task", required=True, choices=["ablation", "h4", "transfer", "category", "calibration"])
+    parser.add_argument(
+        "--task",
+        required=True,
+        choices=["ablation", "h4", "transfer", "category", "calibration", "bayesian_comparison"],
+    )
     args = parser.parse_args()
     if args.task == "ablation":
         main_ablation(args.config)
@@ -1127,5 +1366,7 @@ if __name__ == "__main__":
         main_transfer(args.config)
     elif args.task == "category":
         main_category(args.config)
-    else:
+    elif args.task == "calibration":
         main_calibration(args.config)
+    else:
+        main_bayesian_comparison(args.config)
