@@ -284,6 +284,507 @@ reliability without any accuracy-side symptom to warn it.
 
 ---
 
+## RQ4 — Can a cheap supervised meta-model beat the best single signal at predicting judge error?
+
+*Written 22 Sep 2026. Framed per `PLAN.md` §2.2's reframe — the question this
+section actually answers is **which feature family carries the signal**, not
+"how good is my model." Three feature tiers (`src/features.py`): **Tier A** (8
+cols) — the judge's own uncertainty signals (`conf_verb`, `conf_lp`, `conf_sc`,
+`conf_bpe`, `conf_ens` + its total/aleatoric/epistemic entropy decomposition).
+**Tier B** (+9 cols) — surface properties the judge itself doesn't use as a
+signal (response lengths, turn, category, the judge's own output length,
+order-flip). **Tier C** (+13 cols) — token-distribution detail (verdict
+margin, CoT logprob/entropy aggregates, greedy and sampled). Every tier is
+built on one shared population — `features.py::load_rq4_population()`,
+`(clean, P1)`, `human_label` non-null, minus 17 items with an undefined
+`len_ratio`/`longer_is_chosen` (3 zero-length responses, 14 exact-length
+ties) — **N = 1819** — dropped uniformly across all three tiers so a score
+change between tiers is a real signal-content difference, never a population
+artifact. Two frequentist models throughout (invariant 11): `LogisticRegression(C=1.0)`
+and `HistGradientBoostingClassifier(max_depth=3, max_iter=200,
+learning_rate=0.05)` — no hyperparameter search, no kernel methods/RandomForest/XGBoost
+(rejected at design time: indefensible tuning burden at ~80 groups). A third
+model, the Bayesian hierarchical logistic regression (D22, `src/bayesian.py`),
+joins from task 5.9b onward. CV protocol throughout: `StratifiedGroupKFold(5)`,
+repeated over 10 seeds (D8) — the across-repeat spread is the headline
+uncertainty, never a within-split CI, since only ~80 questions means
+fold-to-fold variance is real at that scale. Analysis: `analysis/rq4.py`.
+Every point estimate not from D8's own repeated-CV spread is a cluster
+bootstrap, B=2000, grouped on `question_id` (invariant 2); condition/tier/model
+comparisons on the same item set use the *paired* cluster bootstrap
+(invariant 3).*
+
+**Headline: the judge's own uncertainty signals already carry essentially all
+the recoverable signal — engineered surface and token-distribution features
+add nothing measurable, at either the tier level or the individual-feature
+level.** This holds up two independent ways: the tier-level ablation (5.5)
+found the apparent A→B→C AUROC decline is statistically indistinguishable
+from no change at all (every paired-progression CI crosses zero), and the
+finer-grained coefficient analysis (5.9) confirms it isn't just underpowered
+noise hiding a real pattern — of 37 features in a model containing all three
+tiers at once, only 8 have a coefficient whose CI clears zero, and **not one
+of Tier C's 13 CoT/token-distribution features is among them.**
+
+### Tier ablation (5.5) — A → B → C, `human_agreed` items only
+
+*Population: `load_rq4_population()` further restricted to `human_agreed`
+(D16: `human_unanimous AND n_human_votes >= 2`) — **N = 556** (79/80 question
+groups), a much larger, non-population-neutral cut than it looks (69% of the
+base population dropped; accuracy rises 75.8%→78.4% on this easier subset,
+confirmed empirically) — so the baseline signal's own AUROC is recomputed on
+this exact population rather than reused from RQ2's table, which was scored
+on the full 1836-item base. Baseline = the best of the four original signals
+(`analysis/rq1.py::SIGNALS`) by point AUROC on this population, selection on
+the point estimate alone, never a CI-based tie-break (a signal with a
+genuinely higher point estimate but a noisier CI must still win).*
+
+| tier | model | AUROC | 95% spread (D8) |
+|---|---|---|---|
+| baseline (`conf_bpe`) | — | 0.8196 | [0.7746, 0.8622] |
+| A | logreg | 0.8239 | [0.8155, 0.8331] |
+| A | histgbm | 0.8188 | [0.8080, 0.8282] |
+| B | logreg | 0.8120 | [0.7943, 0.8228] |
+| B | histgbm | 0.8084 | [0.7983, 0.8176] |
+| C | logreg | 0.8065 | [0.7827, 0.8196] |
+| C | histgbm | 0.8048 | [0.7943, 0.8156] |
+
+Every cell clears chance decisively — a **permutation null** (invariant 12,
+n=200) centers at 0.496–0.512 across all six tier/model cells, and every
+observed AUROC sits at the **100th percentile** of its own null. That rules
+out "this is noise" for the whole-model AUROC, but not for the *pattern*
+across tiers — Tier A looks marginally best and C marginally worst in the
+table above, and that apparent decline needed its own, sharper test: a
+**paired cluster bootstrap** (invariant 3, same 556 items, different
+feature sets) on each step of the progression.
+
+| model | step | Δ AUROC | 95% CI |
+|---|---|---|---|
+| logreg | A − baseline | +0.0053 | [−0.0310, 0.0389] |
+| logreg | B − A | −0.0068 | [−0.0479, 0.0267] |
+| logreg | C − B | −0.0042 | [−0.0187, 0.0106] |
+| histgbm | A − baseline | +0.0051 | [−0.0157, 0.0257] |
+| histgbm | B − A | −0.0052 | [−0.0270, 0.0137] |
+| histgbm | C − B | +0.0008 | [−0.0135, 0.0171] |
+
+**Every single CI crosses zero.** The apparent A>B>C decline in the raw table
+is not statistically real at this sample size, for either model, at any
+step. Honest reading: Tier A's own uncertainty signals already capture
+whatever surface and token-distribution features have to offer — adding
+them neither measurably helps nor measurably hurts. Figures:
+`rq4_ablation_{model_slug}.png` (bar chart, baseline as its own bar),
+`rq4_progression_{model_slug}.png` (forest plot of the 6 paired deltas),
+`rq4_permutation_nulls_{model_slug}.png` (6-panel null histograms). Tables:
+`rq4_ablation_{model_slug}.csv`, `rq4_ablation_progression_{model_slug}.csv`,
+`rq4_ablation_null_{model_slug}.csv`.
+
+### H4 — does the predictor's edge track human consensus? (5.6)
+
+*Population: clean/P1, `human_label` non-null, `n_human_votes >= 2` (D9's own
+population, deliberately not 5.5's `human_agreed`-restricted one — H4 needs
+every contested item) — **N = 595** (79/80 groups). "The predictor" = Tier A
++ logreg specifically, a documented choice: 5.5 found no tier/model reliably
+beats another, so Tier A is representative rather than arbitrary, and it
+avoids a second population cut Tier B/C's `len_ratio` requirement would
+force. Method (D15, mandatory): out-of-fold `P(correct)` from the fixed
+10×5 repeated CV, averaged across repeats to one score per item (never
+in-sample, which would bias the interaction before the CI method even
+matters); fit `correct ~ oof_score * d_human`; cluster-bootstrap (B=2000,
+refitting each resample) on the interaction coefficient.*
+
+**Result: interaction coefficient +2.3752 [1.6849, 3.0739] — the CI clears
+zero comfortably, H4 holds.** The predictor's edge genuinely grows with
+human consensus: judge error is learnable where humans agree (epistemic,
+reducible) and much less so where they don't (aleatoric, irreducible) — a
+clean positive result, in real contrast to the tier ablation's null finding
+above. No figure was required by the DoD; `h4_interaction_{model_slug}.png`
+was added anyway (two panels, probability and log-odds) after the
+probability-space panel alone visually undersold the effect — sigmoid
+saturation compresses the slope difference exactly where most of the real
+data sits (high `oof_score`), while the log-odds panel shows it undistorted.
+
+### Transfer test 1 — train on clean, test on verbose (5.7)
+
+*Population: `analysis/rq3.py::load_rq3b_items()` (**N = 1836**, the same
+paired clean/verbose population RQ3b uses). **Feature-parity fix (D21,
+mandatory for every model compared, not a Bayesian-specific carve-out):**
+`verbose` never collects `conf_sc` or the `conf_ens` family (D19 — self-consistency
+sampling and the P2/P3 ensemble are both clean/P1-only), so the feature set
+here is Tier A minus those five columns — just `{conf_verb, conf_lp,
+conf_bpe}` — for every model this test touches, including the Bayesian one
+(5.9f). Two numbers per model on the identical reduced feature set, so the
+comparison isolates the transfer effect from the feature-drop effect:
+in-domain (repeated CV, D8, on `clean` alone) vs. transfer (fit once on all
+of `clean`, frozen, evaluated on `verbose`, cluster-bootstrap CI over
+`verbose`'s own `question_id`).*
+
+| model | in-domain AUROC | 95% spread | transfer AUROC | 95% CI | Δ AUROC |
+|---|---|---|---|---|---|
+| logreg | 0.7703 | [0.7662, 0.7773] | 0.7705 | [0.7440, 0.7967] | +0.0001 |
+| histgbm | 0.7889 | [0.7859, 0.7925] | 0.7635 | [0.7378, 0.7887] | −0.0254 |
+
+**This refutes, not supports, the headline hypothesis** *("the abstention
+layer trained offline degrades exactly when the judge is attacked")*.
+`logreg`'s transfer AUROC is statistically indistinguishable from its own
+in-domain number; `histgbm` shows a small drop but the CIs still heavily
+overlap. This stands in real contrast to RQ3b's own finding that each
+*individual* signal's AUROC drops significantly under `verbose` — a model
+that *combines* `conf_verb`/`conf_lp`/`conf_bpe` appears to buy real
+robustness no single signal has on its own, since AUROC only needs the
+combined rank-ordering to survive, not each signal's own calibration.
+Figure (not required by the DoD, added on request):
+`rq4_transfer_{model_slug}.png`.
+
+### Transfer test 2 — `LeaveOneGroupOut` over category (5.8)
+
+*Population: the full RQ4 base (N=1819) — never restricted, since this test
+never leaves `clean`, so the D21 exclusion doesn't apply. Full Tier A, all 8
+columns. For each of the 8 MT-Bench categories in turn, fit on the other 7,
+evaluate on the held-out one — fully deterministic (no shuffle/seed), one
+fixed split per category, so no repeat-spread the way D8's protocol has one.*
+
+| model | weakest category | strongest category | full range |
+|---|---|---|---|
+| logreg | `writing` (0.739) | `stem` (0.864) | [0.739, 0.864] |
+| histgbm | `extraction` (0.753) | `math` (0.852) | [0.753, 0.852] |
+
+**Every category clears chance comfortably; no collapse anywhere.**
+Notably, `coding` is *not* the weak point for either model (logreg 0.821,
+histgbm 0.795 — solidly mid-range both times) — `writing` and `reasoning`
+are the real weak spots. Reading: the predictor generalizes reasonably
+across task types rather than learning a "coding is hard" shortcut.
+`PLAN.md` §2.4's own "coding is hard" framing turned out, on inspection, to
+be an unexamined illustrative phrase carried into the plan text, not a
+reasoned hypothesis about this specific judge/dataset — the figure
+(`rq4_category_transfer_{model_slug}.png`, categories sorted
+weakest-to-strongest) deliberately does not single `coding` out, for the
+same reason. Table: `rq4_category_transfer_{model_slug}.csv`.
+
+### Meta-model calibration and coefficients (5.9)
+
+*Population: the full RQ4 base (N=1819). Model: **Tier C + logreg**
+specifically — Tier C because it's the only tier containing all three
+feature families at once, which is what a coefficient-level "which family
+carries the signal" question needs; `logreg` because raw coefficients are
+only directly interpretable for the linear model. Reliability diagram/ECE:
+out-of-fold `P(correct)` from the standard 10×5 repeated CV, averaged
+across repeats (never in-sample). Coefficients: `LogisticRegression(C=1.0)`
+fit once on the full population (a coefficient is a property of one fit,
+not a per-repeat quantity), CI via a purpose-built cluster bootstrap that
+resamples once per replicate and refits the whole 37-coefficient vector
+together (not one call per feature, which would both refit ~37× more than
+necessary and wrongly treat correlated features' bootstrap draws as
+independent).*
+
+**Calibration: OOF AUROC 0.7986, ECE 0.0357 (10 effective bins)** — reasonably
+well-calibrated, with the reliability curve sitting a little below the
+diagonal (mild overconfidence about `P(wrong)`) in the 0.4–0.7 range.
+
+**Coefficients: 8 of 37 have a CI excluding zero — 5/8 in Tier A, 3/16 in
+Tier B, 0/13 in Tier C.** This is the coefficient-level echo of the tier
+ablation's null finding above, but sharper, since it isolates individual
+features rather than whole tiers: `conf_verb`, `conf_sc`, `conf_ens`
+(and its exact algebraic mirror, `ens_entropy_total` — the pair is
+perfectly collinear, `conf_ens = 1 - ens_entropy_total`, so standardization
+splits one real effect into two equal-and-opposite coefficients, not two
+independent findings), and `ens_entropy_aleatoric` carry real, non-zero
+weight from Tier A. From Tier B: `abs_len_diff`, `longer_is_chosen`, and
+`category_reasoning` (negative — the `reasoning` category's own dummy). From
+Tier C: **nothing** — not one of the 13 CoT/token-distribution features
+clears zero, at the coefficient level, exactly matching the tier-level
+null. Figures: `rq4_coefficients_{model_slug}.png` (the 8 significant
+coefficients only — the full 37-row version was unusably tall for a slide
+at the annotated forest-plot spacing, ~35in — kept as a dense, unannotated
+appendix, `rq4_coefficients_full_{model_slug}.png`) and
+`reliability_rq4_meta_model_{model_slug}.png`. Table:
+`rq4_coefficients_{model_slug}.csv` (all 37 rows).
+
+### The Bayesian model joins RQ4 (5.9b, 5.9c)
+
+*`src/bayesian.py` implements D22's hierarchical logistic regression —
+`correct ~ Bernoulli(σ(α + α_q[question] + Xβ))`, question-level random
+intercepts with partial pooling, `α_q ~ Normal(0, σ_q)`, fit with
+NumPyro/NUTS under the identical D8 protocol. One real obstacle surfaced
+during fitting, not before: the direct ("centered") form of `α_q` hit
+**Neal's funnel** on real data — `max_rhat = 1.07` (flagged) at the starting
+settings, and *more* warmup made it measurably worse (1.07→1.20), confirming
+a posterior-geometry problem rather than an insufficient-sample-count one.
+Fixed with the standard non-centered reparameterization (`α_q_raw ~
+Normal(0,1)`, `α_q = σ_q · α_q_raw` as a deterministic transform —
+mathematically the identical prior, decoupled geometry): `max_rhat` dropped
+to 1.01, effective sample size rose ~38× (21→791), at the same settings, on
+the same real fold. NUTS (fallback ladder rung 1) was sufficient throughout
+— Laplace/bootstrap-ensemble fallbacks were never needed. Real, measured
+runtime for the full 5-fold×10-repeat protocol (not extrapolated):
+**7.0 minutes**, N=1819, Tier A — `n_repeats=10` used as originally planned.
+Convergence held at that full scale: **1/50 fold-fits flagged** (barely,
+`max_rhat=1.020`), **zero divergences across all 50 fits** — visible directly
+in `rq4_bayesian_convergence_{model_slug}.png` (R-hat per real fold-fit,
+D22's 1.01 threshold line).*
+
+**Head-to-head, Tier A on both arms for a fair comparison:**
+
+| | AUROC | 95% CI/spread | ECE | Brier | NLL | 90% coverage |
+|---|---|---|---|---|---|---|
+| frequentist `LogisticRegression` | 0.7962 | [0.7932, 0.7986] | 0.0366 | 0.1431 | — | — |
+| Bayesian hierarchical | 0.7898 | [0.7848, 0.7982] | **0.0231** | 0.1432 | 0.4465 | 0.80 |
+
+*NLL is the proper posterior-predictive log-likelihood — the mean Bernoulli
+likelihood averaged across posterior draws first, then `-log`, never a
+point-NLL on the mean probability (which would just be Brier with extra
+steps and discard exactly what makes this quantity Bayesian). `coverage_90`
+required a methodological decision D22 doesn't specify: a single 0/1 draw
+can't meaningfully "fall inside" a probability interval the way a
+continuous value can, so it's computed as **bin-aggregate coverage** —
+reusing `ece()`'s own quantile binning, does each bin's real, aggregated
+wrong-rate fall inside that bin's own pooled 90% credible interval. Both
+NLL and coverage use posterior draws pooled across all 10 repeats
+(concatenated, not averaged), since each repeat is an independent full
+refit on a different fold partition.*
+
+**The Bayesian model discriminates slightly worse (lower AUROC) but is
+notably, measurably better calibrated** (ECE 0.023 vs. 0.037) — a genuine,
+substantive difference, not a restatement of the AUROC gap. Brier is
+essentially tied. The frequentist model has no native posterior, so NLL and
+credible-interval coverage simply don't exist for it — this is a structural
+capability the Bayesian model provides that a point-estimate model cannot,
+independent of whether its AUROC wins. Table:
+`rq4_bayesian_comparison_{model_slug}.csv`. Figures:
+`reliability_rq4_bayesian_meta_model_{model_slug}.png`,
+`rq4_bayesian_convergence_{model_slug}.png`.
+
+### Limitations carried forward from RQ4 into RQ5's Bayesian-model sections
+
+Two choices here were not independently re-verified once made and are worth
+naming rather than treating as settled: **`α`'s own prior** (`Normal(0,1)`) —
+D22's formula names `α` but never states its prior (only `α_q`/`σ_q`/`β`
+are preregistered); `Normal(0,1)` was chosen to match `β`'s own scale, a
+reasonable but not uniquely-determined choice. **Tier A's use for every
+Bayesian-model task** — inherited from 5.5's finding that tiers don't
+reliably differ for the *frequentist* models; never independently checked
+whether that null result also holds for the Bayesian model specifically.
+Neither is expected to change the qualitative findings above, but neither
+has been empirically stress-tested either.
+
+---
+
+## RQ5 — Does marginalizing over the judge prompt improve uncertainty quality, and does that improvement survive distillation to single-call cost?
+
+*Written 22 Sep 2026. RQ5's threshold-sweep task (3.2b — does epistemic
+thresholding beat total thresholding on AURC?) is already written up inside
+RQ2's own section above, where it sits naturally alongside RQ2's other
+risk-coverage work; it is not repeated here. This section covers the three
+Week 5 pieces: distillation (5.9d), human-disagreement validation (5.9e),
+and verbose-shift validation (5.9f) — D23's "consequences" of the
+professor-feedback pivot. Two entropy decompositions recur throughout,
+sharing one formula (D20) at two different levels: **judge-level**
+(`conf_ens`, `signals.py`, over the P1/P2/P3 prompt ensemble — `clean` only,
+D19) and **meta-model-level** (`posterior_predictive_entropy_decomposition()`,
+`src/bayesian.py`, over the Bayesian model's own posterior predictive draws
+— works on any condition the model can be evaluated on, including
+`verbose`). Both decompose one total entropy into Aleatoric (mean entropy
+within each individual opinion) + Epistemic (the extra entropy that only
+appears once you average across opinions — disagreement, not individual
+uncertainty).*
+
+**Headline: the single-call Bayesian model is not a worse version of the
+3-call ensemble — on the metrics that matter for deployment it is
+arguably the better one, except for the one property (recognizing
+distribution shift) it was specifically supposed to have.** It retains
+essentially all the ensemble's discrimination benefit at a third of the
+inference cost, is far better calibrated than the ensemble's own raw
+signal, and its own uncertainty is a dramatically better error-predictor
+than the ensemble's judge-level uncertainty. But its uncertainty does not
+correctly widen under an adversarial distribution shift — the one behavior
+that would make it trustworthy specifically under attack, which is exactly
+the condition where it would need to be trusted most.
+
+### Distillation comparison — ensemble (teacher) vs. single-call Bayesian (student) (5.9d)
+
+*Population: `load_rq4_population()` (**N = 1819**) — deliberately RQ4's own,
+smaller, common population, not RQ5's own wider N=1836 (confirmed
+empirically: RQ4's population is a strict subset of RQ5's, differing by
+exactly the 17 known `len_ratio`-undefined items) — using the mismatched
+wider population for the ensemble side would conflate "which items" with
+"which method." Teacher = the 3-call ensemble's `conf_ens` /
+`ens_entropy_epistemic` (D20) — `conf_ens`'s own AUROC/ECE had never been
+computed anywhere in this project before this task (RQ1/RQ2's `SIGNALS`
+list deliberately excludes it as D20's own separate signal). Student = the
+1-call Bayesian model (5.9b, Tier A, P1-only features).*
+
+| | AUROC | 95% CI | ECE | entropy-quality AUROC | 95% CI |
+|---|---|---|---|---|---|
+| ensemble (3-call) | 0.7931 | [0.7660, 0.8199] | 0.1009 | 0.5585 | [0.5141, 0.6019] |
+| Bayesian (1-call) | 0.7898 (point) | — | **0.0231** | **0.7767** | [0.7472, 0.8065] |
+
+*"Entropy-quality AUROC" = AUROC(epistemic → error) for each arm's own
+epistemic signal — the ensemble's judge-level one vs. the Bayesian model's
+own meta-model-level one. Every gap below is a **paired** cluster bootstrap
+(invariant 3, same items, two methods), the same rename-to-a-shared-column
+trick used throughout this project for one-item-set, two-score comparisons.*
+
+**Headline: the single-call model retains 98.9% of the ensemble's AUROC edge
+over chance (0.5)** — paired gap +0.0033 [−0.0116, 0.0188], CI includes
+zero, not statistically distinguishable. **ECE strongly favors the Bayesian
+model** — expected, since `conf_ens` is a raw judge signal that has never
+itself been calibrated via cross-validation, unlike the trained OOF
+meta-model. **The genuinely surprising result is entropy quality, and it
+runs in the opposite direction the "how much survives" framing would
+predict:** paired gap −0.2182 [−0.2659, −0.1691], entirely below zero — the
+single-call model's *own* epistemic signal is a *much better* error
+predictor than the expensive ensemble's judge-level epistemic signal, not
+merely comparable to it. Reading: these are conceptually different
+quantities that happen to share the name "epistemic." The ensemble's
+captures *prompt-disagreement* — does the judge's raw verdict wobble
+depending on how the question is phrased. The Bayesian model's captures the
+*meta-model's own task-targeted parameter uncertainty* — how confident is a
+model trained specifically to predict error about its prediction for this
+item. The task-targeted signal wins decisively, even though it costs a
+third as much to obtain. Figure: `rq5_distillation_{model_slug}.png`
+(the Bayesian AUROC bar is deliberately shown without an error whisker,
+rather than borrowing 5.9c's differently-typed D8-across-repeat-spread
+interval and implying a false equivalence with the ensemble's own
+cluster-bootstrap CI). Table: `rq5_distillation_{model_slug}.csv`.
+
+### Human-disagreement validation (5.9e)
+
+*Population: `analysis/human_disagreement.py::load_disagreement_items()`
+(D9's own — clean/P1, `n_human_votes >= 2`) — **N = 595**, the same
+population tasks 3.3/3.4 already use, reused directly, including its own
+`d_human` float-tie rounding fix (RQ2's methods note above). Reuses task
+3.4's own Spearman-plus-cluster-bootstrap recipe unmodified, over
+`ens_entropy_aleatoric`/`ens_entropy_epistemic` — D23's own framing is
+explicit that this is a validation against existing `d_human` machinery,
+not new statistical infrastructure.*
+
+**A genuine wording contradiction in the task specification was found and
+resolved before running anything, not discovered after a wrong result.**
+The task text asks whether aleatoric is high "where humans actually
+disagreed (high `d_human`)" — but `d_human = |frac_prefer_a - 0.5|`
+(`src/data.py`), so *high* `d_human` means *strong consensus* (votes near
+0% or 100% for one side), not disagreement; the disagreement zone is *low*
+`d_human`, near the 50/50 split. Confirmed directly against the formula in
+source, then cross-checked against three independent descriptions that all
+agree with each other and disagree only with the task text's own
+parenthetical: CLAUDE.md's schema (`d_human`, "continuous consensus
+strength"), D23's own plain-English framing, and H4's closeout ("the
+predictor's edge grows with human *consensus*"). Tested as originally
+intended: does aleatoric correlate *negatively* with `d_human` (high
+aleatoric where consensus is weak)?
+
+| signal | Spearman ρ | 95% CI |
+|---|---|---|
+| `ens_entropy_aleatoric` | **−0.1181** | **[−0.2041, −0.0156]** |
+| `ens_entropy_epistemic` | 0.0141 | [−0.0705, 0.0985] |
+
+**A clean validation.** Aleatoric is negatively correlated with `d_human`
+(CI excludes zero, modest but real magnitude — this is a genuine, if not
+large, relationship at this sample size) — the estimated aleatoric signal
+does track real human disagreement. Epistemic shows no such relationship
+(CI includes zero). The aleatoric/epistemic vocabulary this project has
+used throughout holds up against this independent, model-free check: real
+human votes were never used to build the entropy decomposition, and it
+still lines up with them exactly the way the vocabulary claims it should.
+Figure: `d_human_correlations_ensemble_entropy_{model_slug}.png` (extends
+`plot_d_human_correlations()`, task 3.4's own figure function, via a new
+`filename_suffix` parameter added specifically so this call couldn't
+silently overwrite 3.4's existing figure under the same base filename).
+Table: `rq5_human_disagreement_{model_slug}.csv`.
+
+### Verbose-shift validation (5.9f)
+
+*Population: `analysis/rq3.py::load_rq3b_items()` (**N = 1836**, the same
+paired clean/verbose population the transfer test (5.7) uses). Feature set:
+`TRANSFER_SAFE_COLUMNS` (D21) — the same reduction 5.7 established, applied
+to the Bayesian model here as D21 itself requires. The model is fit
+**once** on all of `clean` (no CV split — mirrors 5.7's own "one
+offline-trained model" design), then evaluated on both `clean` itself and
+`verbose`.*
+
+**A methodological question was worked through explicitly before running
+real data, not fixed reflexively.** The obvious approach — reuse
+`predict_held_out()`, already built for "evaluate on data the model wasn't
+trained on" — would have been a real mistake here. `clean` and `verbose`
+are paired on the *exact same 80 questions* (confirmed empirically:
+identical `question_id` sets, identical `item_id` sets, same row order) —
+`verbose`'s rows are not unseen the way a genuinely held-out CV fold's are.
+`predict_held_out()`'s marginalization would have discarded real, valid
+fitted information *and* confounded the test itself: marginalization
+inflates predictive spread on any input, clean or shifted alike, so an
+apparent "epistemic rises on verbose" finding could just measure
+marginalization noise rather than the model correctly recognizing
+distribution shift. A new function, `predict_in_sample()`, uses the
+model's real fitted `α_q` (via the training fold's own
+`question_id → index` mapping) for both evaluations instead — isolating
+the actual variable of interest, since only the *feature values* differ
+between the two conditions, not the questions themselves.
+
+A second, subtler concern was raised and checked empirically rather than
+assumed: evaluating `clean` *in-sample* (the same rows the model was
+fit on) has a theoretical reason to *understate* its own epistemic
+uncertainty — posterior parameter uncertainty is smallest exactly where
+the likelihood was fit. This would bias the test *toward* a false
+"epistemic rises" confirmation, never away from one. Rather than building
+an untested, more complex held-out-baseline mechanism on a theoretical
+argument alone, the simple version was run first and the real result used
+to decide whether the added complexity was actually necessary.
+
+| | clean | verbose | gap (verbose − clean) | 95% CI |
+|---|---|---|---|---|
+| aleatoric | 0.4645 | 0.4393 | **−0.0253** | [−0.0349, −0.0159] |
+| epistemic | 0.0028 | 0.0026 | **−0.0002** | [−0.0003, −0.0001] |
+
+**The preregistered prediction did not hold, in either direction.**
+Aleatoric did not stay flat — it fell, significantly. Epistemic did not
+rise — it also fell, significantly (both CIs sit entirely below zero).
+**This null/contrary result is strengthened, not weakened, by the
+in-sample-baseline concern above**: that bias could only ever inflate an
+apparent epistemic *rise*, so finding a significant *fall* despite a bias
+stacked in the opposite direction makes the fall more credible, not
+less — the more complex held-out-baseline check was never actually needed.
+Separately notable: epistemic's absolute scale (~0.003 nats) is roughly
+150× smaller than aleatoric's (~0.44–0.46 nats) on both conditions — this
+simple 3-feature model's parameter uncertainty is nearly negligible next
+to the irreducible per-item noise, a real finding about the model itself,
+not a side effect of the shift test. Figure:
+`rq5_verbose_shift_{model_slug}.png` (two panels, one per metric, on
+independent y-axes — a shared axis rendered epistemic's real, significant
+bars as visually indistinguishable from zero next to aleatoric's much
+larger scale, caught during review and fixed before finalizing). Table:
+`rq5_verbose_shift_{model_slug}.csv`.
+
+**Reading: this Bayesian model's meta-model-level epistemic signal does not
+correctly recognize the verbose distribution shift.** If anything, both
+uncertainty components read *more* confident under the attack, the opposite
+of what a trustworthy triage signal would do under adversarial conditions.
+This is a genuine, real limitation to carry forward, not a result to
+explain away — the same model that performed well in every other RQ4/RQ5
+comparison above (competitive AUROC, superior calibration, a
+task-targeted epistemic signal that beat the expensive ensemble's own)
+fails specifically at the one property — out-of-distribution awareness —
+that its Bayesian construction is supposed to provide close to "for free."
+
+### Limitations specific to this section
+
+- **`epistemic-AUROC` (5.9d) and `epistemic` (5.9f, in nats) are not
+  directly comparable to each other** — different feature sets (Tier A's 8
+  columns vs. `TRANSFER_SAFE_COLUMNS`' 3), different fitting protocols
+  (10-repeat CV vs. a single fit), different units entirely (a ranking
+  statistic vs. raw entropy). Both are real, correctly-computed findings on
+  their own terms; neither should be read against the other's absolute
+  scale.
+- **Bin-aggregate coverage (5.9c/5.9d) and the pooled-draws NLL
+  construction are this project's own invented methodology** — D22 doesn't
+  specify either. Defensible and internally consistent, but not a
+  preregistered, externally-validated method; treat `coverage_90`
+  specifically as the most method-dependent number in this section.
+- **5.9f used a single NUTS fit, one seed** — mirroring 5.7's own "frozen
+  model" precedent deliberately, but meaning there is no measure of how
+  much the reported gaps would move under a different seed's own posterior
+  draw. Consistent with established project precedent; still a real,
+  uncharacterized source of variance specific to this one result.
+
+---
+
 ## Methods notes
 
 Small, dated empirical observations that inform a design decision but don't belong to
