@@ -13,6 +13,7 @@ from src.bayesian import (
     build_group_index,
     convergence_diagnostics,
     fit_nuts,
+    posterior_predictive_entropy_decomposition,
     predict_held_out,
     repeated_stratified_group_kfold_bayesian,
 )
@@ -296,3 +297,36 @@ def test_cv_wrapper_uses_a_fresh_seed_per_repeat_so_repeats_differ():
     )
     assert [r.seed for r in results] == [0, 1]
     assert not np.array_equal(results[0].oof_pred, results[1].oof_pred)
+
+
+# --- posterior_predictive_entropy_decomposition -------------------------
+
+
+def test_matches_hand_computed_values():
+    # 2 draws x 2 items, chosen so item 1 is item 0's mirror (p <-> 1-p) -
+    # entropy is symmetric under that swap, so both items should land on
+    # the SAME total/aleatoric/epistemic, a useful cross-check alongside
+    # the raw numbers themselves.
+    draws = np.array([[0.9, 0.1], [0.7, 0.3]])
+    result = posterior_predictive_entropy_decomposition(draws)
+    assert result["total"] == pytest.approx([0.500402, 0.500402], abs=1e-5)
+    assert result["aleatoric"] == pytest.approx([0.467974, 0.467974], abs=1e-5)
+    assert result["epistemic"] == pytest.approx([0.032429, 0.032429], abs=1e-5)
+
+
+def test_epistemic_is_always_nonnegative():
+    # Jensen's inequality (this function's own docstring) - must hold for
+    # ANY draws, not just a hand-picked example.
+    rng = np.random.default_rng(0)
+    draws = rng.uniform(0.01, 0.99, size=(50, 20))
+    result = posterior_predictive_entropy_decomposition(draws)
+    assert np.all(result["epistemic"] >= -1e-10)  # float slack around exactly 0
+
+
+def test_epistemic_is_zero_when_draws_agree_perfectly():
+    # No disagreement across draws (every draw gives the same p for an
+    # item) means Total == Aleatoric by construction - epistemic should
+    # collapse to (near) exactly 0, not just "small".
+    draws = np.full((30, 5), 0.37)
+    result = posterior_predictive_entropy_decomposition(draws)
+    assert result["epistemic"] == pytest.approx(np.zeros(5), abs=1e-9)

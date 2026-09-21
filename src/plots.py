@@ -1412,5 +1412,110 @@ def plot_bayesian_convergence(max_rhat: np.ndarray, flagged: np.ndarray, model_s
     return fig
 
 
+def plot_rq5_distillation(
+    auroc_ensemble: float,
+    auroc_ensemble_ci: tuple[float, float],
+    auroc_bayesian: float,
+    epistemic_auroc_ensemble: float,
+    epistemic_auroc_ensemble_ci: tuple[float, float],
+    epistemic_auroc_bayesian: float,
+    epistemic_auroc_bayesian_ci: tuple[float, float],
+    model_slug: str,
+) -> Figure:
+    """Task 5.9d's figure: the ensemble (3-call, teacher) vs the
+    single-call Bayesian model (student) on two AUROC-shaped metrics -
+    overall AUROC(uncertainty -> error) and "entropy quality"
+    (AUROC(epistemic -> error)).
+
+    `auroc_bayesian` gets NO error whisker (unlike every other bar) -
+    deliberately, not an oversight: it's a plain point (roc_auc_score on
+    the mean OOF prediction), while every other bar here has a matching-
+    methodology cluster-bootstrap CI (analysis/rq5.py's own
+    compute_ensemble_metrics/cluster_bootstrap calls). Rather than
+    reusing 5.9c's own D8-across-repeat-spread number for this bar (a
+    DIFFERENT kind of interval - fold-to-fold variance, not resampling
+    uncertainty) and implying a false equivalence with the bootstrap
+    whiskers next to it, this bar is shown honestly bare, with the real
+    number pointed to in an annotation instead.
+
+    The epistemic-AUROC pair is this task's actual headline finding, not
+    a footnote: it's large (ensemble ~0.56, barely above chance;
+    Bayesian ~0.78), it has a real cluster-bootstrap CI on BOTH sides,
+    and it runs in the OPPOSITE direction "how much distills" framing
+    would suggest - the single-call model's own epistemic signal beats
+    the expensive ensemble's, not just approaches it.
+
+    Args:
+        auroc_ensemble, auroc_ensemble_ci: ensemble conf_ens's own
+            AUROC(uncertainty -> error) and cluster-bootstrap CI.
+        auroc_bayesian: Bayesian model's own AUROC (point only, see
+            above).
+        epistemic_auroc_ensemble, epistemic_auroc_ensemble_ci: ensemble's
+            ens_entropy_epistemic AUROC(uncertainty -> error) and CI.
+        epistemic_auroc_bayesian, epistemic_auroc_bayesian_ci: Bayesian's
+            own meta-model-level epistemic AUROC and CI (both via
+            posterior_predictive_entropy_decomposition()).
+        model_slug: Config.model_slug.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq5_distillation_{model_slug}.png).
+    """
+    metrics = ["AUROC", "Epistemic AUROC\n(entropy quality)"]
+    x = np.arange(len(metrics))
+    width = 0.35
+
+    ensemble_vals = np.array([auroc_ensemble, epistemic_auroc_ensemble])
+    ensemble_err = np.array(
+        [
+            [auroc_ensemble - auroc_ensemble_ci[0], epistemic_auroc_ensemble - epistemic_auroc_ensemble_ci[0]],
+            [auroc_ensemble_ci[1] - auroc_ensemble, epistemic_auroc_ensemble_ci[1] - epistemic_auroc_ensemble],
+        ]
+    )
+    bayesian_vals = np.array([auroc_bayesian, epistemic_auroc_bayesian])
+    bayesian_err = np.array(
+        [
+            [0.0, epistemic_auroc_bayesian - epistemic_auroc_bayesian_ci[0]],
+            [0.0, epistemic_auroc_bayesian_ci[1] - epistemic_auroc_bayesian],
+        ]
+    )
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.axhline(0.5, linestyle="--", color="gray", linewidth=1, zorder=1)
+
+    ax.bar(
+        x - width / 2, ensemble_vals, width, yerr=ensemble_err, capsize=4,
+        label="ensemble (3-call)", color="tab:orange", zorder=2,
+    )
+    ax.bar(
+        x + width / 2, bayesian_vals, width, yerr=bayesian_err, capsize=4,
+        label="Bayesian (1-call)", color="tab:blue", zorder=2,
+    )
+    ax.annotate(
+        "point only - see caption",
+        xy=(x[0] + width / 2, auroc_bayesian), xytext=(0, 8), textcoords="offset points",
+        ha="center", fontsize=7, color="dimgray",
+    )
+
+    legend_handles = [
+        Line2D([0], [0], linestyle="--", color="gray", label="chance (0.5)"),
+        *[
+            plt.Rectangle((0, 0), 1, 1, color=c, label=lbl)
+            for c, lbl in [("tab:orange", "ensemble (3-call)"), ("tab:blue", "Bayesian (1-call)")]
+        ],
+    ]
+    ax.legend(handles=legend_handles, loc="upper left", fontsize=9)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metrics)
+    ax.set_ylim(0, 1)
+    ax.set_ylabel("AUROC")
+    ax.set_title(f"RQ5 distillation: ensemble vs single-call Bayesian (task 5.9d, {model_slug})")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq5_distillation_{model_slug}.png", dpi=150)
+    return fig
+
+
 if __name__ == "__main__":
     plot_ece_auroc_orthogonal()

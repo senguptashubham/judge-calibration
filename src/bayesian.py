@@ -503,6 +503,66 @@ def repeated_stratified_group_kfold_bayesian(
     return results
 
 
+def _binary_entropy_vec(p: np.ndarray) -> np.ndarray:
+    """Vectorized H(p) = -(p*log(p) + (1-p)*log(1-p)), in nats - the array
+    counterpart to signals.py::_binary_entropy() (scalar-only there,
+    since it's called once per item; here it runs over whole
+    (n_draws, n_items) draw matrices, where a Python-level loop would be
+    both slow and the wrong shape of code for this file's own
+    jax.numpy-first convention). Clipped rather than branching on
+    `p <= 0` / `p >= 1` per element (that scalar guard doesn't vectorize
+    cleanly) - clip(p, eps, 1-eps) keeps log() finite everywhere, and the
+    resulting H(p) at the clip boundary is negligibly different from the
+    true 0 the scalar version returns there.
+    """
+    eps = 1e-12
+    p_clipped = np.clip(p, eps, 1 - eps)
+    return -(p_clipped * np.log(p_clipped) + (1 - p_clipped) * np.log(1 - p_clipped))
+
+
+def posterior_predictive_entropy_decomposition(draws: np.ndarray) -> dict:
+    """Meta-model-level Total/Aleatoric/Epistemic entropy decomposition
+    (D22) - the counterpart to signals.py::conf_ens()'s JUDGE-level
+    decomposition (D20), same formula, generalized from averaging over 3
+    discrete prompt variants (P1/P2/P3) to averaging over n_draws
+    posterior predictive draws - structurally the same "how much
+    uncertainty is there overall, how much of it is already present in
+    each individual opinion, how much only appears once you average
+    across opinions" question, just with many posterior draws standing
+    in for the ensemble's three prompt variants.
+
+        mean_p    = mean(draws, axis=0)      # per item
+        Total     = H(mean_p)                 # binary entropy
+        Aleatoric = mean(H(draws), axis=0)     # per item
+        Epistemic = Total - Aleatoric          # >=0, Jensen's inequality
+
+    Total is the model's overall uncertainty about an item; Aleatoric is
+    how unsure each individual posterior draw is, on average; Epistemic
+    is the extra uncertainty that only appears once you average ACROSS
+    draws - i.e. genuine disagreement between draws (parameter
+    uncertainty NUTS hasn't resolved), not uncertainty within any one
+    draw's own prediction - the same BALD/mutual-information reading
+    conf_ens()'s own docstring gives for the judge-level version.
+
+    Args:
+        draws: (n_draws, n_items) - P(event) per posterior draw per item
+            (predict_held_out()'s own output shape, or
+            compute_bayesian_arm()'s pooled_draws in analysis/rq4.py).
+            "event" is whatever the draws represent (P(correct) or
+            P(wrong)) - the decomposition itself doesn't care which, a
+            caller just has to be consistent about which one it passes.
+
+    Returns:
+        dict with total, aleatoric, epistemic - each an (n_items,) array.
+    """
+    draws_arr = np.asarray(draws, dtype=float)
+    mean_p = draws_arr.mean(axis=0)
+    total = _binary_entropy_vec(mean_p)
+    aleatoric = _binary_entropy_vec(draws_arr).mean(axis=0)
+    epistemic = total - aleatoric
+    return {"total": total, "aleatoric": aleatoric, "epistemic": epistemic}
+
+
 if __name__ == "__main__":
     # Mirrors predictor.py's own __main__ shape (--config/--tier, D8's
     # across-repeat spread as the headline uncertainty) - no --model flag
