@@ -15,6 +15,7 @@ from src.bayesian import (
     fit_nuts,
     posterior_predictive_entropy_decomposition,
     predict_held_out,
+    predict_in_sample,
     repeated_stratified_group_kfold_bayesian,
 )
 
@@ -248,6 +249,64 @@ def test_predict_held_out_does_not_use_training_alpha_q(fitted_mcmc_and_held_out
 
     probs_without_alpha_q = np.asarray(predict_held_out(mcmc, X_test, test_group_idx, n_test_groups, seed=0))
     assert np.array_equal(probs_with_alpha_q, probs_without_alpha_q)
+
+
+# --- predict_in_sample: the real-alpha_q counterpart (task 5.9f) -------
+
+
+def test_predict_in_sample_matches_manual_computation_with_real_alpha_q():
+    # Direct, mechanical proof this function uses the REAL fitted
+    # alpha_q, not a marginalized one - recompute the same quantity by
+    # hand from the raw posterior samples and confirm an exact match.
+    # This is the opposite property predict_held_out's own
+    # does_not_use_training_alpha_q test checks.
+    X, y, group_idx, n_groups = _tiny_synthetic_data()
+    question_ids = np.repeat(np.arange(8), 5)  # matches _tiny_synthetic_data()'s own recipe
+    mcmc = fit_nuts(X, y, group_idx, n_groups, seed=0, num_warmup=20, num_samples=20, num_chains=2)
+    _, _, question_id_to_index = build_group_index(question_ids)
+
+    probs = np.asarray(predict_in_sample(mcmc, X, question_ids, question_id_to_index))
+
+    samples = mcmc.get_samples()
+    manual_group_idx = np.array([question_id_to_index[q] for q in question_ids])
+    manual_logits = (
+        np.asarray(samples["alpha"])[:, None]
+        + np.asarray(samples["alpha_q"])[:, manual_group_idx]
+        + np.asarray(samples["beta"]) @ X.T
+    )
+    manual_probs = 1 / (1 + np.exp(-manual_logits))
+
+    assert np.allclose(probs, manual_probs, atol=1e-5)
+
+
+def test_predict_in_sample_raises_for_unmapped_question_id():
+    # A row whose question_id isn't in question_id_to_index must fail
+    # loudly (KeyError), not silently fabricate a prediction - same
+    # "propagate, don't fabricate" convention build_group_index()'s own
+    # leak-guard test establishes.
+    X, y, group_idx, n_groups = _tiny_synthetic_data()
+    question_ids = np.repeat(np.arange(8), 5)
+    mcmc = fit_nuts(X, y, group_idx, n_groups, seed=0, num_warmup=20, num_samples=20, num_chains=2)
+    _, _, question_id_to_index = build_group_index(question_ids)
+
+    unmapped_question_ids = np.full(len(X), 999)
+    with pytest.raises(KeyError):
+        predict_in_sample(mcmc, X, unmapped_question_ids, question_id_to_index)
+
+
+def test_predict_in_sample_is_fully_deterministic():
+    # Unlike predict_held_out (which needs a seed for its marginalization
+    # draw), this function has no randomness at all - same inputs must
+    # give byte-identical output every time, with no seed argument to
+    # even ask for reproducibility.
+    X, y, group_idx, n_groups = _tiny_synthetic_data()
+    question_ids = np.repeat(np.arange(8), 5)
+    mcmc = fit_nuts(X, y, group_idx, n_groups, seed=0, num_warmup=20, num_samples=20, num_chains=2)
+    _, _, question_id_to_index = build_group_index(question_ids)
+
+    probs_a = np.asarray(predict_in_sample(mcmc, X, question_ids, question_id_to_index))
+    probs_b = np.asarray(predict_in_sample(mcmc, X, question_ids, question_id_to_index))
+    assert np.array_equal(probs_a, probs_b)
 
 
 # --- repeated_stratified_group_kfold_bayesian: the D8 CV wrapper -------

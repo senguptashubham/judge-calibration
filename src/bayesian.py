@@ -339,6 +339,18 @@ def predict_held_out(
     uses each posterior sample's OWN `sigma_q`, not a fresh prior draw
     of sigma_q itself.
 
+    ⚠️ Use this ONLY when the evaluation rows' questions are genuinely
+    ABSENT from training (real cross-validation - 5.9b/5.9c/5.9d's use).
+    Do NOT use this for the verbose-shift check (task 5.9f) - `clean`
+    and `verbose` are paired on the exact same 80 questions (confirmed
+    empirically), so `verbose`'s rows already have a REAL fitted
+    `alpha_q`; marginalizing it away here would discard valid
+    information AND confound the experiment (marginalization inflates
+    spread on ANY input, which would make "epistemic rises on verbose"
+    unfalsifiable - see D21's own amendment, 22 Sep 2026). Use
+    `predict_in_sample()` instead for that same-questions-different-
+    condition case.
+
     `numpyro.sample`/`numpyro.plate` do NOT appear here - those are
     model-DEFINITION tools, only meaningful inside an active NUTS/
     Predictive trace. This function is ordinary post-hoc computation
@@ -373,9 +385,11 @@ def predict_held_out(
         posterior draw x every held-out row, NOT collapsed to a mean.
         Downstream callers need the full spread: the mean gives the
         point OOF prediction, the draws' own spread gives the 90%
-        credible-interval coverage (5.9c) and the entropy decomposition
-        (5.9f) - both free from this one matrix, expensive to redo
-        separately if only the mean were kept.
+        credible-interval coverage (5.9c) and 5.9d's entropy-quality
+        AUROC (both free from this one matrix, expensive to redo
+        separately if only the mean were kept) - NOT 5.9f's verbose-
+        shift entropy decomposition, which needs predict_in_sample()'s
+        output instead (see this function's own warning above).
     """
     samples = mcmc.get_samples()
     alpha = samples["alpha"]  # (n_draws,)
@@ -390,6 +404,81 @@ def predict_held_out(
     alpha_q_new = sigma_q[:, None] * jax.random.normal(key, shape=(n_draws, n_test_groups))
 
     logits = alpha[:, None] + alpha_q_new[:, test_group_idx] + beta @ X_test.T
+    return jax.nn.sigmoid(logits)
+
+
+def predict_in_sample(
+    mcmc: MCMC, X: np.ndarray, row_question_ids: np.ndarray, question_id_to_index: dict[int, int]
+) -> np.ndarray:
+    """Predicts using the model's REAL fitted alpha_q (D21's amendment,
+    22 Sep 2026) - the counterpart to predict_held_out(), for the
+    OPPOSITE situation: evaluation rows whose questions WERE in
+    training, just under a different condition (task 5.9f's verbose-
+    shift check - `clean` and `verbose` are paired on the exact same 80
+    questions, confirmed empirically: identical question_id sets,
+    identical item_id sets, same row order).
+
+    Never use this for genuinely held-out questions - that's
+    predict_held_out()'s job, and it marginalizes for exactly that
+    reason. This function does NO marginalization at all: it looks up
+    each row's OWN question's real fitted alpha_q via
+    `question_id_to_index` (the TRAINING fold's own build_group_index()
+    mapping, its third return value) - never a fresh build_group_index()
+    call on the evaluation rows' own question_ids, which would produce a
+    DIFFERENT, disconnected numbering scheme unrelated to the fitted
+    alpha_q array's actual indices.
+
+    Why this is the right tool for the verbose-shift check specifically:
+    using the SAME real alpha_q for both the clean (in-sample) and
+    verbose (shifted) evaluations isolates the actual variable of
+    interest - verbose's rows carry DIFFERENT FEATURE VALUES (conf_verb/
+    conf_lp/conf_bpe computed on the judge's verbose-condition behavior),
+    not different questions. The mechanism that should make epistemic
+    rise under verbose is beta's OWN posterior spread interacting with
+    those shifted feature values - different plausible beta draws
+    naturally diverge more when extrapolating away from the region the
+    training data actually covered. Using predict_held_out()'s
+    marginalization here instead would inflate spread on both sides
+    equally and confound that signal with an unrelated artifact (D21's
+    own amendment has the full reasoning).
+
+    A row whose question_id is genuinely absent from
+    question_id_to_index raises a plain KeyError - propagate the gap,
+    don't fabricate a value for a question this function has no basis to
+    answer for (the same "propagate, don't fabricate" convention
+    build_group_index()'s own docstring already establishes for the
+    analogous held-out-key case).
+
+    Args:
+        mcmc: fit_nuts()'s already-fitted MCMC object, trained on ALL of
+            one condition's data (no CV split - task 5.9f fits ONCE on
+            all of `clean`, mirroring task 5.7's own "one offline-
+            trained model" transfer-test design, not the 10x5 repeated-
+            CV protocol 5.9b/5.9c/5.9d use).
+        X: feature matrix to evaluate, (n_rows, n_features) - `clean`
+            itself (in-sample) or `verbose` (the shifted condition),
+            same columns/order as training X.
+        row_question_ids: raw question_id per row of X, (n_rows,).
+        question_id_to_index: the TRAINING fold's own build_group_index()
+            mapping (question_id -> dense index) - NOT rebuilt on X's
+            own question_ids.
+
+    Returns:
+        per_draw_probs, (n_draws, n_rows) - P(correct) for every
+        posterior draw x every row, same shape/convention as
+        predict_held_out()'s own output (mean gives the point
+        prediction; the full spread feeds
+        posterior_predictive_entropy_decomposition()).
+    """
+    samples = mcmc.get_samples()
+    alpha = samples["alpha"]  # (n_draws,)
+    alpha_q = samples["alpha_q"]  # (n_draws, n_groups) - REAL fitted values, never marginalized
+    beta = samples["beta"]  # (n_draws, n_features)
+
+    X = jnp.asarray(X)
+    group_idx = jnp.asarray([question_id_to_index[qid] for qid in row_question_ids])
+
+    logits = alpha[:, None] + alpha_q[:, group_idx] + beta @ X.T
     return jax.nn.sigmoid(logits)
 
 
