@@ -1,9 +1,10 @@
 """RQ5, task 3.2b: does the epistemic component of the judge-level entropy
 decomposition beat total entropy as a threshold-sweep filter? See
-TASKS.md task 3.2b (D20, D23). Also task 5.9d (distillation comparison) -
-the Week 5 growth this module's own original docstring promised.
+TASKS.md task 3.2b (D20, D23). Also tasks 5.9d (distillation comparison)
+and 5.9e (human-disagreement validation) - the Week 5 growth this
+module's own original docstring promised.
 
-`python -m analysis.rq5 --config configs/run.yaml --task {threshold_sweep,distillation}`
+`python -m analysis.rq5 --config configs/run.yaml --task {threshold_sweep,distillation,human_disagreement}`
 
 --- Task 5.9d (distillation comparison, D23) --------------------------
 
@@ -87,6 +88,44 @@ samples - invariant 3's paired-comparison logic applies to two signals on
 one item set exactly like it applies to two conditions), using the same
 rename-to-a-shared-column trick analysis/rq1.py's compute_verdict_gap uses
 for its own single-item-set paired comparison.
+
+--- Task 5.9e (human-disagreement validation, D23) ---------------------
+
+Population: analysis/human_disagreement.py::load_disagreement_items()
+(N=595, D9's own population - clean/P1, n_human_votes >= 2) - REUSED
+directly, not re-derived: the same population tasks 3.3/3.4/H4 already
+use for d_human-based analysis, and it already handles d_human's own
+float-tie rounding gotcha (see that function's own docstring - raw
+|frac_prefer_a - 0.5| produces float64 values ~1e-17 apart for the "same"
+true fraction, silently corrupting rank-based ties otherwise).
+
+Correlation: reuses analysis/human_disagreement.py::
+compute_d_human_correlation() directly (task 3.4's own Spearman +
+cluster-bootstrap recipe, question_id-grouped) - NOT re-derived - over
+["ens_entropy_aleatoric", "ens_entropy_epistemic"].
+
+WARNING, resolved 21 Sep 2026: TASKS.md's own task 5.9e text has an
+internal contradiction. It reads "aleatoric high specifically where
+humans actually disagreed (high d_human)" - but src/data.py defines
+d_human = |frac_prefer_a - 0.5|, so HIGH d_human means STRONG CONSENSUS
+(votes clustered near 0% or 100%), not disagreement; LOW d_human is the
+50/50-split disagreement zone. CLAUDE.md's own schema calls d_human
+"consensus strength," and D23/H4's closeout both describe that same
+direction independently - three sources agree against the one that
+doesn't, and TASKS.md's parenthetical is a typo, confirmed with the
+owner. Tested here as originally intended: aleatoric should correlate
+NEGATIVELY with d_human (high aleatoric where consensus is weak, i.e.
+low d_human, the genuine disagreement zone), and epistemic should show a
+much weaker (or no) such relationship - NOT the literal-but-backwards
+reading TASKS.md's own parenthetical would otherwise imply.
+
+Writes results/rq5_human_disagreement_{model_slug}.csv (D26) +
+results/figures/d_human_correlations_ensemble_entropy_{model_slug}.png
+(src/plots.py's plot_d_human_correlations, reused via its own
+filename_suffix/title params - added specifically so this call doesn't
+silently overwrite task 3.4's own existing
+d_human_correlations_{model_slug}.png, which plots a DIFFERENT signal
+set on the same base filename).
 """
 
 import argparse
@@ -95,6 +134,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import roc_auc_score
 
+from analysis.human_disagreement import compute_d_human_correlation, load_disagreement_items
 from analysis.rq1 import load_rq1_items
 from analysis.rq4 import compute_bayesian_arm
 from src.bayesian import posterior_predictive_entropy_decomposition
@@ -102,7 +142,7 @@ from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.features import load_rq4_population
 from src.metrics import aurc, auroc_error, ece, oracle_risk_coverage, risk_coverage, threshold_sweep
-from src.plots import plot_risk_coverage, plot_rq5_distillation
+from src.plots import plot_d_human_correlations, plot_risk_coverage, plot_rq5_distillation
 
 ENTROPY_SIGNALS = ["ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_epistemic"]
 
@@ -367,12 +407,84 @@ def main_distillation(config_path: str) -> None:
     )
 
 
+# --- Task 5.9e (human-disagreement validation, D23) ----------------------
+#
+# See this module's own docstring for the full population/direction
+# rationale, INCLUDING the TASKS.md wording contradiction found and
+# resolved (21 Sep 2026) - read that before touching the sign of
+# anything here.
+
+DISAGREEMENT_VALIDATION_SIGNALS = ["ens_entropy_aleatoric", "ens_entropy_epistemic"]
+
+
+def main_human_disagreement(config_path: str) -> None:
+    config = Config.from_yaml(config_path)
+    items = load_disagreement_items(config.paths.items_parquet)
+    print(f"Human-disagreement validation population: N={len(items)} (D9's own, clean/P1, n_human_votes >= 2)")
+
+    rows = []
+    for signal in DISAGREEMENT_VALIDATION_SIGNALS:
+        result = compute_d_human_correlation(items, signal, config.seed)
+        result["signal"] = signal
+        rows.append(result)
+        print(
+            f"{signal} vs d_human: Spearman={result['spearman']:.4f} "
+            f"[{result['spearman_ci_low']:.4f}, {result['spearman_ci_high']:.4f}]"
+        )
+
+    table = pd.DataFrame.from_records(rows)[["signal", "spearman", "spearman_ci_low", "spearman_ci_high"]]
+    table_path = f"results/rq5_human_disagreement_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+    plot_d_human_correlations(
+        signals=table["signal"].tolist(),
+        spearman=table["spearman"].to_numpy(),
+        ci_low=table["spearman_ci_low"].to_numpy(),
+        ci_high=table["spearman_ci_high"].to_numpy(),
+        model_slug=config.model_slug,
+        filename_suffix="_ensemble_entropy",
+        title="Ensemble entropy vs. d_human (task 5.9e)",
+    )
+
+    aleatoric_row = table[table["signal"] == "ens_entropy_aleatoric"].iloc[0]
+    epistemic_row = table[table["signal"] == "ens_entropy_epistemic"].iloc[0]
+    # Aleatoric "tracks disagreement" means its correlation with d_human
+    # (consensus strength) is NEGATIVE and the CI excludes 0 - see this
+    # module's own docstring for why negative, not positive, is the
+    # correct direction to check.
+    aleatoric_tracks_disagreement = aleatoric_row["spearman_ci_high"] < 0
+    epistemic_also_tracks = epistemic_row["spearman_ci_high"] < 0
+
+    print()
+    if aleatoric_tracks_disagreement and not epistemic_also_tracks:
+        print(
+            f"Reading: aleatoric DOES track genuine human disagreement (Spearman={aleatoric_row['spearman']:.4f}, "
+            f"CI excludes 0 - higher aleatoric where consensus is weak), while epistemic shows no such "
+            f"relationship (Spearman={epistemic_row['spearman']:.4f}, CI includes 0) - the aleatoric/epistemic "
+            f"vocabulary validates against this independent, model-free signal."
+        )
+    elif aleatoric_tracks_disagreement and epistemic_also_tracks:
+        print(
+            "Reading: aleatoric DOES track human disagreement, but epistemic shows a similar relationship too - "
+            "the decomposition doesn't cleanly separate the two against this independent signal."
+        )
+    else:
+        print(
+            f"Reading: aleatoric's correlation with d_human does NOT clear significance "
+            f"(Spearman={aleatoric_row['spearman']:.4f}, CI includes 0) - the aleatoric/epistemic vocabulary "
+            f"does not validate against this independent signal."
+        )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--task", required=True, choices=["threshold_sweep", "distillation"])
+    parser.add_argument("--task", required=True, choices=["threshold_sweep", "distillation", "human_disagreement"])
     args = parser.parse_args()
     if args.task == "threshold_sweep":
         main_threshold_sweep(args.config)
-    else:
+    elif args.task == "distillation":
         main_distillation(args.config)
+    else:
+        main_human_disagreement(args.config)

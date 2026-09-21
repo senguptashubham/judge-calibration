@@ -617,10 +617,22 @@ def plot_d_human_correlations(
     ci_low: np.ndarray,
     ci_high: np.ndarray,
     model_slug: str,
+    filename_suffix: str = "",
+    title: str = "Signal-vs-d_human correlations (task 3.4)",
 ) -> Figure:
-    """Task 3.4's figure: a forest plot of the four signals' Spearman rho
-    against d_human. Thin wrapper over _forest_plot() - see that
-    docstring for the shared rationale/mechanics.
+    """Task 3.4's figure: a forest plot of signals' Spearman rho against
+    d_human. Thin wrapper over _forest_plot() - see that docstring for
+    the shared rationale/mechanics.
+
+    `filename_suffix`/`title` default to task 3.4's own original values
+    (empty suffix, "task 3.4" in the title) so that call is completely
+    unaffected - added (21 Sep 2026) so task 5.9e could reuse this same
+    function for a DIFFERENT set of signals (ens_entropy_aleatoric/
+    epistemic vs. 3.4's four confidence signals) without silently
+    overwriting 3.4's own already-existing figure: both calls would
+    otherwise save to the exact same `d_human_correlations_{model_slug}.
+    png` path, since the filename before this change depended only on
+    model_slug, not on which signals were plotted.
 
     Args:
         signals: signal names, in display order (top to bottom).
@@ -628,10 +640,15 @@ def plot_d_human_correlations(
         ci_low, ci_high: CI bounds per signal, same order.
         model_slug: Config.model_slug - namespaces the saved filename so a
             second judge model never overwrites the first's figure.
+        filename_suffix: appended before ".png" - a second caller with a
+            different signal set MUST pass a non-empty suffix here, or
+            it will silently overwrite an earlier caller's figure.
+        title: figure title - override when plotting a different signal
+            set than task 3.4's own four confidence signals.
 
     Returns:
         The Figure (also saved to
-        results/figures/d_human_correlations_{model_slug}.png).
+        results/figures/d_human_correlations{filename_suffix}_{model_slug}.png).
     """
     return _forest_plot(
         labels=signals,
@@ -639,8 +656,8 @@ def plot_d_human_correlations(
         ci_low=ci_low,
         ci_high=ci_high,
         xlabel="Spearman ρ (signal vs. d_human)",
-        title="Signal-vs-d_human correlations (task 3.4)",
-        filename=f"d_human_correlations_{model_slug}.png",
+        title=title,
+        filename=f"d_human_correlations{filename_suffix}_{model_slug}.png",
     )
 
 
