@@ -8,7 +8,7 @@ splitting per-task. See TASKS.md tasks 5.5-5.9c, PLAN.md §2.2's reframe
 ("which feature family carries the signal"), §2.3 ("the label
 problem"), and §2.4 ("the transfer test").
 
-`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration,bayesian_comparison}`
+`python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration,bayesian_comparison,verbose_shift}`
 - each task is its own CLI invocation, not run together, since the
 ablation alone is already several hundred model fits; running all three
 on every invocation would silently multiply that cost for no reason most
@@ -169,6 +169,60 @@ when they share the same resampled rows.
 Writes results/rq4_coefficients_{model_slug}.csv and
 results/figures/rq4_coefficients_{model_slug}.png (D26/DoD) +
 results/figures/reliability_rq4_meta_model_{model_slug}.png.
+
+--- Task 5.9f (verbose-shift validation, D21 amended) -----------------
+
+Population: analysis/rq3.py's own load_rq3b_items() (N=1836), the SAME
+paired clean/verbose population task 5.7's transfer test already uses -
+not re-derived a third time.
+
+Feature set: TRANSFER_SAFE_COLUMNS (Tier A minus conf_sc/conf_ens/
+ens_entropy_*), the SAME D21 feature-parity fix task 5.7 already
+established, now applied to the Bayesian model too, exactly as D21
+itself requires ("for every model compared... not a Bayesian-specific
+carve-out").
+
+Fit ONCE on all of clean (no CV split) - mirrors 5.7's own "one
+offline-trained model" transfer-test design, not the 10x5 repeated-CV
+protocol tasks 5.9b/5.9c/5.9d use. This is deliberate: 5.9f is asking
+whether ONE deployed model's own uncertainty estimate correctly
+recognizes distribution shift, not characterizing training variance.
+
+⚠️ Evaluation uses src/bayesian.py::predict_in_sample(), NEVER
+predict_held_out(). See DECISIONS.md's D21 amendment (22 Sep 2026) for
+the full reasoning - in short: clean and verbose are paired on the
+EXACT SAME 80 questions (confirmed empirically), so verbose's rows
+already have a real fitted alpha_q; predict_held_out()'s marginalization
+would discard that real information AND confound the "does epistemic
+rise under shift" test with an unrelated marginalization-noise
+artifact. predict_in_sample() uses the training fold's own
+question_id_to_index mapping (build_group_index()'s third return value)
+for BOTH the clean (in-sample) and verbose (shifted) evaluations, so
+the only thing that differs between them is the feature values
+themselves - exactly the variable this test is about.
+
+The preregistered prediction (professor feedback "consequences",
+D21/D23): epistemic uncertainty rises under this distribution shift
+while aleatoric stays flat. Tested via a PAIRED cluster-bootstrap
+(invariant 3 - same items, two conditions) on mean(verbose) -
+mean(clean), separately for aleatoric and epistemic - "rose" means the
+epistemic gap's CI is entirely above 0; "stayed flat" means the
+aleatoric gap's CI includes 0.
+
+Lives in THIS file (rq4.py), not rq5.py, because it reuses 5.7's own
+transfer-test machinery (TRANSFER_SAFE_COLUMNS, build_transfer_xy) -
+same principle as compute_bayesian_arm() living here and being
+imported BY rq5.py's own 5.9d, rather than duplicated there. Output
+filenames still use the "rq5_" prefix, matching where this task's own
+DoD/REPORT.md section actually sits (TASKS.md 5.9f, 5.11's own "RQ5
+section: ... the verbose-shift check (5.9f)") - code location and
+result-file naming answer two different questions (which machinery does
+this reuse vs. which RQ does this result belong to) and are allowed to
+disagree.
+
+Writes results/rq5_verbose_shift_{model_slug}.csv (D26, one wide row:
+both conditions' means, both gaps with CIs, both verdict booleans) +
+results/figures/rq5_verbose_shift_{model_slug}.png.
 """
 
 import argparse
@@ -190,7 +244,13 @@ from src.features import (
     build_tier_c,
     load_rq4_population,
 )
-from src.bayesian import repeated_stratified_group_kfold_bayesian
+from src.bayesian import (
+    build_group_index,
+    fit_nuts,
+    posterior_predictive_entropy_decomposition,
+    predict_in_sample,
+    repeated_stratified_group_kfold_bayesian,
+)
 from src.metrics import auroc_error, brier, ece, get_bin_edges
 from src.plots import (
     plot_bayesian_convergence,
@@ -203,6 +263,7 @@ from src.plots import (
     plot_rq4_progression,
     plot_rq4_transfer,
     plot_reliability_diagram,
+    plot_rq5_verbose_shift,
 )
 from src.predictor import (
     MODEL_FACTORIES,
@@ -1349,13 +1410,154 @@ def main_bayesian_comparison(config_path: str) -> None:
     )
 
 
+# --- Task 5.9f (verbose-shift validation, D21 amended) ------------------
+#
+# See this module's own docstring for the full population/method
+# rationale - ESPECIALLY why predict_in_sample() is used here, never
+# predict_held_out() (DECISIONS.md's D21 amendment, 22 Sep 2026, has the
+# complete reasoning).
+
+
+def fit_verbose_shift_model(
+    clean_items: pd.DataFrame, seed: int, num_warmup: int = 500, num_samples: int = 1000, num_chains: int = 2
+) -> tuple[object, dict[int, int]]:
+    """Fits the Bayesian model ONCE on ALL of clean (no CV split) -
+    mirrors 5.7's own compute_transfer_auroc() "fit once, frozen"
+    design, not the 10x5 repeated-CV protocol tasks 5.9b/5.9c/5.9d use.
+
+    Returns the fitted mcmc AND the training fold's own dense-index
+    mapping (question_id_to_index) - the second return value is not
+    optional bookkeeping here the way it was for 5.9b's CV wrapper: both
+    the clean (in-sample) and verbose (shifted) evaluations below need
+    THIS SAME mapping passed to predict_in_sample(), never a fresh
+    build_group_index() call on either evaluation set's own
+    question_ids (see predict_in_sample()'s own docstring for why that
+    would silently misalign every index).
+    """
+    X_train, y_train, train_groups = build_transfer_xy(clean_items)
+    train_group_idx, n_groups, question_id_to_index = build_group_index(train_groups)
+    mcmc = fit_nuts(
+        X_train.to_numpy(),
+        y_train,
+        train_group_idx,
+        n_groups,
+        seed=seed,
+        num_warmup=num_warmup,
+        num_samples=num_samples,
+        num_chains=num_chains,
+    )
+    return mcmc, question_id_to_index
+
+
+def compute_condition_entropy(mcmc: object, items: pd.DataFrame, question_id_to_index: dict[int, int]) -> pd.DataFrame:
+    """predict_in_sample() + posterior_predictive_entropy_decomposition()
+    for one condition's items (clean or verbose) against the SAME fitted
+    mcmc and the SAME (training/clean's own) question_id_to_index
+    mapping - the shared step both the clean and verbose sides of the
+    comparison below call identically.
+    """
+    X, y, groups = build_transfer_xy(items)
+    draws = np.asarray(predict_in_sample(mcmc, X.to_numpy(), groups, question_id_to_index))
+    decomposition = posterior_predictive_entropy_decomposition(draws)
+    return pd.DataFrame(
+        {"question_id": groups, "aleatoric": decomposition["aleatoric"], "epistemic": decomposition["epistemic"]}
+    )
+
+
+def compute_verbose_shift_gap(
+    clean_entropy: pd.DataFrame, verbose_entropy: pd.DataFrame, column: str, seed: int
+) -> dict:
+    """Paired cluster-bootstrap CI on mean(verbose[column]) -
+    mean(clean[column]) - invariant 3's paired-comparison logic, same
+    items (question_id) on both sides, never two independent samples.
+    """
+    def _mean(df: pd.DataFrame) -> float:
+        return float(df[column].mean())
+
+    diff, ci_low, ci_high = paired_cluster_bootstrap(
+        verbose_entropy, clean_entropy, _mean, "question_id", n=2000, seed=seed
+    )
+    return {"gap": diff, "ci_low": ci_low, "ci_high": ci_high}
+
+
+def main_verbose_shift(config_path: str) -> None:
+    config = Config.from_yaml(config_path)
+    clean_items, verbose_items = load_rq3b_items(config.paths.items_parquet)
+    print(f"Verbose-shift population: N={len(clean_items)} paired items (clean/P1 vs verbose/P1)")
+    print(f"Feature set (D21 parity fix): {TRANSFER_SAFE_COLUMNS}")
+
+    print("Fitting Bayesian model ONCE on all of clean (no CV, mirrors 5.7's transfer-test design)...")
+    mcmc, question_id_to_index = fit_verbose_shift_model(clean_items, config.seed)
+
+    clean_entropy = compute_condition_entropy(mcmc, clean_items, question_id_to_index)
+    verbose_entropy = compute_condition_entropy(mcmc, verbose_items, question_id_to_index)
+
+    aleatoric_clean = float(clean_entropy["aleatoric"].mean())
+    aleatoric_verbose = float(verbose_entropy["aleatoric"].mean())
+    epistemic_clean = float(clean_entropy["epistemic"].mean())
+    epistemic_verbose = float(verbose_entropy["epistemic"].mean())
+    print(f"Aleatoric: clean={aleatoric_clean:.4f}, verbose={aleatoric_verbose:.4f}")
+    print(f"Epistemic: clean={epistemic_clean:.4f}, verbose={epistemic_verbose:.4f}")
+
+    aleatoric_gap = compute_verbose_shift_gap(clean_entropy, verbose_entropy, "aleatoric", config.seed)
+    epistemic_gap = compute_verbose_shift_gap(clean_entropy, verbose_entropy, "epistemic", config.seed)
+    print(
+        f"Aleatoric gap (verbose - clean): {aleatoric_gap['gap']:.4f} "
+        f"[{aleatoric_gap['ci_low']:.4f}, {aleatoric_gap['ci_high']:.4f}]"
+    )
+    print(
+        f"Epistemic gap (verbose - clean): {epistemic_gap['gap']:.4f} "
+        f"[{epistemic_gap['ci_low']:.4f}, {epistemic_gap['ci_high']:.4f}]"
+    )
+
+    epistemic_rose = epistemic_gap["ci_low"] > 0
+    aleatoric_flat = aleatoric_gap["ci_low"] <= 0 <= aleatoric_gap["ci_high"]
+    prediction_held = epistemic_rose and aleatoric_flat
+
+    table = pd.DataFrame.from_records(
+        [
+            {
+                "aleatoric_clean_mean": aleatoric_clean,
+                "aleatoric_verbose_mean": aleatoric_verbose,
+                "aleatoric_gap": aleatoric_gap["gap"],
+                "aleatoric_gap_ci_low": aleatoric_gap["ci_low"],
+                "aleatoric_gap_ci_high": aleatoric_gap["ci_high"],
+                "epistemic_clean_mean": epistemic_clean,
+                "epistemic_verbose_mean": epistemic_verbose,
+                "epistemic_gap": epistemic_gap["gap"],
+                "epistemic_gap_ci_low": epistemic_gap["ci_low"],
+                "epistemic_gap_ci_high": epistemic_gap["ci_high"],
+                "epistemic_rose": epistemic_rose,
+                "aleatoric_flat": aleatoric_flat,
+                "prediction_held": prediction_held,
+            }
+        ]
+    )
+    table_path = f"results/rq5_verbose_shift_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+    verdict = "HELD" if prediction_held else "DID NOT HOLD"
+    print(f"Preregistered prediction (epistemic rises, aleatoric stays flat, D21/D23): {verdict}")
+
+    plot_rq5_verbose_shift(
+        aleatoric_clean=aleatoric_clean,
+        aleatoric_verbose=aleatoric_verbose,
+        aleatoric_gap_ci=(aleatoric_gap["ci_low"], aleatoric_gap["ci_high"]),
+        epistemic_clean=epistemic_clean,
+        epistemic_verbose=epistemic_verbose,
+        epistemic_gap_ci=(epistemic_gap["ci_low"], epistemic_gap["ci_high"]),
+        model_slug=config.model_slug,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument(
         "--task",
         required=True,
-        choices=["ablation", "h4", "transfer", "category", "calibration", "bayesian_comparison"],
+        choices=["ablation", "h4", "transfer", "category", "calibration", "bayesian_comparison", "verbose_shift"],
     )
     args = parser.parse_args()
     if args.task == "ablation":
@@ -1368,5 +1570,7 @@ if __name__ == "__main__":
         main_category(args.config)
     elif args.task == "calibration":
         main_calibration(args.config)
-    else:
+    elif args.task == "bayesian_comparison":
         main_bayesian_comparison(args.config)
+    else:
+        main_verbose_shift(args.config)

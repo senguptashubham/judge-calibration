@@ -1534,5 +1534,84 @@ def plot_rq5_distillation(
     return fig
 
 
+def plot_rq5_verbose_shift(
+    aleatoric_clean: float,
+    aleatoric_verbose: float,
+    aleatoric_gap_ci: tuple[float, float],
+    epistemic_clean: float,
+    epistemic_verbose: float,
+    epistemic_gap_ci: tuple[float, float],
+    model_slug: str,
+) -> Figure:
+    """Task 5.9f's figure: mean aleatoric/epistemic (meta-model-level,
+    src/bayesian.py::posterior_predictive_entropy_decomposition()) on
+    `clean` vs `verbose`, from the SAME once-fit-on-clean Bayesian model
+    evaluated in-sample both times (src/bayesian.py::predict_in_sample() -
+    never predict_held_out(), see that function's own docstring and
+    DECISIONS.md's D21 amendment for why).
+
+    TWO PANELS, each metric on its OWN y-axis scale - not one shared-
+    scale bar chart. Checked empirically (22 Sep 2026): epistemic sits
+    ~150x smaller than aleatoric (real numbers: aleatoric ~0.44-0.46 nats,
+    epistemic ~0.003 nats) - a shared axis renders the epistemic bars as
+    visually flat zero, hiding a real, CI-significant gap. The scale gap
+    itself is a genuine finding (this simple 3-feature model's parameter
+    uncertainty is nearly negligible next to irreducible per-item noise),
+    so it's reported as a fact in each panel's own title, not smoothed
+    over by forcing both onto one axis.
+
+    The preregistered prediction (D21/D23, professor feedback
+    "consequences"): epistemic RISES under the verbose shift, aleatoric
+    stays FLAT. Each bar pair is annotated with its own paired cluster-
+    bootstrap gap + CI (analysis/rq4.py's own compute, invariant 3 - same
+    items, two conditions) rather than per-bar error whiskers: the
+    rigorous quantity here is the GAP's own CI, not two independent
+    per-condition CIs that were never computed (bootstrapping the gap
+    directly, the way the underlying test does, is not the same
+    statistic as bootstrapping each mean separately and is what the
+    preregistered verdict actually depends on).
+
+    Args:
+        aleatoric_clean, aleatoric_verbose: mean aleatoric per condition.
+        aleatoric_gap_ci: (ci_low, ci_high) for mean(verbose) -
+            mean(clean), aleatoric.
+        epistemic_clean, epistemic_verbose: mean epistemic per condition.
+        epistemic_gap_ci: same, epistemic.
+        model_slug: Config.model_slug.
+
+    Returns:
+        The Figure (also saved to
+        results/figures/rq5_verbose_shift_{model_slug}.png).
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+    panels = [
+        (axes[0], "Aleatoric", aleatoric_clean, aleatoric_verbose, aleatoric_gap_ci),
+        (axes[1], "Epistemic", epistemic_clean, epistemic_verbose, epistemic_gap_ci),
+    ]
+    for ax, label, clean_val, verbose_val, (gap_lo, gap_hi) in panels:
+        x = np.arange(1)
+        width = 0.35
+        ax.bar(x - width / 2, [clean_val], width, label="clean", color="tab:blue", zorder=2)
+        ax.bar(x + width / 2, [verbose_val], width, label="verbose", color="tab:red", zorder=2)
+        ax.annotate(
+            f"gap [{gap_lo:.4f}, {gap_hi:.4f}]",
+            xy=(0, max(clean_val, verbose_val)), xytext=(0, 8), textcoords="offset points",
+            ha="center", fontsize=8, color="dimgray",
+        )
+        ax.set_xticks([])
+        ax.set_ylim(0, max(clean_val, verbose_val) * 1.3)
+        ax.set_ylabel("mean entropy (nats)")
+        ax.set_title(label)
+        ax.legend(loc="upper right", fontsize=9)
+
+    fig.suptitle(f"RQ5 verbose-shift validation: clean vs verbose (task 5.9f, {model_slug})")
+    fig.tight_layout()
+
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / f"rq5_verbose_shift_{model_slug}.png", dpi=150)
+    return fig
+
+
 if __name__ == "__main__":
     plot_ece_auroc_orthogonal()
