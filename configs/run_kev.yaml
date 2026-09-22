@@ -1,0 +1,39 @@
+# kev-8b comparison arm (DECISIONS.md D27) - the open stand-in for Jev's
+# "System One" calibration claim. Separate config, separate (smaller)
+# KevConfig dataclass in src/judge_kev.py - src/config.py's Config validates
+# fields (temperature_sc > 0, "P1" in prompt_variants) that don't apply to
+# kev's one-forward-pass, no-prompt-ensemble architecture at all.
+
+judge_model: jaredpalmer/kev-8b
+dataset: lmsys/mt_bench_human_judgments
+tie_policy: mark_tie_strict   # must match run.yaml's - same item population, same tie policy (D27)
+
+conditions:                   # same two conditions as the primary judge (D27's comparison is paired)
+  - clean
+  - verbose
+
+# kev.serve, launched separately per D27's confirmed launch config:
+#   KEV_DTYPE=bf16 KEV_MERGE=0 KEV_ATTN=sdpa setsid nohup uv run --extra serve \
+#     python -m kev.serve --run jaredpalmer/kev-8b --port 8008 > kev_serve.log 2>&1 < /dev/null &
+base_url: http://127.0.0.1:8008/v1/systemone
+
+# D27's confirmed practical serving ceiling - the largest state-token count
+# that succeeded with zero contradictions across two independent probe
+# sessions (kev_token_probe.py / kev_token_probe_boundary.py). Items whose
+# constructed state exceeds this are explicitly skipped and logged with a
+# reason, never silently dropped (same standard as D21's conf_sc/conf_ens
+# nulls) - excludes ~56 of 1904 verbose items, 0 clean items.
+max_state_tokens: 8160
+
+seed: 1234                    # same seed as run.yaml - not that it matters for a
+                               # deterministic single forward pass, but kept
+                               # consistent for the seeded item-sampling used
+                               # by --n-items smoke-test runs.
+n_bins: 10
+
+paths:
+  results_dir: results
+  runs_dir: runs/kev_8b
+  calls_parquet: results/calls_kev_8b.parquet
+  items_parquet: results/items_kev_8b.parquet
+  items_labels_parquet: results/items_labels.parquet   # shared across every judge model (D26)

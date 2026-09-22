@@ -2,7 +2,7 @@
 
 Read this before doing anything in this repo. It is the contract, not a summary.
 
-**Also read `DECISIONS.md`** — it carries D4–D26 from the Week-0 design review and the 31 Aug 2026 professor-feedback integration (`PROFESSORFEEDBACK.md`), which override anything here that contradicts them.
+**Also read `DECISIONS.md`** — it carries D4–D27 from the Week-0 design review, the 31 Aug 2026 professor-feedback integration (`PROFESSORFEEDBACK.md`), and a later owner-initiated addition (D27, 22 Sep 2026 — the industry-counterexample stress test), which override anything here that contradicts them.
 
 ---
 
@@ -205,7 +205,7 @@ README.md
 LICENSE
 PLAN.md      design rationale, RQ definitions, week plan
 TASKS.md     atomic tasks with definition-of-done
-DECISIONS.md resolutions from the design reviews, D4–D26
+DECISIONS.md resolutions from the design reviews, D4–D27
 LEARNING.md  reading / courses / skills tracker
 PREREGISTRATION.md   frozen before the Week 2 full run
 REPORT.md    written incrementally, not at the end

@@ -1,7 +1,7 @@
 # TASKS.md
 
 Atomic tasks with a definition of done. Feed one at a time to Claude Code: *"Do task 1.4 from TASKS.md."*
-Read `CLAUDE.md` §2 (invariants) and `DECISIONS.md` (D4–D26) before any task touching statistics or the harness.
+Read `CLAUDE.md` §2 (invariants) and `DECISIONS.md` (D4–D27) before any task touching statistics or the harness.
 
 Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning · **⛔** gate
 
@@ -177,8 +177,9 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
   **DoD:** `calls_{model_slug}.parquet` extended; `items_{model_slug}.parquet` rebuilt at its `(item_id, condition, prompt_variant)` grain (D26). `conf_sc` and `conf_ens` (+ components) are null for every `verbose` row — expected, not a bug (D21).
   **Done, 18 Sep 2026:** full population, N=1904 items, 3808 verbose rows (N×2, exact item-set match with `clean/P1`) — `calls_qwen2.5_7b_instruct.parquet` now 22,848 rows total, `items_qwen2.5_7b_instruct.parquet` 7,616 rows at the `(item_id, condition, prompt_variant)` grain. `parse_ok` 100% on verbose; padding confirmed applied (mean `n_prompt_tokens` 3060.6 vs clean's 976.5, ≈3.13x). `conf_sc`/`conf_ens`/its 3 entropy components 100% null on verbose as expected (D21); `conf_verb`/`conf_lp`/`conf_bpe`/`flipped`/`judge_verdict` fully populated. `correct`/`human_label` null on 3.57% of rows (68/1904) — a pre-existing `frac_prefer_a == 0.5` tie-policy edge case present at an identical rate across every condition/prompt_variant, including the already-closed `clean` run, not something this run introduced. `pytest` green (147 passed).
 
-- [ ] **4.3 [A]** **RQ3a** — position bias, computed **within `(clean, P1)`** (D5, D19; it is not a separate run, and stays P1-filtered per invariant 14): flip rate between orders; **mean confidence on flipped vs unflipped items**, paired cluster-bootstrap CI on the difference.
+- [x] **4.3 [A]** **RQ3a** — position bias, computed **within `(clean, P1)`** (D5, D19; it is not a separate run, and stays P1-filtered per invariant 14): flip rate between orders; **mean confidence on flipped vs unflipped items**, paired cluster-bootstrap CI on the difference.
   **DoD:** the RQ3 money sentence, with a CI, in `REPORT.md`.
+  **Done, 18 Sep 2026 (checkbox corrected 22 Sep 2026 during audit — the work was complete and already cited by GATE 4's own closeout, the box was just never ticked):** N=1836, `(clean, P1)`. Flip rate between AB/BA orders **27.8% [24.8%, 30.8%]**; mean confidence gap on flipped vs unflipped items **−0.0199 [−0.0248, −0.0152]** (`conf_verb`) — the judge is measurably, if weakly, less confident on the items it got fooled on. `analysis/rq3.py`, `results/rq3a_table_qwen2.5_7b_instruct.csv`, `results/figures/rq3a_confidence_gap_qwen2.5_7b_instruct.png`. Written up in `REPORT.md`'s RQ3 section.
 
 - [x] **4.4 [A]** **RQ3b** — verbosity only (`attribution` is cut, D18): paired ΔECE, Δaccuracy, ΔAUROC clean(P1)→verbose(P1). **`conf_sc`'s clean→verbose comparison is dropped — no data on the `verbose` side (D21).** `conf_verb`, `conf_lp`, `conf_bpe` are unaffected.
   **DoD:** `results/rq3_table_{model_slug}.csv` (D26) with paired CIs for the three signals that survive; a one-line note in `REPORT.md`'s limitations explaining why `conf_sc` isn't in this table.
@@ -313,6 +314,31 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 - ⛔ **GATE 5** — RQ4 answered against both the permutation null and the best-single-signal baseline, **for both the frequentist and Bayesian models**, with convergence diagnostics reported. H4 tested. **RQ5 answered: distillation gap stated, human-disagreement validation done, verbose-shift prediction tested.**
   **Status, 22 Sep 2026: all underlying conditions met** — permutation null (5.5), best-single-signal baseline (5.5), both frequentist and Bayesian models with convergence diagnostics (5.9c), H4 (5.6), and all three RQ5 pieces (5.9d/e/f) are done, and `REPORT.md`'s RQ4/RQ5 sections (5.10/5.11) are written. Left unchecked pending the owner's own review of the drafted report sections — the gate's own spirit (RQ4/RQ5 *answered*, in the report, not just computed) deserves a human read-through before formally closing, not an automatic check the moment the prose exists.
+
+---
+
+## Addendum · kev-8b industry-counterexample stress-test (D27, owner-initiated, 22 Sep 2026)
+
+Outside the W0–W7 numbering deliberately — this is a comparison arm against the existing thesis, not a new RQ, and doesn't yet have a calendar slot inside Week 6/7's existing hour budgets (flagged explicitly, not silently squeezed in).
+
+- [x] **K1 [C]** Candidate research + selection: Jev (proprietary, TypeSafe blog) vs. three open `/v1/systemone` stand-ins (kev-8b, Bespoke-Nimble-9B, circuit-8b) vs. the rejected `SemIf` cluster.
+  **DoD:** a documented decision with reasoning (D27).
+  **Done, 22 Sep 2026.** kev-8b selected — the only candidate not disqualified by a hard/documented low token cap against this project's real prompt lengths (task 4.2's `n_prompt_tokens`).
+
+- [x] **K2 [C]** Diagnostic probing: real (not documented) token-length behavior and launch configuration for kev-8b.
+  **DoD:** a confirmed, reproducible serving ceiling with population coverage checked against real data.
+  **Done, 22 Sep 2026.** Two independent probe sessions (`kev_token_probe.py`, `kev_token_probe_boundary.py`, scratchpad, not committed) found: a real `KEV_MERGE=0` requirement (README under-documents this — `KEV_DTYPE=bf16` alone still loads fp32, since `kev/checkpoint.py` forces fp32 whenever `merge` is true); a hard `setsid` requirement (Colab's cell-interrupt signal reaches a plain `nohup ... &` background process); a genuine, reproducible CUDA-OOM instability zone at ~8,165–8,192 tokens (confirmed non-deterministic — identical input succeeded then failed — across two independent sessions); a separate, deterministic `max_branch` rejection at the same boundary. Practical ceiling adopted: **8,160 tokens**, covering 100% of `clean` and 97.06% of `verbose` items (≈56 items excluded, explicit not silent). Full reasoning and numbers in D27.
+
+- [ ] **K3 [C]** Build `src/judge_kev.py` + `configs/run_kev.yaml`, run the clean+verbose battery against kev-8b (D27's launch config, 8,160-token ceiling, ~56-item exclusion).
+  **DoD:** `calls_kev-8b.parquet` / `items_kev-8b.parquet` (D26 naming) with verdict + native calibrated probability for every surviving item, both orders, both conditions.
+
+- [ ] **K4 [A]** Calibration check + position-swap attack + verbosity attack + D22 Bayesian recalibration, reusing `rq1.py`/`rq3.py`/`bayesian.py`'s existing recipes unchanged, pointed at `items_kev-8b.parquet`.
+  **DoD:** ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, and a meta-model-vs-raw-confidence comparison, each with a CI.
+
+- [ ] **K5 [W]** `REPORT.md` standalone section: "Stress-testing the industry's calibration counterclaim (kev-8b)" — the out-of-domain caveat stated up front, the position-bias finding from K2's diagnostics framed explicitly as a probe-script observation pending K4's controlled version (not yet a formal result), and K4's numbers.
+  **DoD:** written, every claim traceable to a results file.
+
+- ⛔ **GATE K** — kev-8b's own claimed calibration tested against the same battery (position-swap, verbosity attack, Bayesian recalibration) as the primary judge; the out-of-domain caveat stated prominently, not buried.
 
 ---
 
