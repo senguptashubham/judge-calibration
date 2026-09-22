@@ -331,6 +331,7 @@ Outside the W0–W7 numbering deliberately — this is a comparison arm against 
 
 - [ ] **K3 [C]** Build `src/judge_kev.py` + `configs/run_kev.yaml`, run the clean+verbose battery against kev-8b (D27's launch config, 8,160-token ceiling, ~56-item exclusion).
   **DoD:** `calls_kev-8b.parquet` / `items_kev-8b.parquet` (D26 naming) with verdict + native calibrated probability for every surviving item, both orders, both conditions.
+  **First full run (22 Sep 2026) discarded, not built on.** `runs/kev_8b/kev.jsonl` (7,616 rows, otherwise clean - 0 duplicates, 0 unexpected failures, skip count matched expectations) was collected with a `call_kev()` that only kept `choice`/`probabilities`/`input_tokens`, silently dropping kev's own `confidence` field (present in the documented response schema, not derivable from what was kept - see DECISIONS.md D27's 22 Sep amendment). Fixed to capture the full raw response; the run needs to be redone under the fixed harness before `calls_kev-8b.parquet`/`items_kev-8b.parquet` get built.
 
 - [ ] **K4 [A]** Calibration check + position-swap attack + verbosity attack + D22 Bayesian recalibration, reusing `rq1.py`/`rq3.py`/`bayesian.py`'s existing recipes unchanged, pointed at `items_kev-8b.parquet`.
   **DoD:** ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, and a meta-model-vs-raw-confidence comparison, each with a CI.

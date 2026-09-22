@@ -181,27 +181,32 @@ def build_payload(state: str) -> dict:
 
 def call_kev(base_url: str, state: str, timeout: int = 120) -> dict:
     """The only function in this module that touches the network. Returns
-    a dict with `ok` (bool) plus either the parsed verdict fields or an
-    `error` string - callers don't need to distinguish a network error, a
-    422 validation rejection ("branch too long"), or a 500 server crash to
-    decide what to do: log and skip, the same treatment for all three (D27
-    - all three are real, observed failure modes on this harness).
+    the COMPLETE raw response - the full parsed JSON body on success, the
+    full raw error text on an HTTP error, the full exception string on a
+    network failure - never a curated subset of fields.
+
+    This mirrors judge.py's own raw-materials-first principle (CLAUDE.md
+    invariant 7: parsing/derivation happens later, in a separate step,
+    never at collection time) - a principle already established elsewhere
+    in this codebase, not a new judgment call. An earlier version of this
+    function extracted only choice/probabilities/input_tokens and
+    discarded the rest, which silently lost kev's own `confidence` field
+    (present in the documented response schema, and NOT equal to
+    max(probabilities.values()) in the worked example - a real, distinct
+    signal, not a derivable one) across the entire first full run. Fixed
+    22 Sep 2026 (DECISIONS.md D27 amendment) - that run was discarded and
+    redone with this version. Deriving choice/probabilities/confidence/
+    anything else from `raw_response` is a later step's job (K4), same
+    layering parse.py already uses for the primary judge.
     """
     payload = build_payload(state)
     try:
         resp = requests.post(base_url, json=payload, timeout=timeout)
     except requests.RequestException as exc:
-        return {"ok": False, "error": str(exc)}
+        return {"ok": False, "http_status": None, "raw_response": None, "error": str(exc)}
     if resp.status_code != 200:
-        return {"ok": False, "error": f"http_{resp.status_code}: {resp.text[:500]}"}
-    body = resp.json()
-    verdict = body.get("answers", {}).get("verdict", {})
-    return {
-        "ok": True,
-        "choice": verdict.get("choice"),
-        "probabilities": verdict.get("probabilities"),
-        "input_tokens": body.get("usage", {}).get("input_tokens"),
-    }
+        return {"ok": False, "http_status": resp.status_code, "raw_response": resp.text, "error": None}
+    return {"ok": True, "http_status": resp.status_code, "raw_response": resp.json(), "error": None}
 
 
 def _run_calls(config: KevConfig, checkpoint_path: Path, items_df: "pd.DataFrame") -> None:
