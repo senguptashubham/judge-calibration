@@ -116,6 +116,31 @@ def verdict_bidir_kev(rows: list[dict]) -> str | None:
     return "A" if p >= 0.5 else "B"
 
 
+def _canonical_verdict_ba_kev(rows: list[dict]) -> str | None:
+    """The BA-order call's own choice, translated into canonical
+    model_a/model_b identity - mirrors signals.py::_canonical_verdict_ba.
+    Under BA, displayed-A = model_b, so a raw "A" choice means model_b won.
+    """
+    call = _find_kev_call(rows, "BA")
+    if call is None:
+        return None
+    return "B" if call["choice"] == "A" else "A"
+
+
+def flipped_kev(rows: list[dict]) -> bool | None:
+    """Canonical verdict differs between AB and BA order - the direct
+    analog of signals.py::flipped(), needed for the position-swap flip-
+    rate test (K4). Compares judge_verdict_kev (canonical AB) against the
+    BA call's own translated verdict, NOT against verdict_bidir_kev (which
+    is p-averaged, a different quantity than "what did BA alone say").
+    """
+    ab = judge_verdict_kev(rows)
+    ba = _canonical_verdict_ba_kev(rows)
+    if ab is None or ba is None:
+        return None
+    return ab != ba
+
+
 def conf_kev(rows: list[dict]) -> float | None:
     """kev's raw class-probability signal: P(whichever verdict the
     canonical AB-order call actually gave), symmetric in [0.5, 1] - the
@@ -147,6 +172,7 @@ def compute_item_signals_kev(rows: list[dict]) -> dict:
         "verdict_bidir": verdict_bidir_kev(rows),
         "conf_kev": conf_kev(rows),
         "conf_kev_bpe": conf_kev_bpe(rows),
+        "flipped": flipped_kev(rows),
     }
 
 

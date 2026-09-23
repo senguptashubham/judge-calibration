@@ -19,6 +19,7 @@ from src.kev_signals import (
     build_items_kev_dataframe,
     conf_kev,
     conf_kev_bpe,
+    flipped_kev,
     judge_verdict_kev,
     verdict_bidir_kev,
     _p_model_a_wins_kev,
@@ -133,6 +134,28 @@ def test_verdict_bidir_kev_uses_order_corrected_mean():
 def test_conf_kev_is_probability_of_the_chosen_verdict():
     rows = [_call("AB", "A", prob_a=0.8), _call("BA", "B", prob_a=0.3)]
     assert conf_kev(rows) == pytest.approx(0.8)  # prob_a, since AB's choice was "A"
+
+
+# --- flipped_kev -------------------------------------------------------------
+
+
+def test_flipped_kev_true_when_canonical_verdicts_disagree():
+    # AB says "A" (model_a wins). BA's own choice is "A" too, but under BA
+    # displayed-A = model_b, so BA's canonical verdict is "B" (model_b
+    # wins) - AB and BA disagree in canonical terms -> flipped.
+    rows = [_call("AB", "A", prob_a=0.8), _call("BA", "A", prob_a=0.7)]
+    assert flipped_kev(rows) is True
+
+
+def test_flipped_kev_false_when_canonical_verdicts_agree():
+    # AB says "A" (model_a wins). BA's own choice is "B", which under BA's
+    # translation also means model_a wins - agree -> not flipped.
+    rows = [_call("AB", "A", prob_a=0.8), _call("BA", "B", prob_a=0.7)]
+    assert flipped_kev(rows) is False
+
+
+def test_flipped_kev_none_when_an_order_is_missing():
+    assert flipped_kev([_call("AB", "A", prob_a=0.8)]) is None
 
 
 # --- conf_kev_bpe -----------------------------------------------------------
