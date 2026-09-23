@@ -30,10 +30,12 @@ import numpy as np
 import pandas as pd
 
 from analysis.rq3 import compute_confidence_gap, compute_flip_rate, compute_signal_rq3b_metrics
+from src.bayesian import repeated_stratified_group_kfold_bayesian
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.judge_kev import KevConfig
 from src.metrics import auroc_error, brier, ece, overconfidence_gap
-from src.plots import plot_reliability_diagram, plot_rq3a_confidence_gap, plot_rq3b_deltas
+from src.plots import plot_bayesian_convergence, plot_reliability_diagram, plot_rq3a_confidence_gap, plot_rq3b_deltas
+from src.predictor import build_xyg
 
 KEV_SIGNALS = ["conf_kev", "conf_kev_bpe"]
 IN_COVERAGE_THRESHOLD = 1024
@@ -274,10 +276,82 @@ def main_verbosity(config_path: str) -> None:
     print(f"Wrote {len(table)} rows to {table_path}")
 
 
+def build_kev_tier(population: pd.DataFrame) -> pd.DataFrame:
+    """kev's whole feature set - both signals, nothing else. `confidence`
+    is never a column here (D27 - confirmed redundant with conf_kev).
+    Passed straight through build_xyg()'s encode_features() call, which
+    is a no-op on two pure-float columns (no categorical/boolean columns
+    present), same as it already is on the primary study's own Tier A.
+    """
+    return population[KEV_SIGNALS]
+
+
+def main_bayesian_recalibration(config_path: str) -> None:
+    """RQ6's D22 recalibration check: does a Bayesian hierarchical
+    meta-model over BOTH kev signals together beat kev's own best single
+    raw signal at predicting kev's own errors? Full D8 protocol (5-fold x
+    10-repeat NUTS), per the owner's explicit confirmation - same rigor as
+    the primary judge's own RQ4 Bayesian arm, not a lighter version.
+    Clean-only population (mirrors 5.9b/5.9c's own scope), split by
+    coverage regime.
+    """
+    config = KevConfig.from_yaml(config_path)
+    clean_items = load_rq6_clean_items(config.paths.items_parquet)
+
+    rows = []
+    for regime in ["in_coverage", "out_of_coverage"]:
+        population = clean_items[clean_items["regime"] == regime].reset_index(drop=True)
+        print(f"RQ6 Bayesian recalibration ({regime}): N={len(population)}, fitting D8 protocol (5x10 NUTS)...")
+
+        X, y, groups = build_xyg(population, build_kev_tier)
+        results = repeated_stratified_group_kfold_bayesian(X, y, groups, seed=config.seed)
+
+        aurocs = np.array([r.auroc for r in results])
+        fold_diagnostics = [fd for r in results for fd in r.fold_diagnostics]
+        n_flagged = sum(fd["flagged"] for fd in fold_diagnostics)
+
+        best_single_auroc = max(
+            compute_signal_calibration(population, signal, config.n_bins, config.seed)["auroc"]
+            for signal in KEV_SIGNALS
+        )
+
+        print(
+            f"  meta-model AUROC={aurocs.mean():.4f} [{aurocs.min():.4f}, {aurocs.max():.4f}] "
+            f"(D8 across-repeat spread) vs. best single signal AUROC={best_single_auroc:.4f}"
+        )
+        print(f"  convergence: {n_flagged}/{len(fold_diagnostics)} fold-fits flagged")
+
+        rows.append(
+            {
+                "regime": regime,
+                "n": len(population),
+                "meta_model_auroc_mean": aurocs.mean(),
+                "meta_model_auroc_min": aurocs.min(),
+                "meta_model_auroc_max": aurocs.max(),
+                "best_single_signal_auroc": best_single_auroc,
+                "n_folds_flagged": n_flagged,
+                "n_folds_total": len(fold_diagnostics),
+            }
+        )
+
+        plot_bayesian_convergence(
+            max_rhat=np.array([fd["max_rhat"] for fd in fold_diagnostics]),
+            flagged=np.array([fd["flagged"] for fd in fold_diagnostics]),
+            model_slug=f"{config.model_slug}_{regime}",
+        )
+
+    table = pd.DataFrame.from_records(rows)
+    table_path = f"results/rq6_bayesian_recalibration_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--task", required=True, choices=["calibration", "position_swap", "verbosity"])
+    parser.add_argument(
+        "--task", required=True, choices=["calibration", "position_swap", "verbosity", "bayesian_recalibration"]
+    )
     args = parser.parse_args()
 
     if args.task == "calibration":
@@ -286,3 +360,5 @@ if __name__ == "__main__":
         main_position_swap(args.config)
     elif args.task == "verbosity":
         main_verbosity(args.config)
+    elif args.task == "bayesian_recalibration":
+        main_bayesian_recalibration(args.config)
