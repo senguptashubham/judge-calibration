@@ -21,6 +21,7 @@ from src.judge_autoj import (
     checkpoint_key,
     load_completed_keys,
     pending_calls,
+    split_by_prompt_length,
 )
 
 
@@ -208,3 +209,76 @@ def test_autoj_prompt_hash_is_stable_and_content_dependent():
     h2 = autoj_prompt_hash()
     assert h1 == h2
     assert isinstance(h1, str) and len(h1) == 16
+
+
+# --- split_by_prompt_length ------------------------------------------------
+#
+# Added 23 Sep 2026 after a real Colab run hit VLLMValidationError - a
+# prompt exceeded auto-j's 8,192-token context. `token_counter` is a plain
+# character-count stand-in here, not a real tokenizer - the split logic
+# itself doesn't care what "tokens" means, only that it compares against
+# the threshold correctly, so testing it this way keeps these tests fast
+# and offline (no tokenizer download), per this module's own docstring.
+
+
+def _pending_with_lengths():
+    # Two items, one spec each - "short" content stays under any reasonable
+    # threshold, "long" content is deliberately long enough to exceed a
+    # small test threshold.
+    short_row = pd.Series(
+        {
+            "question_id": 1, "model_a": "m1", "model_b": "m2", "turn": 1, "category": "writing",
+            "conversation_a": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "short reply"}],
+            "conversation_b": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "short reply too"}],
+        }
+    )
+    long_row = pd.Series(
+        {
+            "question_id": 2, "model_a": "m3", "model_b": "m4", "turn": 1, "category": "writing",
+            "conversation_a": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "x" * 5000}],
+            "conversation_b": [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "y" * 5000}],
+        }
+    )
+    pending = [
+        (item_id(1, "m1", "m2", 1), short_row, AutojCallSpec("clean", "AB", 0)),
+        (item_id(2, "m3", "m4", 1), long_row, AutojCallSpec("clean", "AB", 0)),
+    ]
+    return pending
+
+
+def test_split_by_prompt_length_separates_runnable_from_skipped():
+    pending = _pending_with_lengths()
+    runnable, skipped_rows = split_by_prompt_length(pending, token_counter=len, max_prompt_tokens=1000)
+    assert len(runnable) == 1
+    assert len(skipped_rows) == 1
+    assert runnable[0][0] == item_id(1, "m1", "m2", 1)
+    assert skipped_rows[0]["item_id"] == item_id(2, "m3", "m4", 1)
+
+
+def test_split_by_prompt_length_skipped_rows_have_the_kev_style_shape():
+    # Mirrors judge_kev.py::_run_calls()'s own skipped=True/skip_reason
+    # pattern exactly - never silent, never a crash.
+    pending = _pending_with_lengths()
+    _, skipped_rows = split_by_prompt_length(pending, token_counter=len, max_prompt_tokens=1000)
+    row = skipped_rows[0]
+    assert row["skipped"] is True
+    assert row["skip_reason"] == "over_max_prompt_tokens"
+    assert row["n_prompt_tokens"] > 1000
+    assert row["condition"] == "clean"
+    assert row["order"] == "AB"
+    assert row["sample_idx"] == 0
+
+
+def test_split_by_prompt_length_nothing_skipped_when_threshold_is_generous():
+    pending = _pending_with_lengths()
+    runnable, skipped_rows = split_by_prompt_length(pending, token_counter=len, max_prompt_tokens=100_000)
+    assert len(runnable) == 2
+    assert skipped_rows == []
+
+
+def test_split_by_prompt_length_runnable_entries_carry_the_precomputed_prompt():
+    pending = _pending_with_lengths()
+    runnable, _ = split_by_prompt_length(pending, token_counter=len, max_prompt_tokens=1000)
+    item, item_row, spec, prompt, n_prompt_tokens = runnable[0]
+    assert prompt.startswith("[INST] ")
+    assert n_prompt_tokens == len(prompt)

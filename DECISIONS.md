@@ -498,3 +498,20 @@ Fit with NumPyro/NUTS. **Fallback ladder, preregistered, not improvised mid-week
 
 **Documentation weight**, same treatment RQ6 got: full RQ (`CLAUDE.md`'s RQ table, `PLAN.md` §8), `TASKS.md`'s own **L1–L6/GATE L** block, kept outside the W0–W7 numbering so it stays isolable/trimmable later without renumbering anything else, same as the K-block.
 
+**Amended 23 Sep 2026 - the "8,192-token context covers 100% of both conditions, no coverage-regime split needed" claim above was wrong, and it was wrong because it was never actually measured.** The first real Colab run (`--n-items 20` smoke test) crashed with `vllm.exceptions.VLLMValidationError`: a rendered prompt exceeded 8,192 tokens on its own, before even reserving room for the 1,024-token output budget. This was found and root-caused **locally, offline, with no GPU** - `transformers.AutoTokenizer.from_pretrained("GAIR/autoj-13b-GPTQ-4bits")` loads fine without PyTorch/a GPU, so `build_autoj_prompt()`'s real token length was measured against the full 1,904-item population directly, the same "measure, don't guess" standard D12/D22/D27 already hold this project to - the original claim skipped that step and generalized from the *primary judge's* own verbose-condition average instead, which was the actual mistake.
+
+**Real measured distribution** (3,808 rows = 1,904 items × 2 conditions, `AB` order, `transformers`' own tokenizer):
+
+| | n | mean tokens | max tokens | >7,168 | >8,192 |
+|---|---|---|---|---|---|
+| clean / turn=1 | 948 | 740 | 2,053 | 0 | 0 |
+| clean / turn=2 | 956 | 1,281 | 3,368 | 0 | 0 |
+| verbose / turn=1 | 948 | 2,380 | 8,407 | 17 | 1 |
+| verbose / turn=2 | 956 | **4,527** | **13,808** | **164 (17.2%)** | 109 |
+
+**Root cause, not a random tail:** `build_autoj_prompt()`'s own turn=2 design (this same decision, above) folds *both* turns' assistant content into each side's `{response}` field, and `verbose_pad()` pads *both* of those assistant turns independently - a real compounding effect specific to the verbose+turn=2 combination, not present for either perturbation alone. clean and verbose/turn=1 stay comfortably within bounds; verbose/turn=2 is the one population segment where auto-j's context genuinely binds.
+
+**Decision, confirmed with the owner (AskUserQuestion, 23 Sep 2026): skip-and-log at 7,168 tokens** (`max_model_len − max_tokens`, reserving the full 1,024-token generation budget for every accepted call, rather than 8,192 with borderline items risking truncated output) - mirrors `judge_kev.py::_run_calls()`'s own `max_state_tokens` skip-and-log pattern exactly: `src/judge_autoj.py::split_by_prompt_length()` checks every call's real rendered-prompt length **before** any batch is sent to `llm.generate()` (a single over-length prompt crashes the whole batch call, not just that one request - confirmed by the crash itself), writes `skipped=True, skip_reason="over_max_prompt_tokens"` rows for the excluded calls, never silently drops them. **Real population impact: 181/3,808 rows (4.75%) skipped overall**, concentrated almost entirely in verbose/turn=2 (164/956, ~17.2% of that specific subgroup) plus a small verbose/turn=1 tail (17/948, ~1.8%) - materially larger than RQ6's kev-8b exclusion (2.89%), and this **must be stated as a real, honest limitation in `REPORT.md`'s RQ7 section (L6)**, not minimized - a meaningful fraction of the hardest attack combination (verbosity × multi-turn) is structurally unreachable at this model's context length, which is itself a substantive finding about auto-j's practical usability under a combined attack, not just a methodological footnote.
+
+**Supersedes, not deletes:** `PLAN.md` §8.5's original "no coverage-regime split needed" sentence is corrected in place with a pointer back here, per this project's own superseding convention (D5/D9/D14/D18's own precedent - the audit trail stays, not the wrong claim standing uncorrected).
+

@@ -275,11 +275,63 @@ def logprobs_path_autoj(runs_dir: str, item: str, condition: str, order: str, sa
     return Path(runs_dir) / "logprobs" / f"{key}.jsonl.gz"
 
 
-def _build_prompts(batch: list[tuple[str, "pd.Series", AutojCallSpec]]) -> list[str]:
-    return [
-        build_autoj_prompt(spec.condition, spec.order, item_row["conversation_a"], item_row["conversation_b"], item_row["turn"])
-        for _, item_row, spec in batch
-    ]
+def split_by_prompt_length(
+    pending: list[tuple[str, "pd.Series", AutojCallSpec]],
+    token_counter,
+    max_prompt_tokens: int,
+) -> tuple[list[tuple[str, "pd.Series", AutojCallSpec, str, int]], list[dict]]:
+    """Splits `pending` into (runnable, skipped_rows) by each call's REAL
+    rendered-prompt token length, checked BEFORE any generation call - a
+    single over-length prompt crashes vLLM's WHOLE batch call, it doesn't
+    just fail that one request (confirmed empirically, 23 Sep 2026: the
+    first real Colab run hit exactly this, VLLMValidationError, after a
+    prompt exceeded the model's 8,192-token context - traced to auto-j's
+    own tokenizer plus this module's turn=2 flattening design compounding
+    verbose padding across BOTH folded turns; real measured impact:
+    4.75% of rows overall, ~17.2% of verbose/turn=2 specifically - full
+    numbers in DECISIONS.md D28's 23 Sep amendment).
+
+    `runnable` entries carry the already-rendered prompt and its real token
+    count, computed once here, not re-rendered later - `skipped_rows` are
+    ready-to-append checkpoint dicts, missing only the provenance fields
+    (judge_model/vllm_version/prompt_hash/git_sha/seed) the caller adds,
+    same "skipped=True, skip_reason=..." shape judge_kev.py::_run_calls()
+    already established for kev-8b's own max_state_tokens check.
+
+    `token_counter` is injected (a plain `Callable[[str], int]`) rather
+    than this function loading a tokenizer itself, so the split logic
+    stays testable without downloading a real tokenizer (D17's own
+    "everything except the one function that touches the external thing
+    stays locally testable" principle, applied here to `transformers` the
+    same way it's already applied to `vllm`).
+    """
+    runnable: list[tuple[str, "pd.Series", AutojCallSpec, str, int]] = []
+    skipped_rows: list[dict] = []
+    for item, item_row, spec in pending:
+        prompt = build_autoj_prompt(
+            spec.condition, spec.order, item_row["conversation_a"], item_row["conversation_b"], int(item_row["turn"])
+        )
+        n_prompt_tokens = token_counter(prompt)
+        if n_prompt_tokens > max_prompt_tokens:
+            skipped_rows.append(
+                {
+                    "item_id": item,
+                    "question_id": int(item_row["question_id"]),
+                    "category": item_row.get("category"),
+                    "model_a": item_row["model_a"],
+                    "model_b": item_row["model_b"],
+                    "turn": int(item_row["turn"]),
+                    "condition": spec.condition,
+                    "order": spec.order,
+                    "sample_idx": spec.sample_idx,
+                    "skipped": True,
+                    "skip_reason": "over_max_prompt_tokens",
+                    "n_prompt_tokens": n_prompt_tokens,
+                }
+            )
+            continue
+        runnable.append((item, item_row, spec, prompt, n_prompt_tokens))
+    return runnable, skipped_rows
 
 
 def _run_generation(
@@ -288,15 +340,25 @@ def _run_generation(
     items_df: "pd.DataFrame",
     batch_size: int = 32,
 ) -> None:
-    """The only function in this module that touches vLLM. Kept separate so
-    everything above stays importable/testable without vllm installed
-    (D17), same split judge.py/judge_kev.py already use.
+    """The only function in this module that touches vLLM (or downloads a
+    tokenizer). Kept separate so everything above stays importable/
+    testable without vllm/transformers installed (D17), same split
+    judge.py/judge_kev.py already use.
 
     No StructuredOutputsParams here, deliberately (D28) - auto-j's own
     trained format is free text, and forcing JSON output would deviate
     from it the same way it would have for kev-8b.
+
+    `max_prompt_tokens = config.max_model_len - config.max_tokens` -
+    reserves the full generation budget for every accepted call rather
+    than letting borderline-length items get truncated output near the
+    context boundary (the "skip at 7,168, not 8,192" decision, D28).
     """
+    from transformers import AutoTokenizer
     from vllm import LLM, SamplingParams
+
+    tok = AutoTokenizer.from_pretrained(config.judge_model)
+    max_prompt_tokens = config.max_model_len - config.max_tokens
 
     llm = LLM(
         model=config.judge_model,
@@ -310,9 +372,22 @@ def _run_generation(
     specs = call_schedule_autoj(config)
     pending = pending_calls(items_df, specs, completed)
 
-    for batch_start in range(0, len(pending), batch_size):
-        batch = pending[batch_start : batch_start + batch_size]
-        prompts = _build_prompts(batch)
+    runnable, skipped_rows = split_by_prompt_length(pending, lambda p: len(tok.encode(p)), max_prompt_tokens)
+    for row in skipped_rows:
+        row.update(
+            {
+                "seed": config.seed + row["sample_idx"],
+                "judge_model": config.judge_model,
+                "vllm_version": vllm_version,
+                "prompt_hash": autoj_prompt_hash(),
+                "git_sha": sha,
+            }
+        )
+        append_checkpoint(checkpoint_path, row)
+
+    for batch_start in range(0, len(runnable), batch_size):
+        batch = runnable[batch_start : batch_start + batch_size]
+        prompts = [b[3] for b in batch]
         sampling_params = [
             SamplingParams(
                 max_tokens=config.max_tokens,
@@ -321,7 +396,7 @@ def _run_generation(
                 temperature=config.temperature_canonical if spec.sample_idx == 0 else config.temperature_sc,
                 seed=config.seed + spec.sample_idx,
             )
-            for _, _, spec in batch
+            for _, _, spec, _, _ in batch
         ]
 
         batch_start_time = time.time()
@@ -332,7 +407,7 @@ def _run_generation(
         # processes the whole batch concurrently).
         avg_latency_ms = batch_elapsed_ms / len(batch)
 
-        for (item, item_row, spec), output in zip(batch, outputs):
+        for (item, item_row, spec, _, n_prompt_tokens), output in zip(batch, outputs):
             completion = output.outputs[0]
 
             row = {
@@ -350,9 +425,11 @@ def _run_generation(
                 "vllm_version": vllm_version,
                 "prompt_hash": autoj_prompt_hash(),
                 "git_sha": sha,
+                "skipped": False,
+                "skip_reason": None,
                 "raw_output": completion.text,
                 "finish_reason": completion.finish_reason,
-                "n_prompt_tokens": len(output.prompt_token_ids),
+                "n_prompt_tokens": n_prompt_tokens,
                 "n_out_tokens": len(completion.token_ids),
                 "latency_ms": avg_latency_ms,
             }
