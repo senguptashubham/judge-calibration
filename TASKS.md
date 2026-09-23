@@ -1,7 +1,7 @@
 # TASKS.md
 
 Atomic tasks with a definition of done. Feed one at a time to Claude Code: *"Do task 1.4 from TASKS.md."*
-Read `CLAUDE.md` §2 (invariants) and `DECISIONS.md` (D4–D27) before any task touching statistics or the harness.
+Read `CLAUDE.md` §2 (invariants) and `DECISIONS.md` (D4–D28) before any task touching statistics or the harness.
 
 Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning · **⛔** gate
 
@@ -352,6 +352,37 @@ Treated as a full RQ (CLAUDE.md's RQ table, PLAN.md §7), not a lightweight foot
 
 - ⛔ **GATE K** — kev-8b's own claimed calibration tested against the same battery (position-swap, verbosity attack, Bayesian recalibration) as the primary judge; the out-of-domain caveat stated prominently, not buried.
   **Status, 23 Sep 2026: all underlying conditions met** — K1–K5 all done, `REPORT.md`'s RQ6 section written. Left unchecked pending the owner's own review, same treatment GATE 5 got for the same reason: the gate's spirit (the claim *tested and reported*, not just computed) deserves a human read-through before formally closing.
+
+---
+
+## Addendum · RQ7 — auto-j-13b purpose-built-judge generalization test (D28, owner-initiated, 23 Sep 2026)
+
+Full RQ (`CLAUDE.md`'s RQ table, `PLAN.md` §8), not a footnote — same treatment RQ6 got. Kept on its own L1–L6/GATE L numbering, outside the W0–W7 sequence, for the same isolable/trimmable-later reason as the K-block. Planning (candidate verification, GPU smoke test, the four scope decisions) was done via a plan-mode pass before any code — see `DECISIONS.md` D28 for the full trail.
+
+- [x] **L1 [C]** Candidate confirmation + real prompt/parsing contract sourcing: verify auto-j-13b's serving contract, license, context length, and training-data provenance from primary sources (model card, GitHub repo source, `config.json`, paper), not docs summaries.
+  **DoD:** the real, verbatim prompt template (`constants_prompt.py`) and verdict-extraction logic (`example.py::extract_pariwise_result`) confirmed from source, plus a contamination assessment against this project's own eval set.
+  **Done, 23 Sep 2026 (planning pass).** `[INST] {input} [/INST]` wrapper, `pairwise_tie` protocol, `rfind('final decision is ')`-based extraction — all pulled verbatim via `curl` from `github.com/GAIR-NLP/auto-j`. `max_position_embeddings=8192` confirmed via `config.json`. Llama 2 Community License. Contamination: auto-j trains on GPT-4-labeled `lmsys/chatbot_arena_conversations`, a different dataset from this project's `lmsys/mt_bench_human_judgments`; MT-Bench's 80 questions confirmed hand-crafted (lmsys's own blog), not sampled from Arena — leakage assessed unlikely, full exhaustive check blocked on a gated-dataset request only the owner can approve. Full trail in D28.
+
+- [x] **L2 [C]** GPU/quantization smoke test: confirm auto-j-13b's GPTQ-4bit variant actually loads and generates on this project's pinned `vllm==0.28.0`, on the Colab L4 already in use.
+  **DoD:** a real (not estimated) load succeeds, with VRAM/timing numbers and the kernel used.
+  **Done, 23 Sep 2026.** `GAIR/autoj-13b-GPTQ-4bits` loaded cleanly — vLLM's own built-in Marlin GPTQ kernel, no extra `auto-gptq` dependency needed. Real numbers: 6.78 GiB weight load, 10.93 GiB KV cache budget (14,320 tokens) at `gpu_memory_utilization=0.85` on a ~22 GiB-usable L4, ≈182s one-time engine init (torch.compile dominates; actual weight load is 2.7s). Confirms fp16 (~26 GiB measured from real HF file sizes) would not fit the L4, but GPTQ-4bit (7.92 GiB) does, comfortably. The smoke-test prompt itself was an improvised (non-verbatim) template, so its output isn't evidence of judging quality — only that the load/generate path works end to end; L3 must use the real ported template.
+
+- [ ] **L3 [C]** Build `src/judge_autoj.py` + `configs/run_autoj.yaml`; run the clean+verbose battery, both turns, using the verbatim auto-j prompt contract (L1) and the confirmed GPTQ-4bit/L4 config (L2).
+  **DoD:** a complete, verified raw checkpoint covering every item, both orders, both conditions, both turns.
+
+- [ ] **L4 [C]** Build `src/autoj_signals.py`: verdict extraction ported verbatim from auto-j's own `extract_pariwise_result()`, `conf_sc` (direct D6 port), the order-swap `conf_sc_bpe_autoj` analog (built from self-consistency proportions, not logprobs — D28's signal-scope decision), `flipped_autoj`, and the `calls`/`items` parquet build with `turn` kept as a real column.
+  **DoD:** `items_autoj_13b_gptq_4bits.parquet` with both signals, `correct`/`correct_bidir`, `turn`, for every non-skipped row.
+
+- [ ] **L4b [A]** Turn=2 validity check (D28's pre-committed policy): parse-failure rate (`extract_autoj_verdict() == -1`) compared turn=1 vs. turn=2, plus a manual spot-check of real rendered turn=2 prompts. **Must run and be decided before L5's calibration numbers are computed** — the decision is about the rendering's own mechanical validity, never about how the downstream numbers look.
+  **DoD:** a stated verdict on whether turn=2 carries a real rendering problem, recorded before any RQ7 calibration/accuracy number exists.
+
+- [ ] **L5 [A]** Calibration check + position-swap attack + verbosity attack + D22 Bayesian recalibration, reusing `rq1.py`/`rq3.py`/`bayesian.py`'s existing recipes unchanged, pointed at `items_autoj_13b_gptq_4bits.parquet`. Stratified by `turn` (1 vs. 2), not by coverage regime (D28 — auto-j's 8,192-token context covers both conditions in full).
+  **DoD:** ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, and a meta-model-vs-best-single-signal comparison, each with a CI, for both signals and both turn populations.
+
+- [ ] **L6 [W]** `REPORT.md` standalone section: "Generalizing across training objective (auto-j-13b)" — the purpose-built-for-judging framing stated up front (the inverse caveat of RQ6's out-of-domain one), L4b's turn=2 validity verdict stated explicitly (not buried), and L5's numbers.
+  **DoD:** written, every claim traceable to a results file.
+
+- ⛔ **GATE L** — auto-j-13b tested against the same four-test battery as the primary judge and kev-8b; the turn=2 validity verdict stated prominently, not buried; the three-way comparison (Qwen vs. kev-8b vs. auto-j) stated as the headline synthesis.
 
 ---
 

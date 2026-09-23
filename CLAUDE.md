@@ -2,7 +2,7 @@
 
 Read this before doing anything in this repo. It is the contract, not a summary.
 
-**Also read `DECISIONS.md`** — it carries D4–D27 from the Week-0 design review, the 31 Aug 2026 professor-feedback integration (`PROFESSORFEEDBACK.md`), and a later owner-initiated addition (D27, 22 Sep 2026 — the industry-counterexample stress test), which override anything here that contradicts them.
+**Also read `DECISIONS.md`** — it carries D4–D28 from the Week-0 design review, the 31 Aug 2026 professor-feedback integration (`PROFESSORFEEDBACK.md`), and two later owner-initiated additions (D27, 22 Sep 2026 — the industry-counterexample stress test; D28, 23 Sep 2026 — the purpose-built-judge generalization test), which override anything here that contradicts them.
 
 ---
 
@@ -25,8 +25,9 @@ An empirical study of **whether small open-weight LLM judges know when they are 
 | RQ4 | Can a cheap supervised meta-model beat the best single signal at predicting judge error? | AUROC under repeated `StratifiedGroupKFold`, vs best-single-signal baseline and permutation null |
 | RQ5 | Does marginalizing over the judge prompt (an ensemble of 3 variants) improve uncertainty quality, and does that improvement survive distillation to single-call cost? | Ensemble vs single-call AUROC/ECE/entropy-quality gap; aleatoric-vs-`d_human` validation |
 | RQ6 | Does kev-8b — an open, RLCD-trained stand-in for the industry's "System One" calibration counterclaim (Jev/TypeSafe) — actually resist the same failure modes (position bias, verbosity degradation, exploitable residual structure) this project already found in a general-purpose LLM judge? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison (D22's Bayesian machinery reused) |
+| RQ7 | Does auto-j-13b — a model purpose-trained via GPT-4-distilled critique+verdict data specifically for pairwise response judging — still exhibit the same position-bias and verbosity-degradation failure modes found for a general-purpose judge (RQ1–RQ3) and an out-of-domain industry stand-in (RQ6)? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison, each split by turn=1/turn=2 |
 
-RQ4 is the owner's own idea and is **not** optional. Protect it. See `PLAN.md` §RQ4. RQ5 was added 31 Aug 2026 from professor feedback (`PROFESSORFEEDBACK.md`, `DECISIONS.md` D18–D24) and is equally binding. See `PLAN.md` §6. RQ6 was added 22–23 Sep 2026, owner-initiated (not professor feedback) — `DECISIONS.md` D27, `PLAN.md` §7, `TASKS.md`'s own K1–K5/GATE K addendum block (deliberately outside the W0–W7 numbering so it stays easy to isolate or trim if later feedback says to scope it down). Its population is a different judge model (kev-8b, not Qwen2.5-7B-Instruct) evaluated on the same MT-Bench items — none of invariant 14's `prompt_variant`/`condition` filtering applies to it, since kev-8b has no prompt-ensemble axis at all.
+RQ4 is the owner's own idea and is **not** optional. Protect it. See `PLAN.md` §RQ4. RQ5 was added 31 Aug 2026 from professor feedback (`PROFESSORFEEDBACK.md`, `DECISIONS.md` D18–D24) and is equally binding. See `PLAN.md` §6. RQ6 was added 22–23 Sep 2026, owner-initiated (not professor feedback) — `DECISIONS.md` D27, `PLAN.md` §7, `TASKS.md`'s own K1–K5/GATE K addendum block (deliberately outside the W0–W7 numbering so it stays easy to isolate or trim if later feedback says to scope it down). Its population is a different judge model (kev-8b, not Qwen2.5-7B-Instruct) evaluated on the same MT-Bench items — none of invariant 14's `prompt_variant`/`condition` filtering applies to it, since kev-8b has no prompt-ensemble axis at all. RQ7 was added 23 Sep 2026, also owner-initiated — `DECISIONS.md` D28, `PLAN.md` §8, `TASKS.md`'s own L1–L6/GATE L addendum block (same isolable-outside-W0–W7 treatment as the K-block). Its population is a third judge model (auto-j-13b) on the same MT-Bench items; like RQ6, none of invariant 14's `prompt_variant` filtering applies (auto-j has no prompt-ensemble axis either), but unlike RQ6 its own population split is by `turn` (1 vs. 2), not by a coverage regime — auto-j's disclosed 8,192-token context covers both `clean` and `verbose` in full.
 
 ---
 
@@ -206,7 +207,7 @@ README.md
 LICENSE
 PLAN.md      design rationale, RQ definitions, week plan
 TASKS.md     atomic tasks with definition-of-done
-DECISIONS.md resolutions from the design reviews, D4–D27
+DECISIONS.md resolutions from the design reviews, D4–D28
 LEARNING.md  reading / courses / skills tracker
 PREREGISTRATION.md   frozen before the Week 2 full run
 REPORT.md    written incrementally, not at the end
