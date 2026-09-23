@@ -1,15 +1,10 @@
 """Tests for src/judge_autoj.py's locally-testable logic: D28's schedule
 (clean/verbose, no prompt_variant axis), checkpoint dedup/resumability
-(invariant 9), and the prompt renderer. Turn=2 was built, smoke-tested,
-and dropped (D28's 23 Sep amendment - a 100-item smoke test found a 36.1%
-output-truncation-driven parse-failure rate for verbose/turn=2 vs 0% for
-clean/turn=2 and 7.1% for verbose/turn=1); build_autoj_prompt() is turn=1
-only now, and load_turn1_items_df() is the real population loader. The
-turn=2 design's own tests are gone with it - the finding itself lives in
-DECISIONS.md D28, not as dead-code coverage here. Deliberately does not
-import vllm - none of this logic touches it (same "only touches the
-external thing inside one boundary function" split judge.py/judge_kev.py's
-own tests already use).
+(invariant 9), and the prompt renderer - especially the turn=2 flattening
+design D28 flags as the one genuinely novel piece L4b's own validity check
+exists to catch problems in. Deliberately does not import vllm - none of
+this logic touches it (same "only touches the external thing inside one
+boundary function" split judge.py/judge_kev.py's own tests already use).
 """
 
 import pandas as pd
@@ -25,7 +20,6 @@ from src.judge_autoj import (
     call_schedule_autoj,
     checkpoint_key,
     load_completed_keys,
-    load_turn1_items_df,
     pending_calls,
     split_by_prompt_length,
 )
@@ -112,9 +106,25 @@ def _turn1_conversations():
     return conv_a, conv_b
 
 
+def _turn2_conversations():
+    conv_a = [
+        {"role": "user", "content": "What's the capital of France?"},
+        {"role": "assistant", "content": "Paris is the capital of France."},
+        {"role": "user", "content": "Rewrite that in French."},
+        {"role": "assistant", "content": "Paris est la capitale de la France."},
+    ]
+    conv_b = [
+        {"role": "user", "content": "What's the capital of France?"},
+        {"role": "assistant", "content": "The capital city is Paris."},
+        {"role": "user", "content": "Rewrite that in French."},
+        {"role": "assistant", "content": "La capitale est Paris."},
+    ]
+    return conv_a, conv_b
+
+
 def test_build_autoj_prompt_uses_the_verbatim_llama2_wrapper_and_labels():
     conv_a, conv_b = _turn1_conversations()
-    prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b)
+    prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=1)
     assert prompt.startswith("[INST] ")
     assert prompt.endswith(" [/INST]")
     assert "[Response 1]:" in prompt
@@ -124,16 +134,16 @@ def test_build_autoj_prompt_uses_the_verbatim_llama2_wrapper_and_labels():
 
 def test_build_autoj_prompt_verbose_is_padded_and_longer_than_clean():
     conv_a, conv_b = _turn1_conversations()
-    clean_prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b)
-    verbose_prompt = build_autoj_prompt("verbose", "AB", conv_a, conv_b)
+    clean_prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=1)
+    verbose_prompt = build_autoj_prompt("verbose", "AB", conv_a, conv_b, turn=1)
     assert verbose_prompt != clean_prompt
     assert len(verbose_prompt) > len(clean_prompt)
 
 
 def test_build_autoj_prompt_order_swap_changes_which_content_is_response_1():
     conv_a, conv_b = _turn1_conversations()
-    ab_prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b)
-    ba_prompt = build_autoj_prompt("clean", "BA", conv_a, conv_b)
+    ab_prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=1)
+    ba_prompt = build_autoj_prompt("clean", "BA", conv_a, conv_b, turn=1)
     assert ab_prompt != ba_prompt
 
     ab_response_1_block, ab_response_2_block = ab_prompt.split("[Response 2]:")
@@ -148,35 +158,57 @@ def test_build_autoj_prompt_order_swap_changes_which_content_is_response_1():
     assert "Nice to meet you" not in ba_response_1_block
 
 
+def test_build_autoj_prompt_turn1_rejects_indexing_past_two_messages():
+    # turn=1 conversations only ever have [user, assistant] - the renderer
+    # must never try to index conversation[2]/[3] for them.
+    conv_a, conv_b = _turn1_conversations()
+    prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=1)
+    assert "Nice to meet you" in prompt
+    assert "Good day to you" in prompt
+
+
+def test_build_autoj_prompt_turn2_shared_prompt_field_has_no_model_specific_content():
+    # D28's turn=2 design: {prompt} carries only the two shared user turns,
+    # never a model-specific answer - the property that keeps one
+    # candidate's context from contaminating the other's.
+    conv_a, conv_b = _turn2_conversations()
+    prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=2)
+    query_block = prompt.split("[Response 1]:")[0]
+    assert "capital of France" in query_block
+    assert "Rewrite that in French" in query_block
+    assert "Paris est la capitale" not in query_block  # model_a's own turn-2 answer
+    assert "La capitale est Paris" not in query_block  # model_b's own turn-2 answer
+
+
+def test_build_autoj_prompt_turn2_folds_each_sides_own_turn1_answer_into_its_own_response():
+    # Each side's own turn-1 answer must appear in ITS OWN response field
+    # (a two-part trajectory), not in the other side's or in the shared
+    # prompt field - this is the property L4b's spot-check is specifically
+    # there to confirm still produces coherent judging in practice.
+    conv_a, conv_b = _turn2_conversations()
+    prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=2)
+    response_1_block, response_2_block = prompt.split("[Response 2]:")
+
+    assert "Paris is the capital of France" in response_1_block  # model_a's turn-1 answer
+    assert "Paris est la capitale de la France" in response_1_block  # model_a's turn-2 answer
+    assert "The capital city is Paris" not in response_1_block  # model_b's answer must not leak in
+
+    assert "The capital city is Paris" in response_2_block  # model_b's turn-1 answer
+    assert "La capitale est Paris" in response_2_block  # model_b's turn-2 answer
+    assert "Paris is the capital of France" not in response_2_block  # model_a's answer must not leak in
+
+
+def test_build_autoj_prompt_rejects_invalid_turn():
+    conv_a, conv_b = _turn1_conversations()
+    with pytest.raises(ValueError):
+        build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=3)
+
+
 def test_autoj_prompt_hash_is_stable_and_content_dependent():
     h1 = autoj_prompt_hash()
     h2 = autoj_prompt_hash()
     assert h1 == h2
     assert isinstance(h1, str) and len(h1) == 16
-
-
-# --- load_turn1_items_df ---------------------------------------------------
-
-
-def test_load_turn1_items_df_filters_to_turn_1_only(config, monkeypatch):
-    # load_full_items_df() itself hits the real dataset (a network/boundary
-    # call, like judge.py's own version) - monkeypatch it so this test
-    # stays offline and only checks the turn filter this module adds on
-    # top (D28's 23 Sep amendment: turn=2 dropped entirely).
-    import src.judge_autoj as mod
-
-    fake_items = pd.DataFrame(
-        [
-            {"question_id": 1, "model_a": "m1", "model_b": "m2", "turn": 1},
-            {"question_id": 2, "model_a": "m3", "model_b": "m4", "turn": 2},
-            {"question_id": 3, "model_a": "m5", "model_b": "m6", "turn": 1},
-        ]
-    )
-    monkeypatch.setattr(mod, "load_full_items_df", lambda cfg: fake_items)
-
-    result = mod.load_turn1_items_df(config)
-    assert set(result["turn"].unique()) == {1}
-    assert len(result) == 2
 
 
 # --- split_by_prompt_length ------------------------------------------------
