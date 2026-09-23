@@ -15,7 +15,7 @@ An empirical study of **whether small open-weight LLM judges know when they are 
 - **Compute:** Google Colab Pro (L4/A100 preferred), vLLM offline batch inference
 - **Deadline:** mid-October 2026. This is a certification capstone, not a paper. Working and honest beats clever.
 
-### The four research questions
+### The five research questions
 
 | RQ | Question | Primary metric |
 |----|----------|----------------|
@@ -24,8 +24,9 @@ An empirical study of **whether small open-weight LLM judges know when they are 
 | RQ3 | Does uncertainty flag bias-induced errors, or is the fooled judge confident? | flip rate, mean confidence on flipped vs unflipped, paired ΔECE/ΔAUROC |
 | RQ4 | Can a cheap supervised meta-model beat the best single signal at predicting judge error? | AUROC under repeated `StratifiedGroupKFold`, vs best-single-signal baseline and permutation null |
 | RQ5 | Does marginalizing over the judge prompt (an ensemble of 3 variants) improve uncertainty quality, and does that improvement survive distillation to single-call cost? | Ensemble vs single-call AUROC/ECE/entropy-quality gap; aleatoric-vs-`d_human` validation |
+| RQ6 | Does kev-8b — an open, RLCD-trained stand-in for the industry's "System One" calibration counterclaim (Jev/TypeSafe) — actually resist the same failure modes (position bias, verbosity degradation, exploitable residual structure) this project already found in a general-purpose LLM judge? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison (D22's Bayesian machinery reused) |
 
-RQ4 is the owner's own idea and is **not** optional. Protect it. See `PLAN.md` §RQ4. RQ5 was added 31 Aug 2026 from professor feedback (`PROFESSORFEEDBACK.md`, `DECISIONS.md` D18–D24) and is equally binding. See `PLAN.md` §6.
+RQ4 is the owner's own idea and is **not** optional. Protect it. See `PLAN.md` §RQ4. RQ5 was added 31 Aug 2026 from professor feedback (`PROFESSORFEEDBACK.md`, `DECISIONS.md` D18–D24) and is equally binding. See `PLAN.md` §6. RQ6 was added 22–23 Sep 2026, owner-initiated (not professor feedback) — `DECISIONS.md` D27, `PLAN.md` §7, `TASKS.md`'s own K1–K5/GATE K addendum block (deliberately outside the W0–W7 numbering so it stays easy to isolate or trim if later feedback says to scope it down). Its population is a different judge model (kev-8b, not Qwen2.5-7B-Instruct) evaluated on the same MT-Bench items — none of invariant 14's `prompt_variant`/`condition` filtering applies to it, since kev-8b has no prompt-ensemble axis at all.
 
 ---
 

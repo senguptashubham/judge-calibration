@@ -283,3 +283,31 @@ MT-Bench's repeated human votes give a real, model-free measure of how contested
 ### 6.6 The verbose-shift check (also D23, via D22's meta-model decomposition, not `conf_ens`)
 
 Train the Bayesian model on `clean`, evaluate on `verbose`. Preregistered prediction: **epistemic** uncertainty rises under this distribution shift while **aleatoric** stays flat — the canonical sanity check that a Bayesian model's epistemic estimate is doing its job. This is necessarily a **meta-model-level** check (§2.6), not a `conf_ens` one — `conf_ens` is undefined for `verbose`, which never collects P2/P3 (D21). Uses the Tier A-minus-`conf_sc`/`conf_ens` feature set from §2.4.
+
+## 7. RQ6 — stress-testing the industry's calibration counterclaim *(added 22–23 Sep 2026, owner-initiated)*
+
+### 7.1 Positioning
+
+TypeSafe AI's Jev is a proprietary "System One Model" — a non-autoregressive, RLCD-trained model that outputs typed decisions with claimed calibrated probabilities, publicly positioned as having solved the exact failure mode this project studies. It discloses no weights, size, or benchmarks. `kev-8b` (`jaredpalmer/kev`, Apache-2.0) is an independently-built open stand-in, explicitly "inspired by the System One approach of TypeSafe's Jev" (not a distillation) and benchmarked by its own authors against real Jev output (93.21% vs. 90.12% agreement on 324 held-out examples, vs. 66.36% for the untrained base model) — the strongest available evidence of the three candidates considered that it's a fair proxy. Two other open stand-ins (`Bespoke-Nimble-9B`, `circuit-8b`) and a fourth candidate (`SemIf`, a cluster of non-canonical hobbyist repos with unverifiable benchmark claims) were evaluated and rejected — see `DECISIONS.md` D27 for the full comparison. This is not literature-backed the way RQ4/RQ5 are (there's no peer-reviewed prior work on this specific comparison to position against) — the positioning here is entirely primary-source verification against the actual repos and code, not citations.
+
+### 7.2 The question
+
+> Does kev-8b — purpose-built and RLCD-trained specifically to produce calibrated decisions — actually resist the same failure modes (position bias, verbosity-induced degradation, exploitable residual structure beyond its own raw confidence) this project already found in a general-purpose LLM judge asked to self-report confidence?
+
+**Out-of-domain caveat, stated here and required in every downstream result, not a footnote:** kev-8b was trained on short-context classification/QA tasks (Banking77, BoolQ, AG News, customer-service tickets, NLI, spam, etc.) — never on pairwise response judging. MT-Bench is inherently out-of-domain for it. This is not an unfair test being sprung on it after the fact — it's the actual generalization question the whole comparison is asking.
+
+### 7.3 The signals
+
+Two, not three. `probabilities[choice]` — the model's own probability on whichever option it picked, symmetric in [0.5, 1] — is the direct analog of `conf_lp`. A bidirectional-entropy signal, computed the *order-corrected* way `signals.py::_p_model_a_wins()` already does for `conf_bpe` (average `probabilities["A"]` from the AB call with `1 - probabilities["A"]` from the BA call, onto a consistent "P(model_a wins)" scale, before taking entropy — not a naive average, which would blend two different physical questions) — the direct analog of `conf_bpe`, this project's own best-performing signal in RQ1/RQ2. kev's own `confidence` field is deliberately excluded: confirmed via `kev/api.py`'s actual source (`choice_confidence(p) = (max(p) - 1/K)/(1-1/K)`) to be an exact deterministic rescaling of `probabilities[choice]` for a 2-option question, not an independently-trained signal — see `DECISIONS.md` D27.
+
+### 7.4 The battery
+
+Four tests, weighted equally by default (a disproportionately striking result gets emphasized after the numbers are in, not preregistered as the headline now):
+- **Calibration check** — ECE + overconfidence gap on both signals (RQ1's exact recipe).
+- **Position-swap attack** — flip rate + confidence gap between AB/BA orders on real content (RQ3a's exact recipe). The diagnostic probing that found kev-8b's verdict 100% determined by pure sequence position with content-free filler (D27) makes this the test most likely to produce the headline finding, even though it's not preregistered as such.
+- **Verbosity attack** — paired clean-vs-verbose ΔECE/ΔAUROC (RQ3b's exact recipe), restricted to items where *both* conditions succeeded — the ~52 items whose `verbose` call was skipped for exceeding the token ceiling must have their `clean` counterpart excluded too, or the paired bootstrap silently loses its pairing (D27).
+- **D22 Bayesian recalibration** — does a meta-model built on kev's own signals beat kev's best single raw signal at predicting kev's own errors, reusing `bayesian.py` unchanged.
+
+### 7.5 Population and coverage
+
+1,904 items, both orders, both conditions (D27's 8,160-token practical serving ceiling, confirmed empirically across two independent probe sessions — not the documentation's own, less reliable, 8,192 figure). Results are reported as **two explicit regimes**: in-coverage (`input_tokens` ≤ ~1,024, kev's own disclosed training extent) and out-of-coverage (1,024–8,160) — using the server-reported `input_tokens`, not this project's own `state_tokens`, since it includes the question branch's tokens too and matches what kev's documented thresholds are actually stated in.

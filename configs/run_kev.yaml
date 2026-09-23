@@ -22,7 +22,8 @@ base_url: http://127.0.0.1:8008/v1/systemone
 # sessions (kev_token_probe.py / kev_token_probe_boundary.py). Items whose
 # constructed state exceeds this are explicitly skipped and logged with a
 # reason, never silently dropped (same standard as D21's conf_sc/conf_ens
-# nulls) - excludes ~56 of 1904 verbose items, 0 clean items.
+# nulls) - confirmed by the real run: 104 verbose call-rows (52 items,
+# both orders each) excluded, 0 clean call-rows excluded.
 max_state_tokens: 8160
 
 seed: 1234                    # same seed as run.yaml - not that it matters for a

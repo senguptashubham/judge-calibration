@@ -317,9 +317,9 @@ Legend: **[C]** code · **[A]** analysis · **[W]** writing · **[L]** learning 
 
 ---
 
-## Addendum · kev-8b industry-counterexample stress-test (D27, owner-initiated, 22 Sep 2026)
+## Addendum · RQ6 — kev-8b industry-counterexample stress-test (D27, owner-initiated, 22 Sep 2026)
 
-Outside the W0–W7 numbering deliberately — this is a comparison arm against the existing thesis, not a new RQ, and doesn't yet have a calendar slot inside Week 6/7's existing hour budgets (flagged explicitly, not silently squeezed in).
+Treated as a full RQ (CLAUDE.md's RQ table, PLAN.md §7), not a lightweight footnote — see D27's 23 Sep amendment. Kept on its own K1–K5/GATE K numbering, outside the W0–W7 sequence, specifically so it stays easy to isolate or trim if the professor's later feedback says to scope it down. Extra hours this week absorb the cost; no schedule/budget update needed (owner's call, 23 Sep 2026).
 
 - [x] **K1 [C]** Candidate research + selection: Jev (proprietary, TypeSafe blog) vs. three open `/v1/systemone` stand-ins (kev-8b, Bespoke-Nimble-9B, circuit-8b) vs. the rejected `SemIf` cluster.
   **DoD:** a documented decision with reasoning (D27).
@@ -329,12 +329,15 @@ Outside the W0–W7 numbering deliberately — this is a comparison arm against 
   **DoD:** a confirmed, reproducible serving ceiling with population coverage checked against real data.
   **Done, 22 Sep 2026.** Two independent probe sessions (`kev_token_probe.py`, `kev_token_probe_boundary.py`, scratchpad, not committed) found: a real `KEV_MERGE=0` requirement (README under-documents this — `KEV_DTYPE=bf16` alone still loads fp32, since `kev/checkpoint.py` forces fp32 whenever `merge` is true); a hard `setsid` requirement (Colab's cell-interrupt signal reaches a plain `nohup ... &` background process); a genuine, reproducible CUDA-OOM instability zone at ~8,165–8,192 tokens (confirmed non-deterministic — identical input succeeded then failed — across two independent sessions); a separate, deterministic `max_branch` rejection at the same boundary. Practical ceiling adopted: **8,160 tokens**, covering 100% of `clean` and 97.06% of `verbose` items (≈56 items excluded, explicit not silent). Full reasoning and numbers in D27.
 
-- [ ] **K3 [C]** Build `src/judge_kev.py` + `configs/run_kev.yaml`, run the clean+verbose battery against kev-8b (D27's launch config, 8,160-token ceiling, ~56-item exclusion).
-  **DoD:** `calls_kev-8b.parquet` / `items_kev-8b.parquet` (D26 naming) with verdict + native calibrated probability for every surviving item, both orders, both conditions.
-  **First full run (22 Sep 2026) discarded, not built on.** `runs/kev_8b/kev.jsonl` (7,616 rows, otherwise clean - 0 duplicates, 0 unexpected failures, skip count matched expectations) was collected with a `call_kev()` that only kept `choice`/`probabilities`/`input_tokens`, silently dropping kev's own `confidence` field (present in the documented response schema, not derivable from what was kept - see DECISIONS.md D27's 22 Sep amendment). Fixed to capture the full raw response; the run needs to be redone under the fixed harness before `calls_kev-8b.parquet`/`items_kev-8b.parquet` get built.
+- [x] **K3a [C]** Build `src/judge_kev.py` + `configs/run_kev.yaml`, run the clean+verbose battery against kev-8b (D27's launch config, 8,160-token ceiling, ~56-item exclusion).
+  **DoD:** a complete, verified raw checkpoint (`runs/kev_8b/kev.jsonl`) covering every surviving item, both orders, both conditions.
+  **Done, 22–23 Sep 2026.** `call_kev()`'s first version only kept `choice`/`probabilities`/`input_tokens` and was fixed to capture the full raw response, per D27's amendments - but the first full run itself (7,616 rows: 3,808 `clean` + 3,808 `verbose`, 104 skipped over the token ceiling, 0 duplicates, 0 unexpected failures) turned out not to need discarding. `confidence` (the field the old version dropped) was confirmed to be an exact deterministic function of `probabilities` (D27, 23 Sep amendment) and is excluded from analysis anyway - the old run's saved `probabilities`/`choice`/`input_tokens` are sufficient for everything K4 needs. Restored, verified intact (same row/dup/skip counts as before deletion), and is the basis for K3b/K4.
 
-- [ ] **K4 [A]** Calibration check + position-swap attack + verbosity attack + D22 Bayesian recalibration, reusing `rq1.py`/`rq3.py`/`bayesian.py`'s existing recipes unchanged, pointed at `items_kev-8b.parquet`.
-  **DoD:** ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, and a meta-model-vs-raw-confidence comparison, each with a CI.
+- [ ] **K3b [C]** Build `calls_kev-8b.parquet` / `items_kev-8b.parquet` (D26 naming) from `runs/kev_8b/kev.jsonl`: join human labels, derive `judge_verdict`/`correct` (AB-canonical, D7-style) and `verdict_bidir`/`correct_bidir` (order-corrected, mirroring `_p_model_a_wins()` - NOT a naive average of `probabilities["A"]` across AB/BA, which would blend two different physical questions, see D27), and the order-corrected bidirectional-entropy signal (kev's own `conf_bpe` analog).
+  **DoD:** `items_kev-8b.parquet` with `probabilities[choice]`, the bidirectional-entropy signal, `input_tokens`, `correct`/`correct_bidir`, for every non-skipped row.
+
+- [ ] **K4 [A]** Calibration check + position-swap attack + verbosity attack + D22 Bayesian recalibration, reusing `rq1.py`/`rq3.py`/`bayesian.py`'s existing recipes unchanged, pointed at `items_kev-8b.parquet`. `confidence` excluded throughout (D27) - only `probabilities[choice]` and the bidirectional-entropy signal. Reported across both in-coverage and out-of-coverage regimes (D27); all four tests weighted equally unless a result is disproportionately striking. The verbosity attack is restricted to items where BOTH `clean` and `verbose` succeeded (D27's pairing note - the ~52 skipped-verbose items' `clean` counterparts must be excluded too, not just the missing `verbose` side).
+  **DoD:** ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, and a meta-model-vs-best-single-signal comparison, each with a CI, for both signals and both coverage regimes.
 
 - [ ] **K5 [W]** `REPORT.md` standalone section: "Stress-testing the industry's calibration counterclaim (kev-8b)" — the out-of-domain caveat stated up front, the position-bias finding from K2's diagnostics framed explicitly as a probe-script observation pending K4's controlled version (not yet a formal result), and K4's numbers.
   **DoD:** written, every claim traceable to a results file.
