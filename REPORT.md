@@ -785,6 +785,234 @@ that its Bayesian construction is supposed to provide close to "for free."
 
 ---
 
+## RQ6 — Stress-testing the industry's calibration counterclaim (kev-8b)
+
+*Added 22–23 Sep 2026, owner-initiated (not professor feedback) —
+`DECISIONS.md` D27, `PLAN.md` §7, `TASKS.md`'s own K1–K5/GATE K addendum
+block, kept outside the W0–W7 numbering specifically so it can be trimmed
+without renumbering anything else if later feedback says to scope it
+down.*
+
+**Out-of-domain caveat, stated here first because it must never be a
+footnote: kev-8b was never trained on pairwise response judging.** TypeSafe
+AI's Jev is a proprietary, non-autoregressive "System One Model," RLCD-
+trained specifically to produce calibrated typed decisions, and publicly
+positioned as having solved the exact failure mode this project studies.
+It discloses no weights, size, or benchmarks. `kev-8b` (`jaredpalmer/kev`,
+Apache-2.0) is an independently-built open stand-in — explicitly "inspired
+by the System One approach of TypeSafe's Jev," not a distillation, and
+benchmarked by its own authors against real Jev output (93.21% vs. 90.12%
+agreement on 324 held-out examples, vs. 66.36% for the untrained base
+model) — the strongest evidence among three candidates considered that it
+is a fair proxy. Two other open stand-ins (`Bespoke-Nimble-9B`,
+`circuit-8b`) and a fourth candidate (`SemIf`, a cluster of non-canonical
+hobbyist repos with unverifiable benchmark claims) were evaluated and
+rejected on token-cap and evidentiary grounds — full comparison in
+`DECISIONS.md` D27. But `kev-8b`'s own training data is Banking77, BoolQ,
+AG News, customer-service tickets, NLI, spam — short-context
+classification/QA, never a pairwise judgment task. Every result below is
+an out-of-domain generalization test, not an apples-to-apples "best-in-
+class judge" comparison.
+
+*Population: 1,904 MT-Bench items, both AB/BA orders, `clean` and
+`verbose` conditions — the harness (`src/judge_kev.py`) reuses
+`load_full_items_df()`/`verbose_pad()`/`apply_order()` from the primary
+judge's own pipeline unchanged, so it is the identical item set. kev-8b's
+real, empirically-measured serving ceiling (not the documentation's 8,192)
+is 8,160 tokens — see D27 for the full diagnostic trail, including a
+genuine non-deterministic instability zone confirmed across two
+independent probe sessions. This excludes 52 items (104 `verbose` call-
+rows, both orders) from `verbose` only — 0 from `clean`. Two signals:
+`conf_kev` (`probabilities[choice]`, symmetric in [0.5, 1], the direct
+analog of `conf_lp`) and `conf_kev_bpe` (order-corrected bidirectional
+entropy across AB/BA, the direct analog of `conf_bpe` — this project's own
+best-performing signal). kev's own `confidence` field is deliberately
+excluded throughout: confirmed from kev's actual source
+(`kev/api.py::choice_confidence`) to be an exact algebraic rescaling of
+`conf_kev` for a 2-option question, not an independently-trained signal —
+not a judgment call, a proven redundancy. Results are reported across two
+coverage regimes — **in-coverage** (`input_tokens` ≤ 1,024, kev's own
+disclosed training extent) and **out-of-coverage** (1,024–8,160) — using
+each item's stable, unpadded `clean`-side length, so the same item never
+carries a different regime label depending on which condition is in
+front of you.*
+
+**Headline: kev-8b's best signal shows the identical vulnerability
+signature the primary judge's own best signal showed — strong on
+calibration and position-bias tracking, but its calibration specifically
+breaks under the verbosity attack — and a Bayesian meta-model over both
+signals does not beat the better one alone.** Two findings cut against the
+"leaves its training range, degrades" story a naive reading of the
+out-of-domain caveat might predict: calibration is not worse
+out-of-coverage, and the verbosity-attack effect is directionally larger
+out-of-coverage but the confidence intervals are wide enough at N=474–526
+that this should be read as suggestive, not confirmed.
+
+### Calibration check
+
+*Population: N=1,836 (`clean`, human-labeled — identical population size
+to RQ1's own, same filter). `analysis/rq6.py::main_calibration`, reusing
+`src/metrics.py::ece`/`brier`/`overconfidence_gap`/`auroc_error` unchanged
+— `conf_kev_bpe`'s raw-nats range ([1−ln 2, 1] ≈ [0.307, 1]) needs no
+rescaling before these, confirmed the same way `conf_bpe`'s own range
+already was.*
+
+| Regime | Signal | ECE | 95% CI | Overconfidence gap | AUROC | 95% CI |
+|---|---|---|---|---|---|---|
+| in-coverage (N=1,310) | `conf_kev` | 0.1525 | [0.1247, 0.1814] | +0.1525 | 0.6972 | [0.6596, 0.7335] |
+| in-coverage | `conf_kev_bpe` | **0.0980** | [0.0763, 0.1158] | **−0.0647** | **0.7722** | [0.7407, 0.8005] |
+| out-of-coverage (N=526) | `conf_kev` | 0.1297 | [0.0942, 0.1766] | +0.1297 | 0.7074 | [0.6472, 0.7652] |
+| out-of-coverage | `conf_kev_bpe` | **0.1015** | [0.0747, 0.1451] | **−0.0835** | **0.7806** | [0.7231, 0.8313] |
+
+**`conf_kev_bpe` beats `conf_kev` on every metric, in both regimes.** This
+replicates, on a completely different non-autoregressive architecture, the
+exact pattern this project already found for the primary Qwen judge — its
+own bidirectional-entropy signal, `conf_bpe`, was RQ1/RQ2's best performer
+too. `conf_kev` is meaningfully overconfident (gap +0.13 to +0.15);
+`conf_kev_bpe` is mildly *underconfident* instead (gap −0.06 to −0.08) —
+neither is well calibrated in an absolute sense, but the direction of the
+miscalibration flips between the two signals. **Out-of-coverage is not
+worse than in-coverage** — AUROC is marginally *higher* out of range for
+both signals, though the CIs overlap substantially at N=526 vs. 1,310.
+This does not support a simple "leaves its training range, degrades"
+story for calibration specifically. Figures:
+`reliability_conf_kev{,_bpe}_{in,out_of}_coverage_kev_8b.png`. Table:
+`rq6_calibration_kev_8b.csv`.
+
+### Position-swap attack
+
+*Same population and recipe as RQ3a (`analysis/rq3.py::compute_flip_rate`/
+`compute_confidence_gap`, reused unchanged — both are already generic over
+any DataFrame carrying `flipped`/`question_id`/a named signal column,
+which `items_kev-8b.parquet` provides under the identical names).*
+
+| Regime | Flip rate | 95% CI | Signal | Confidence gap (flipped − unflipped) | 95% CI |
+|---|---|---|---|---|---|
+| in-coverage | 24.6% | [19.5%, 30.0%] | `conf_kev` | **−0.0964** | [−0.1174, −0.0777] |
+| in-coverage | " | " | `conf_kev_bpe` | **−0.4901** | [−0.5101, −0.4675] |
+| out-of-coverage | 21.1% | [15.5%, 28.2%] | `conf_kev` | **−0.0798** | [−0.1167, −0.0453] |
+| out-of-coverage | " | " | `conf_kev_bpe` | **−0.4659** | [−0.5027, −0.4262] |
+
+**Both signals track their own position-bias-induced errors strongly, and
+significantly, in both regimes** (every CI excludes zero). This is a
+notably *stronger* result than the primary judge's own RQ3a finding: its
+`conf_verb` gap was −0.0199 [−0.0248, −0.0152] — `conf_kev`'s gap
+(−0.096) is roughly **5× larger** on the identical test. This diagnostic
+direction was foreshadowed by an earlier, informal probe during token-cap
+diagnostics (D27): with content-free filler padding, kev-8b's verdict was
+found to be 100% determined by which side of the input the real content
+sat on. That earlier finding was explicitly a probe-script observation,
+not a controlled result — this section is the controlled version, with
+real MT-Bench content on both sides and a proper cluster-bootstrap CI,
+and it confirms substantial, statistically real position-sensitivity,
+even if not the literal 100%-deterministic effect the content-free probe
+showed. Figures: `rq6_position_swap_gap_kev_8b_{in,out_of}_coverage.png`.
+Table: `rq6_position_swap_kev_8b.csv`.
+
+### Verbosity attack
+
+*Population: 1,784 paired items — the intersection of `clean` and
+`verbose` (D27's pairing requirement: an item missing on either side is
+dropped from **both** sides for this specific test, not just the missing
+side, or the paired bootstrap silently loses its pairing). Reuses
+`analysis/rq3.py::compute_signal_rq3b_metrics` unchanged.*
+
+| Regime | Signal | ΔECE (verbose − clean) | 95% CI | ΔAUROC | 95% CI |
+|---|---|---|---|---|---|
+| in-coverage (n=1,310) | `conf_kev` | +0.0092 | [−0.0088, 0.0267] | −0.0058 | [−0.0452, 0.0328] |
+| in-coverage | `conf_kev_bpe` | **+0.0330** | **[0.0125, 0.0584]** | +0.0055 | [−0.0116, 0.0259] |
+| out-of-coverage (n=474) | `conf_kev` | +0.0213 | [−0.0188, 0.0691] | −0.0241 | [−0.0868, 0.0406] |
+| out-of-coverage | `conf_kev_bpe` | **+0.0678** | **[0.0206, 0.1091]** | +0.0050 | [−0.0324, 0.0443] |
+
+**`conf_kev_bpe`'s calibration breaks significantly under the verbosity
+attack, in both regimes; `conf_kev` shows no significant change in
+either.** This is a striking parallel to the primary judge's own RQ3b
+finding: there too, the *best* clean-data signal (`conf_bpe`, ECE +0.0432
+[0.0144, 0.0516]) was the one whose calibration broke under the identical
+attack, while the weaker raw signals were comparatively unaffected. The
+effect is directionally larger out-of-coverage (+0.068 vs. +0.033), though
+the CIs are wide enough at this N that this should be read as suggestive
+of a coverage-dependent effect, not confirmed as one. AUROC does not move
+significantly for either signal in either regime — unlike the primary
+judge, where AUROC dropped significantly for all three surviving signals
+under the same attack; this attack degrades kev-8b's *calibration*
+specifically, not its *discrimination*. Accuracy itself does not move
+significantly either (Δ −0.014 to −0.025, both CIs include zero) —
+verbosity does not make kev-8b more wrong, the same qualitative pattern
+the primary judge showed. Figures:
+`rq6_verbosity_deltas_kev_8b_{in,out_of}_coverage.png`. Table:
+`rq6_verbosity_kev_8b.csv`.
+
+### Bayesian recalibration check
+
+*Full D8 protocol (`StratifiedGroupKFold(5)` × 10 repeats, NUTS) — the
+same rigor as the primary judge's own RQ4 Bayesian arm, not a lighter
+version, per explicit confirmation given kev's much smaller 2-feature set.
+Reuses `repeated_stratified_group_kfold_bayesian`/`build_xyg`/
+`encode_features` unchanged; `encode_features` is a no-op on two pure-
+float columns, the same way it already is on the primary study's own
+Tier A.*
+
+| Regime | Meta-model AUROC | D8 spread | Best single signal AUROC | Fold-fits flagged |
+|---|---|---|---|---|
+| in-coverage | 0.7723 | [0.7697, 0.7743] | 0.7722 | **0/50** |
+| out-of-coverage | 0.7755 | [0.7663, 0.7857] | 0.7806 | **0/50** |
+
+**The meta-model does not beat the best single signal in either regime**
+— essentially tied in-coverage, slightly *worse* out-of-coverage.
+Convergence is clean throughout (0/50 fold-fits flagged, both regimes —
+the same diagnostic that caught a real problem once already in this
+project, Neal's funnel, found nothing here). This null is methodologically
+sound, not a red flag to explain away: `conf_kev` is a function of one
+number (`prob_a` from the AB call alone), `conf_kev_bpe` a function of two
+(`prob_a` from AB *and* BA, order-corrected) — they share one of two
+inputs, correlated but not collinear the way `confidence`/
+`probabilities[choice]` was (confirmed exact algebraic identity, which is
+why that one was excluded entirely rather than just noted). D22's proper
+`Normal(0,1)` priors handle correlated, non-identical predictors without a
+non-identifiability pathology, and the clean convergence diagnostics are
+the empirical confirmation of that, not an assumption. The check also
+never interprets individual coefficients (unlike this project's own
+`conf_ens`/`ens_entropy_total` collinearity, D20, where that really would
+have split one effect into two misleading numbers) — it only compares
+holistic AUROC, a comparison correlated features don't invalidate. Two
+signals built from largely overlapping information having limited
+independent value to combine is the expected, coherent outcome, not a
+modeling failure. Figures:
+`rq4_bayesian_convergence_kev_8b_{in,out_of}_coverage.png`. Table:
+`rq6_bayesian_recalibration_kev_8b.csv`.
+
+### Limitations specific to this section
+
+- **Every result here is an out-of-domain generalization test, restated:**
+  kev-8b was never trained on pairwise response judging. A weaker
+  or absent effect could mean the counterclaim holds, or could mean the
+  task is simply unfamiliar to the model in a way that has nothing to do
+  with calibration quality — this project cannot fully separate the two
+  explanations, and neither should any reading of the results above.
+- **The out-of-coverage regime is the smaller population throughout**
+  (N=474–526 vs. 1,310) — every regime-comparison claim above ("worse
+  out-of-coverage," "not worse out-of-coverage") is reported honestly with
+  its own CI, but should be read as suggestive at this sample size, not as
+  confirmed as strongly as the in-coverage numbers.
+- **The regime boundary (1,024 tokens) comes from kev's own GitHub
+  README, not a peer-reviewed source** — the best available disclosure,
+  not an independently-verified ground truth for where kev-8b's
+  calibration genuinely starts to degrade.
+- **The position-bias diagnostic finding (D27, K2) that motivated the
+  position-swap test was a content-free filler-padding probe, not a
+  controlled experiment** — this section's own position-swap result (real
+  content, proper CIs) is the controlled version and is what should be
+  cited as the actual finding; the earlier probe should be read only as
+  the reason this test was prioritized, not as evidence in its own right.
+- **`kev-8b` is one open stand-in for one proprietary system.** Its own
+  authors' 90–93% agreement with real Jev output is the best available
+  evidence it is a fair proxy, but it is not a guarantee that every
+  finding here would replicate against Jev itself, which remains
+  untested and untestable given its proprietary status.
+
+---
+
 ## Methods notes
 
 Small, dated empirical observations that inform a design decision but don't belong to
