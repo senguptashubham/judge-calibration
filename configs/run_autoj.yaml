@@ -5,6 +5,13 @@
 # (smaller) AutojConfig dataclass in src/judge_autoj.py - src/config.py's
 # Config validates fields (temperature_sc > 0 is fine here, but "P1" in
 # prompt_variants) that don't apply - auto-j has no prompt-ensemble axis.
+#
+# Population is turn=1 ONLY (D28's 23 Sep amendment, enforced in code via
+# src/judge_autoj.py::load_turn1_items_df(), not a YAML key here - this is
+# a frozen scope decision, not a tunable one). A 100-item smoke test found
+# a 36.1% output-truncation-driven parse-failure rate for verbose/turn=2
+# vs 0% for clean/turn=2 and 7.1% for verbose/turn=1, so turn=2 was
+# dropped entirely rather than caveated - see DECISIONS.md D28.
 
 judge_model: GAIR/autoj-13b-GPTQ-4bits   # the literal repo served via vLLM
                                           # (D28's locked GPU/quantization

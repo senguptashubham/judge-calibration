@@ -31,12 +31,17 @@ schema-constrained the way the primary judge is:
   attribute) - judge.py doesn't need this since its small, schema-
   constrained JSON output essentially never truncates at max_tokens, but
   auto-j's free-text critique genuinely can run long and cut off before
-  reaching its own decision line. Cheap to capture, directly diagnostic
-  for L4b's turn=2 validity check and for triaging parse failures without
-  guessing from text length alone.
+  reaching its own decision line. This turned out to matter a great deal:
+  a 100-item smoke test found every parse failure traces to
+  finish_reason=="length" (0% failure whenever the model stopped
+  naturally), concentrated overwhelmingly in verbose/turn=2 (36.1%) -
+  which is why turn=2 is dropped entirely below.
 - `turn` is retained as a real, load-bearing column (it already exists in
-  judge.py's own row dict too) - RQ7's whole population is stratified by
-  turn=1 vs turn=2 (D28), not by a coverage regime the way RQ6 was.
+  judge.py's own row dict too), but the real population this module loads
+  (load_turn1_items_df()) is turn=1 ONLY (D28's 23 Sep amendment) - turn=2
+  was built, smoke-tested, and then dropped, not merely caveated, after
+  the finding above. No coverage-regime split either (unlike RQ6) - auto-j's
+  disclosed context covers the turn=1 population without a ceiling issue.
 
 See TASKS.md task L3, DECISIONS.md D28, PLAN.md §8.
 """
@@ -105,6 +110,26 @@ class AutojConfig:
         return cls(**raw)
 
 
+def load_turn1_items_df(config: AutojConfig) -> "pd.DataFrame":
+    """RQ7's real population: turn=1 only. Not a tunable config value -
+    the same "frozen design decision, encoded as logic" treatment
+    call_schedule_autoj() already gives D19's own schedule shape, since
+    this is a permanent scope decision, not something to vary per run.
+
+    D28's 23 Sep amendment: turn=2 was dropped entirely after a 100-item
+    smoke test found a 36.1% output-truncation-driven parse-failure rate
+    for verbose/turn=2, vs 0% for clean/turn=2 and 7.1% for verbose/
+    turn=1 - clean/turn=2 itself was perfectly reliable (0% failure,
+    identical to clean/turn=1), so this is really a verbose x turn=2
+    interaction, not a turn=2 problem alone, but the interaction is severe
+    enough, and the remaining project timeline tight enough, that
+    dropping turn=2 outright (not just caveating it) was the confirmed
+    call. Full finding and trade-off analysis in DECISIONS.md D28.
+    """
+    items_df = load_full_items_df(config)  # type: ignore[arg-type]
+    return items_df[items_df["turn"] == 1]
+
+
 # --- The verbatim auto-j prompt/parsing contract (D28) ---------------------
 #
 # Pulled via `curl` directly from github.com/GAIR-NLP/auto-j's own
@@ -150,7 +175,6 @@ def build_autoj_prompt(
     order: str,
     model_a_conversation: list[dict],
     model_b_conversation: list[dict],
-    turn: int,
 ) -> str:
     """Renders the full auto-j prompt for one call.
 
@@ -160,40 +184,33 @@ def build_autoj_prompt(
     judge_kev.py::build_state() already established for the second-judge-
     model case.
 
-    Turn handling (D28's own novel design, flagged explicitly - this is
-    what task L4b's parse-rate/spot-check validates, not asserted as
-    obviously correct):
-    - turn=1: direct fill. `prompt` = the shared user query (identical for
-      both sides - same underlying MT-Bench item), `response`/
-      `response_another` = each side's own single answer.
-    - turn=2: auto-j's template has one flat `{prompt}` field with no
-      native multi-turn support, but MT-Bench's turn=2 conversations carry
-      [user, assistant, user, assistant] (confirmed against the live
-      dataset in prompts.py's own docstring). `prompt` here carries ONLY
-      the two shared, model-independent user turns - it never contains a
-      model-specific answer, so it can't contaminate one candidate's
-      context with the other's. Each side's own turn-1 answer is instead
-      folded into ITS OWN `response`/`response_another` field as a
-      two-part trajectory, so the judge sees each candidate's full
-      two-turn history attributed to that candidate alone.
+    Turn=1 ONLY (D28's 23 Sep amendment - turn=2 dropped entirely from this
+    arm, not just caveated). `prompt` = the shared user query (identical
+    for both sides - same underlying MT-Bench item), `response`/
+    `response_another` = each side's own single answer.
+
+    A turn=2 flattening design (folding each side's own turn-1 answer into
+    its own `response` field as a two-part trajectory, keeping `prompt`
+    restricted to the two shared user turns) was built and run in a 100-
+    item smoke test, then removed here after that test found a 36.1%
+    output-truncation-driven parse-failure rate for verbose/turn=2 (vs 0%
+    for clean/turn=2 and 7.1% for verbose/turn=1) - two inspected examples
+    showed genuine model-level degenerate token repetition, not just "ran
+    out of room near a natural end." Full finding, the turn=1-vs-both-
+    turns trade-off (clean/turn=2 itself was perfectly reliable - this is
+    a verbose x turn=2 interaction, not a turn=2 problem alone), and the
+    decision are in DECISIONS.md D28's second 23 Sep amendment - kept
+    there, not preserved as dead code here, since a `turn` branch that can
+    never be exercised in the real run is a bigger footgun than a
+    docstring pointer.
     """
     displayed_1, displayed_2 = apply_order(order, model_a_conversation, model_b_conversation)
     if condition == "verbose":
         displayed_1, displayed_2 = verbose_pad(displayed_1), verbose_pad(displayed_2)
 
-    if turn == 1:
-        prompt_field = displayed_1[0]["content"]
-        response_1 = displayed_1[1]["content"]
-        response_2 = displayed_2[1]["content"]
-    elif turn == 2:
-        prompt_field = (
-            f"Earlier in the conversation, the user asked: '{displayed_1[0]['content']}'. "
-            f"Now the user says: '{displayed_1[2]['content']}'"
-        )
-        response_1 = f"{displayed_1[1]['content']}\n\n[Continuing:] {displayed_1[3]['content']}"
-        response_2 = f"{displayed_2[1]['content']}\n\n[Continuing:] {displayed_2[3]['content']}"
-    else:
-        raise ValueError(f"turn must be 1 or 2, got {turn!r}")
+    prompt_field = displayed_1[0]["content"]
+    response_1 = displayed_1[1]["content"]
+    response_2 = displayed_2[1]["content"]
 
     user_msg = _PAIRWISE_TIE_TEMPLATE.format(prompt=prompt_field, response=response_1, response_another=response_2)
     return _PROMPT_INPUT_WO_SYSTEM.format(input=user_msg)
@@ -286,10 +303,15 @@ def split_by_prompt_length(
     just fail that one request (confirmed empirically, 23 Sep 2026: the
     first real Colab run hit exactly this, VLLMValidationError, after a
     prompt exceeded the model's 8,192-token context - traced to auto-j's
-    own tokenizer plus this module's turn=2 flattening design compounding
-    verbose padding across BOTH folded turns; real measured impact:
-    4.75% of rows overall, ~17.2% of verbose/turn=2 specifically - full
-    numbers in DECISIONS.md D28's 23 Sep amendment).
+    own tokenizer plus (at the time) this module's turn=2 flattening
+    design compounding verbose padding across BOTH folded turns; real
+    measured impact on the full turn=1+turn=2 population: 4.75% of rows
+    overall, ~17.2% of verbose/turn=2 specifically. Turn=2 is dropped
+    entirely now (D28's 23 Sep amendment, see load_turn1_items_df()), so
+    the population this actually gates going forward is much smaller -
+    verbose/turn=1 alone, ~1.8% - but the check stays, since even that
+    residual tail must still be skipped-and-logged, never silently
+    crashed on. Full numbers in DECISIONS.md D28's 23 Sep amendments.
 
     `runnable` entries carry the already-rendered prompt and its real token
     count, computed once here, not re-rendered later - `skipped_rows` are
@@ -308,9 +330,7 @@ def split_by_prompt_length(
     runnable: list[tuple[str, "pd.Series", AutojCallSpec, str, int]] = []
     skipped_rows: list[dict] = []
     for item, item_row, spec in pending:
-        prompt = build_autoj_prompt(
-            spec.condition, spec.order, item_row["conversation_a"], item_row["conversation_b"], int(item_row["turn"])
-        )
+        prompt = build_autoj_prompt(spec.condition, spec.order, item_row["conversation_a"], item_row["conversation_b"])
         n_prompt_tokens = token_counter(prompt)
         if n_prompt_tokens > max_prompt_tokens:
             skipped_rows.append(
@@ -452,7 +472,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = AutojConfig.from_yaml(args.config)
-    items_df = load_full_items_df(cfg)  # type: ignore[arg-type]
+    items_df = load_turn1_items_df(cfg)
     if args.n_items is not None:
         items_df = items_df.sample(n=args.n_items, random_state=cfg.seed)
 
