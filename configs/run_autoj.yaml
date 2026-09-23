@@ -1,0 +1,47 @@
+# auto-j-13b comparison arm (DECISIONS.md D28) - a model purpose-trained
+# for pairwise response judging, testing whether the failure modes RQ1-RQ3
+# found in a general-purpose judge (and RQ6 found in an out-of-domain
+# stand-in) generalize across training objective. Separate config, separate
+# (smaller) AutojConfig dataclass in src/judge_autoj.py - src/config.py's
+# Config validates fields (temperature_sc > 0 is fine here, but "P1" in
+# prompt_variants) that don't apply - auto-j has no prompt-ensemble axis.
+
+judge_model: GAIR/autoj-13b-GPTQ-4bits   # the literal repo served via vLLM
+                                          # (D28's locked GPU/quantization
+                                          # decision) - not the fp16 identity,
+                                          # so model_slug names exactly what
+                                          # was run, not what it's "really" called.
+dataset: lmsys/mt_bench_human_judgments
+tie_policy: mark_tie_strict   # must match run.yaml's/run_kev.yaml's - same item population
+
+conditions:                   # same two conditions as the primary judge and kev-8b (D28's comparison is paired)
+  - clean
+  - verbose
+
+# auto-j-13b is native vLLM, no separate server process needed (unlike
+# kev-8b's HTTP server) - src/judge_autoj.py loads it directly via
+# vllm.LLM(model=judge_model, ...).
+max_model_len: 8192           # confirmed via config.json's own max_position_embeddings (D28) -
+                               # no empirical ceiling-probing needed, unlike kev-8b's undocumented one.
+gpu_memory_utilization: 0.85  # matches the real Colab smoke test (D28) - 6.78 GiB weights +
+                               # 10.93 GiB KV cache (14,320 tokens) fit comfortably on the L4.
+
+temperature_canonical: 0.0    # sample_idx = 0, greedy (D6's own values, reused as-is)
+temperature_sc: 0.7           # sample_idx = 1..k_sc
+k_sc: 4
+max_tokens: 1024              # matches auto-j's own authors' own example.py usage exactly
+top_p: 1.0                    # matches auto-j's own authors' own example.py usage exactly
+logprobs: 20                  # D4's own value - kept as insurance for a possible later conf_lp
+                               # attempt (D28's signal-scope decision - deferred, not built this pass),
+                               # so no GPU rerun would be needed if it's revisited.
+
+seed: 1234                    # same seed as run.yaml/run_kev.yaml - keeps the seeded
+                               # item-sampling used by --n-items smoke-test runs consistent.
+n_bins: 10
+
+paths:
+  results_dir: results
+  runs_dir: runs/autoj_13b_gptq_4bits
+  calls_parquet: results/calls_autoj_13b_gptq_4bits.parquet
+  items_parquet: results/items_autoj_13b_gptq_4bits.parquet
+  items_labels_parquet: results/items_labels.parquet   # shared across every judge model (D26)
