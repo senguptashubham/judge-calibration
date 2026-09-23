@@ -884,7 +884,7 @@ story for calibration specifically. Figures:
 *Same population and recipe as RQ3a (`analysis/rq3.py::compute_flip_rate`/
 `compute_confidence_gap`, reused unchanged — both are already generic over
 any DataFrame carrying `flipped`/`question_id`/a named signal column,
-which `items_kev-8b.parquet` provides under the identical names).*
+which `items_kev_8b.parquet` provides under the identical names).*
 
 | Regime | Flip rate | 95% CI | Signal | Confidence gap (flipped − unflipped) | 95% CI |
 |---|---|---|---|---|---|

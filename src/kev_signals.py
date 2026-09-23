@@ -1,4 +1,4 @@
-"""runs/kev_8b/kev.jsonl -> calls_kev-8b.parquet -> items_kev-8b.parquet
+"""runs/kev_8b/kev.jsonl -> calls_kev_8b.parquet -> items_kev_8b.parquet
 (TASKS.md K3b, DECISIONS.md D27/RQ6).
 
 Mirrors src/signals.py's role and pattern for the primary judge, at kev's
@@ -25,7 +25,7 @@ from src.signals import _binary_entropy, _sanitize_records
 
 
 def build_calls_kev(checkpoint_path: str | Path) -> pd.DataFrame:
-    """runs/kev_8b/kev.jsonl -> calls_kev-8b.parquet's DataFrame. Flattens
+    """runs/kev_8b/kev.jsonl -> calls_kev_8b.parquet's DataFrame. Flattens
     the raw `probabilities` dict into `prob_a`/`prob_b` columns (parquet-
     friendly, and matches how the primary study stores `p_a` as a flat
     column rather than a nested structure) - no other parsing needed,
@@ -177,7 +177,7 @@ def compute_item_signals_kev(rows: list[dict]) -> dict:
 
 
 def build_items_kev_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame) -> pd.DataFrame:
-    """calls_kev-8b.parquet -> items_kev-8b.parquet. One row per
+    """calls_kev_8b.parquet -> items_kev_8b.parquet. One row per
     (item_id, condition) - no prompt_variant axis (D27). Mirrors
     signals.py::build_items_dataframe's join/NaN-handling pattern exactly.
 

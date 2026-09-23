@@ -277,11 +277,9 @@ def flipped(rows: list[dict]) -> bool | None:
 
 # --- Tier B / Tier C (task 5.2) ---------------------------------------
 #
-# Skeleton only - bodies TODO. Each function's docstring states the exact
-# formula/source columns/scope already agreed (18 Sep 2026 discussion);
-# fill in the body, then wire the call into build_items_dataframe()'s
-# per-record dict below (marked with matching TODO comments) in place of
-# the current None/leftover placeholders.
+# Implemented 18 Sep 2026. Each function's docstring states the exact
+# formula/source columns/scope agreed that day; wired into
+# build_items_dataframe()'s per-record dict below.
 
 _COT_FIELDS = (
     "cot_logprob_mean",
@@ -497,10 +495,10 @@ def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc:
                     if signals["verdict_bidir"] is not None and human_label is not None
                     else None
                 ),
-                # len_a/len_b: now real (items_labels.parquet populates
-                # them, task 5.2 prerequisite, 18 Sep 2026) - everything
-                # below this line is task 5.2's own TODO (see the Tier
-                # B/Tier C stub functions above build_items_dataframe).
+                # len_a/len_b: from items_labels.parquet (task 5.2
+                # prerequisite, 18 Sep 2026); everything below this line
+                # is task 5.2's Tier B/C output (see the functions above
+                # build_items_dataframe).
                 "len_a": len_a,
                 "len_b": len_b,
                 "len_ratio": len_ratio(len_a, len_b),

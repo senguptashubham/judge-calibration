@@ -102,7 +102,7 @@ def _regime_by_item(clean_items: pd.DataFrame) -> pd.Series:
 
 
 def load_rq6_clean_items(items_parquet: str) -> pd.DataFrame:
-    """results/items_kev-8b.parquet -> the clean/human-labeled population
+    """results/items_kev_8b.parquet -> the clean/human-labeled population
     RQ6's calibration check and position-swap test use - mirrors
     analysis/rq1.py::load_rq1_items()'s own clean-only, human-label-
     present scope exactly (RQ1/RQ3a are both clean-only for the primary
@@ -119,7 +119,7 @@ def load_rq6_clean_items(items_parquet: str) -> pd.DataFrame:
 
 
 def load_rq6_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """results/items_kev-8b.parquet -> (clean_items, verbose_items), the
+    """results/items_kev_8b.parquet -> (clean_items, verbose_items), the
     paired population RQ6's verbosity attack is allowed to touch.
 
     Unlike analysis/rq3.py::load_rq3b_items() (which asserts the two
@@ -227,7 +227,7 @@ def main_position_swap(config_path: str) -> None:
     clean-only, split by coverage regime. Reuses compute_flip_rate/
     compute_confidence_gap unchanged - both are already generic over any
     DataFrame carrying `flipped`/`question_id`/a named signal column,
-    which items_kev-8b.parquet does under the same column names.
+    which items_kev_8b.parquet does under the same column names.
     """
     config = KevConfig.from_yaml(config_path)
     clean_items = load_rq6_clean_items(config.paths.items_parquet)
