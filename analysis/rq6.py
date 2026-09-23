@@ -26,6 +26,7 @@ the population/signal-set plumbing is new.
 
 import argparse
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -34,8 +35,50 @@ from src.bayesian import repeated_stratified_group_kfold_bayesian
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.judge_kev import KevConfig
 from src.metrics import auroc_error, brier, ece, overconfidence_gap
-from src.plots import plot_bayesian_convergence, plot_reliability_diagram, plot_rq3a_confidence_gap, plot_rq3b_deltas
+from src.plots import FIGURES_DIR, _draw_forest, plot_bayesian_convergence, plot_reliability_diagram
 from src.predictor import build_xyg
+
+# plot_rq3a_confidence_gap()/plot_rq3b_deltas() both size their figure as
+# 0.9 * len(signals) + 1.5 inches tall - fine at the primary judge's own
+# 3-4 signal count, but too short at kev's 2 (D27), clipping their own
+# fixed title text on save. _forest_plot() is shared with
+# plot_d_human_correlations elsewhere, so its formula isn't touched here -
+# same "widen the figure, don't touch a shared primitive" principle
+# already established in this project (REPORT.md/TASKS.md's earlier
+# title-clipping fixes). These two small RQ6-specific wrappers reuse
+# _draw_forest() (the genuinely shared, title-free drawing primitive)
+# directly, with enough height for their own titles at 2 labels.
+
+
+def _plot_rq6_confidence_gap(signals: list[str], gap: np.ndarray, ci_low: np.ndarray, ci_high: np.ndarray, model_slug: str) -> None:
+    fig, ax = plt.subplots(figsize=(6, 4.2))
+    _draw_forest(ax, signals, gap, ci_low, ci_high, "mean confidence: flipped - unflipped")
+    ax.set_title("Confidence gap on flipped vs. unflipped items (RQ6)")
+    fig.tight_layout()
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"rq6_position_swap_gap_{model_slug}.png"
+    fig.savefig(FIGURES_DIR / filename, dpi=150)
+    plt.close(fig)
+
+
+def _plot_rq6_verbosity_deltas(
+    signals: list[str],
+    delta_ece: np.ndarray, ece_ci_low: np.ndarray, ece_ci_high: np.ndarray,
+    delta_auroc: np.ndarray, auroc_ci_low: np.ndarray, auroc_ci_high: np.ndarray,
+    model_slug: str,
+) -> None:
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
+    _draw_forest(axes[0], signals, delta_ece, ece_ci_low, ece_ci_high, xlabel="delta ECE (verbose - clean)")
+    axes[0].set_title("Calibration")
+    _draw_forest(axes[1], signals, delta_auroc, auroc_ci_low, auroc_ci_high, xlabel="delta AUROC (verbose - clean)")
+    axes[1].set_title("Error-detection")
+    axes[1].set_ylabel("")
+    fig.suptitle("Verbosity's effect on calibration and error-detection (RQ6)")
+    fig.tight_layout()
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"rq6_verbosity_deltas_{model_slug}.png"
+    fig.savefig(FIGURES_DIR / filename, dpi=150)
+    plt.close(fig)
 
 KEV_SIGNALS = ["conf_kev", "conf_kev_bpe"]
 IN_COVERAGE_THRESHOLD = 1024
@@ -212,7 +255,7 @@ def main_position_swap(config_path: str) -> None:
                 f"[{gap_result['gap_ci_low']:.4f}, {gap_result['gap_ci_high']:.4f}]"
             )
 
-        plot_rq3a_confidence_gap(
+        _plot_rq6_confidence_gap(
             signals=KEV_SIGNALS,
             gap=np.array([g["gap_flipped_minus_unflipped"] for g in gap_results]),
             ci_low=np.array([g["gap_ci_low"] for g in gap_results]),
@@ -259,7 +302,7 @@ def main_verbosity(config_path: str) -> None:
                 f"[{metrics['delta_auroc_ci_low']:.4f}, {metrics['delta_auroc_ci_high']:.4f}]"
             )
 
-        plot_rq3b_deltas(
+        _plot_rq6_verbosity_deltas(
             signals=KEV_SIGNALS,
             delta_ece=np.array([m["delta_ece_verbose_minus_clean"] for m in ece_deltas]),
             ece_ci_low=np.array([m["delta_ece_ci_low"] for m in ece_deltas]),
