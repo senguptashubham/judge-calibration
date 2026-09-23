@@ -29,10 +29,11 @@ import argparse
 import numpy as np
 import pandas as pd
 
+from analysis.rq3 import compute_confidence_gap, compute_flip_rate, compute_signal_rq3b_metrics
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.judge_kev import KevConfig
 from src.metrics import auroc_error, brier, ece, overconfidence_gap
-from src.plots import plot_reliability_diagram
+from src.plots import plot_reliability_diagram, plot_rq3a_confidence_gap, plot_rq3b_deltas
 
 KEV_SIGNALS = ["conf_kev", "conf_kev_bpe"]
 IN_COVERAGE_THRESHOLD = 1024
@@ -175,11 +176,113 @@ def main_calibration(config_path: str) -> None:
     print(f"Wrote {len(table)} rows to {table_path}")
 
 
+def main_position_swap(config_path: str) -> None:
+    """RQ6's position-swap attack (mirrors analysis/rq3.py's RQ3a exactly:
+    flip rate + mean-confidence-gap on flipped vs unflipped items),
+    clean-only, split by coverage regime. Reuses compute_flip_rate/
+    compute_confidence_gap unchanged - both are already generic over any
+    DataFrame carrying `flipped`/`question_id`/a named signal column,
+    which items_kev-8b.parquet does under the same column names.
+    """
+    config = KevConfig.from_yaml(config_path)
+    clean_items = load_rq6_clean_items(config.paths.items_parquet)
+    clean_items = clean_items[clean_items["flipped"].notna()].copy()
+    clean_items["flipped"] = clean_items["flipped"].astype(bool)
+
+    print(f"RQ6 position-swap population: N={len(clean_items)} (clean, human_label + flipped present)")
+
+    rows = []
+    for regime in ["in_coverage", "out_of_coverage"]:
+        regime_items = clean_items[clean_items["regime"] == regime]
+        flip_result = compute_flip_rate(regime_items, config.seed)
+        print(
+            f"  {regime}: flip_rate={flip_result['flip_rate']:.4f} "
+            f"[{flip_result['flip_rate_ci_low']:.4f}, {flip_result['flip_rate_ci_high']:.4f}]"
+        )
+
+        gap_results = []
+        for signal in KEV_SIGNALS:
+            gap_result = compute_confidence_gap(regime_items, signal, config.seed)
+            gap_results.append(gap_result)
+            rows.append({"regime": regime, "signal": signal, "n": len(regime_items), **flip_result, **gap_result})
+            print(
+                f"    {signal}: gap={gap_result['gap_flipped_minus_unflipped']:.4f} "
+                f"[{gap_result['gap_ci_low']:.4f}, {gap_result['gap_ci_high']:.4f}]"
+            )
+
+        plot_rq3a_confidence_gap(
+            signals=KEV_SIGNALS,
+            gap=np.array([g["gap_flipped_minus_unflipped"] for g in gap_results]),
+            ci_low=np.array([g["gap_ci_low"] for g in gap_results]),
+            ci_high=np.array([g["gap_ci_high"] for g in gap_results]),
+            model_slug=f"{config.model_slug}_{regime}",
+        )
+
+    table = pd.DataFrame.from_records(rows)
+    table_path = f"results/rq6_position_swap_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+
+def main_verbosity(config_path: str) -> None:
+    """RQ6's verbosity attack (mirrors analysis/rq3.py's RQ3b exactly:
+    paired ECE/accuracy/AUROC deltas, clean -> verbose), split by
+    coverage regime. Population is load_rq6_paired_items()'s 1,784-item
+    intersection (D27's pairing requirement), not the full 1,904/1,836 -
+    an item missing on either side is dropped from BOTH sides for this
+    specific test, not just the side that's actually missing.
+    """
+    config = KevConfig.from_yaml(config_path)
+    clean_items, verbose_items = load_rq6_paired_items(config.paths.items_parquet)
+    print(f"RQ6 verbosity-attack population: N={len(clean_items)} paired items (clean vs verbose, both succeeded)")
+
+    rows = []
+    for regime in ["in_coverage", "out_of_coverage"]:
+        clean_regime = clean_items[clean_items["regime"] == regime]
+        verbose_regime = verbose_items[verbose_items["regime"] == regime]
+        print(f"  {regime}: N={len(clean_regime)}")
+
+        ece_deltas, auroc_deltas = [], []
+        for signal in KEV_SIGNALS:
+            metrics = compute_signal_rq3b_metrics(
+                clean_regime, verbose_regime, signal, "correct", config.n_bins, config.seed
+            )
+            rows.append({"regime": regime, "signal": signal, "n": len(clean_regime), **metrics})
+            ece_deltas.append(metrics)
+            auroc_deltas.append(metrics)
+            print(
+                f"    {signal}: delta_ECE={metrics['delta_ece_verbose_minus_clean']:.4f} "
+                f"[{metrics['delta_ece_ci_low']:.4f}, {metrics['delta_ece_ci_high']:.4f}], "
+                f"delta_AUROC={metrics['delta_auroc_verbose_minus_clean']:.4f} "
+                f"[{metrics['delta_auroc_ci_low']:.4f}, {metrics['delta_auroc_ci_high']:.4f}]"
+            )
+
+        plot_rq3b_deltas(
+            signals=KEV_SIGNALS,
+            delta_ece=np.array([m["delta_ece_verbose_minus_clean"] for m in ece_deltas]),
+            ece_ci_low=np.array([m["delta_ece_ci_low"] for m in ece_deltas]),
+            ece_ci_high=np.array([m["delta_ece_ci_high"] for m in ece_deltas]),
+            delta_auroc=np.array([m["delta_auroc_verbose_minus_clean"] for m in auroc_deltas]),
+            auroc_ci_low=np.array([m["delta_auroc_ci_low"] for m in auroc_deltas]),
+            auroc_ci_high=np.array([m["delta_auroc_ci_high"] for m in auroc_deltas]),
+            model_slug=f"{config.model_slug}_{regime}",
+        )
+
+    table = pd.DataFrame.from_records(rows)
+    table_path = f"results/rq6_verbosity_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--task", required=True, choices=["calibration"])
+    parser.add_argument("--task", required=True, choices=["calibration", "position_swap", "verbosity"])
     args = parser.parse_args()
 
     if args.task == "calibration":
         main_calibration(args.config)
+    elif args.task == "position_swap":
+        main_position_swap(args.config)
+    elif args.task == "verbosity":
+        main_verbosity(args.config)
