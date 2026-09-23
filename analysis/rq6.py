@@ -1,0 +1,185 @@
+"""RQ6 - stress-testing the industry's calibration counterclaim (kev-8b).
+DECISIONS.md D27, PLAN.md SS7, TASKS.md's K1-K5/GATE K addendum.
+
+Population/signal scope, all settled in D27 and confirmed against real
+data (not assumed):
+  - Two signals only: `conf_kev` (probabilities[choice], direct analog of
+    conf_lp) and `conf_kev_bpe` (order-corrected bidirectional entropy,
+    direct analog of conf_bpe). `confidence` is never used anywhere in
+    this module - confirmed an exact deterministic rescaling of
+    conf_kev, not an independent signal (D27's 23 Sep amendment).
+  - Two coverage regimes: in-coverage (clean-side input_tokens <= 1024,
+    kev's own disclosed training range) and out-of-coverage (> 1024).
+    Regime is a property of the ITEM (its stable, unpadded clean length),
+    applied identically to both its clean and verbose rows - not each
+    condition's own inflated length, which would make the same item's
+    regime membership different depending on which condition you're
+    looking at and break the paired verbosity comparison.
+  - The verbosity-attack population is 1,852 items (1,904 minus the 52
+    kev-8b skipped for exceeding the 8,160-token serving ceiling on
+    `verbose`), not 1,904 - see K3b's closeout note.
+
+Mirrors analysis/rq1.py (calibration) and analysis/rq3.py (position-swap,
+verbosity attack) exactly wherever the recipe transfers unchanged; only
+the population/signal-set plumbing is new.
+"""
+
+import argparse
+
+import numpy as np
+import pandas as pd
+
+from src.boot import cluster_bootstrap, paired_cluster_bootstrap
+from src.judge_kev import KevConfig
+from src.metrics import auroc_error, brier, ece, overconfidence_gap
+from src.plots import plot_reliability_diagram
+
+KEV_SIGNALS = ["conf_kev", "conf_kev_bpe"]
+IN_COVERAGE_THRESHOLD = 1024
+
+
+def _load_all_kev_items(items_parquet: str) -> pd.DataFrame:
+    return pd.read_parquet(items_parquet)
+
+
+def _regime_by_item(clean_items: pd.DataFrame) -> pd.Series:
+    """item_id -> "in_coverage" | "out_of_coverage", from the CLEAN row's
+    own input_tokens (D27 - a stable property of the item's real,
+    unpadded content, not of whichever condition happens to be in front
+    of you). clean_items must already be the full clean population (every
+    item has a valid clean row - 0 clean-side skips, confirmed in K3b),
+    so this mapping is always fully defined for every item.
+    """
+    return clean_items.set_index("item_id")["input_tokens"].apply(
+        lambda t: "in_coverage" if t <= IN_COVERAGE_THRESHOLD else "out_of_coverage"
+    )
+
+
+def load_rq6_clean_items(items_parquet: str) -> pd.DataFrame:
+    """results/items_kev-8b.parquet -> the clean/human-labeled population
+    RQ6's calibration check and position-swap test use - mirrors
+    analysis/rq1.py::load_rq1_items()'s own clean-only, human-label-
+    present scope exactly (RQ1/RQ3a are both clean-only for the primary
+    judge; kev has no prompt_variant axis to also filter on).
+
+    Adds a `regime` column (in_coverage/out_of_coverage), derived from
+    this same clean population's own input_tokens - see _regime_by_item.
+    """
+    items = _load_all_kev_items(items_parquet)
+    clean_items = items[(items["condition"] == "clean") & items["human_label"].notna()].copy()
+    regime = _regime_by_item(items[items["condition"] == "clean"])
+    clean_items["regime"] = clean_items["item_id"].map(regime)
+    return clean_items
+
+
+def load_rq6_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """results/items_kev-8b.parquet -> (clean_items, verbose_items), the
+    paired population RQ6's verbosity attack is allowed to touch.
+
+    Unlike analysis/rq3.py::load_rq3b_items() (which asserts the two
+    item_id sets are IDENTICAL and raises if not), this filters to the
+    INTERSECTION - kev-8b's own 52-item verbose exclusion (over the
+    8,160-token ceiling, D27) is a known, documented, expected gap, not a
+    data-integrity failure to fail loudly about. Both sides carry the
+    same `regime` column, from the clean-side mapping (see
+    load_rq6_clean_items's own docstring for why).
+    """
+    items = _load_all_kev_items(items_parquet)
+    items = items[items["human_label"].notna()]
+    clean_all = items[items["condition"] == "clean"]
+    verbose_all = items[items["condition"] == "verbose"]
+
+    regime = _regime_by_item(clean_all)
+
+    valid_clean_ids = set(clean_all.loc[clean_all["judge_verdict"].notna(), "item_id"])
+    valid_verbose_ids = set(verbose_all.loc[verbose_all["judge_verdict"].notna(), "item_id"])
+    paired_ids = valid_clean_ids & valid_verbose_ids
+
+    clean_items = clean_all[clean_all["item_id"].isin(paired_ids)].copy()
+    verbose_items = verbose_all[verbose_all["item_id"].isin(paired_ids)].copy()
+    clean_items["regime"] = clean_items["item_id"].map(regime)
+    verbose_items["regime"] = verbose_items["item_id"].map(regime)
+
+    return clean_items, verbose_items
+
+
+def compute_signal_calibration(items: pd.DataFrame, signal: str, n_bins: int, seed: int) -> dict:
+    """ECE, Brier, and the signed overconfidence gap for one kev signal,
+    on one already-regime-filtered population - mirrors
+    analysis/rq1.py::compute_signal_metrics's exact recipe (ece/brier/
+    overconfidence_gap; MCE and the Brier decomposition's
+    reliability/resolution terms are RQ1-table-specific extras this
+    module doesn't need for RQ6's DoD). `conf_kev_bpe`'s raw-nats range
+    ([1-ln(2), 1] ~= [0.307, 1]) needs no rescaling before these - the
+    same reasoning already confirmed for conf_bpe (D27, checked against
+    the real formula before this was built, not assumed).
+
+    Every metric ships with a cluster-bootstrap CI over question_id
+    (invariant 2), same as every other calibration check in this project.
+    """
+    def _ece(df: pd.DataFrame) -> float:
+        value, _ = ece(df[signal].to_numpy(), df["correct"].to_numpy(), n_bins)
+        return value
+
+    def _brier(df: pd.DataFrame) -> float:
+        return brier(df[signal].to_numpy(), df["correct"].to_numpy())
+
+    def _overconfidence_gap(df: pd.DataFrame) -> float:
+        return overconfidence_gap(df[signal].to_numpy(), df["correct"].to_numpy())
+
+    def _auroc(df: pd.DataFrame) -> float:
+        uncertainty = 1 - df[signal].to_numpy(dtype=float)
+        return auroc_error(uncertainty, df["correct"].to_numpy())
+
+    result = {}
+    for name, fn in [("ece", _ece), ("brier", _brier), ("overconfidence_gap", _overconfidence_gap), ("auroc", _auroc)]:
+        point, ci_low, ci_high = cluster_bootstrap(items, fn, "question_id", n=2000, seed=seed)
+        result[name] = point
+        result[f"{name}_ci_low"] = ci_low
+        result[f"{name}_ci_high"] = ci_high
+    return result
+
+
+def main_calibration(config_path: str) -> None:
+    config = KevConfig.from_yaml(config_path)
+    clean_items = load_rq6_clean_items(config.paths.items_parquet)
+
+    print(f"RQ6 calibration population: N={len(clean_items)} (clean, human_label present)")
+    print(f"  in_coverage: {(clean_items['regime'] == 'in_coverage').sum()}, "
+          f"out_of_coverage: {(clean_items['regime'] == 'out_of_coverage').sum()}")
+
+    rows = []
+    for regime in ["in_coverage", "out_of_coverage"]:
+        regime_items = clean_items[clean_items["regime"] == regime]
+        for signal in KEV_SIGNALS:
+            metrics = compute_signal_calibration(regime_items, signal, config.n_bins, config.seed)
+            rows.append({"regime": regime, "signal": signal, "n": len(regime_items), **metrics})
+            print(
+                f"  {regime}/{signal}: ECE={metrics['ece']:.4f} "
+                f"[{metrics['ece_ci_low']:.4f}, {metrics['ece_ci_high']:.4f}], "
+                f"overconfidence_gap={metrics['overconfidence_gap']:.4f} "
+                f"[{metrics['overconfidence_gap_ci_low']:.4f}, {metrics['overconfidence_gap_ci_high']:.4f}], "
+                f"AUROC={metrics['auroc']:.4f} [{metrics['auroc_ci_low']:.4f}, {metrics['auroc_ci_high']:.4f}]"
+            )
+            plot_reliability_diagram(
+                confidences=regime_items[signal].to_numpy(),
+                correct=regime_items["correct"].to_numpy(),
+                signal_name=f"{signal}_{regime}",
+                n_bins=config.n_bins,
+                model_slug=config.model_slug,
+            )
+
+    table = pd.DataFrame.from_records(rows)
+    table_path = f"results/rq6_calibration_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--task", required=True, choices=["calibration"])
+    args = parser.parse_args()
+
+    if args.task == "calibration":
+        main_calibration(args.config)
