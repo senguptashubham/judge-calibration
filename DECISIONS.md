@@ -515,3 +515,20 @@ Fit with NumPyro/NUTS. **Fallback ladder, preregistered, not improvised mid-week
 
 **Supersedes, not deletes:** `PLAN.md` §8.5's original "no coverage-regime split needed" sentence is corrected in place with a pointer back here, per this project's own superseding convention (D5/D9/D14/D18's own precedent - the audit trail stays, not the wrong claim standing uncorrected).
 
+**Amended again 23 Sep 2026 - a second, distinct real finding from a 100-item smoke test (`--n-items 100`, run after the skip-and-log fix above, 800 rows, 784 generated + 16 skipped, matching population).** Beyond the input-length skip rate, there is a real, well-measured **output-length parse-failure rate**, concentrated the same way:
+
+| condition / turn | generated | parse failures | rate |
+|---|---|---|---|
+| clean / turn=1 | 348 | 0 | 0% |
+| clean / turn=2 | 252 | 0 | 0% |
+| verbose / turn=1 | 112 | 8 | 7.1% |
+| verbose / turn=2 | 72 | 26 | **36.1%** |
+
+**The mechanism is exact, not approximate:** every one of the 748 `finish_reason=="stop"` completions parsed successfully (0% failure - the ported `extract_pariwise_result()` and template are completely reliable whenever the model finishes naturally). Failures are 100% concentrated in `finish_reason=="length"` (truncated at `max_tokens=1024`): 34/36 truncated completions never reach a decision line. Truncation itself is sharply condition-dependent: 0% in `clean` (both turns), 8.0% in verbose/turn=1, **37.5% in verbose/turn=2** - verbose padding (especially compounded with turn=2's folded two-turn response fields) makes the model's own critique run long enough to frequently run out of room before concluding.
+
+**Two of the truncated completions inspected by eye showed genuine model-level degenerate repetition, not just "ran out of room near a natural end":** one (`clean` sample, turn=1) starts with coherent, on-topic critique and spirals into token repetition partway through; two turn=2 verbose examples degenerate almost immediately (e.g. looping on "the Alps and the Alps and the Alps..." dozens of times from the first few tokens). This could be GPTQ-4bit's own documented "behavior might differ from the full model" caveat, the turn=2 flattening design's out-of-training-distribution structure, or `verbose_pad()`'s own repetitive-list structure priming a smaller/quantized model into continuing that same repetition - not yet distinguishable with the data collected so far, and not resolved here.
+
+**Decision, confirmed with the owner (AskUserQuestion, 23 Sep 2026): keep `max_tokens=1024`, do not increase it, proceed to the full run.** The failure rate itself is treated as a real, reportable RQ7 finding, not an artifact to engineer away - the verbosity attack derailing auto-j-13b from producing any verdict at all more than a third of the time under the hardest combined condition (verbose + multi-turn) is arguably a more severe failure mode than anything RQ1-RQ3 or RQ6 found, and belongs in `REPORT.md`'s RQ7 section (L6) stated as prominently as the calibration/position-swap/verbosity-attack numbers themselves, not buried as a footnote. Rejected alternative: raising `max_tokens` to trade a higher input-skip rate for a currently-unmeasured, uncertain reduction in output-truncation failures - not worth the added complexity and GPU cost for an unproven benefit.
+
+**Downstream handling (task L4, `src/autoj_signals.py`):** rows where `extract_autoj_verdict()` returns `-1` (no parseable decision line) get `judge_verdict=None`, `correct=None` - the same "missing, not zero, never imputed" convention `parse.py`'s own `parse_failure_type` taxonomy already established for the primary judge. This will materially shrink the effective N for verbose/turn=2's calibration and attack-battery numbers specifically at full-run scale - expected, and must be stated as its own limitation in `REPORT.md`, not silently absorbed into a smaller-but-unexplained sample size.
+
