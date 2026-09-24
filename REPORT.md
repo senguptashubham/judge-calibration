@@ -1013,6 +1013,261 @@ modeling failure. Figures:
 
 ---
 
+## RQ7 — Generalizing across training objective (auto-j-13b)
+
+*Added 23–24 Sep 2026, owner-initiated (not professor feedback) —
+`DECISIONS.md` D28, `PLAN.md` §8, `TASKS.md`'s own L1–L6/GATE L addendum
+block, kept outside the W0–W7 numbering for the same reason the K-block
+is: isolable/trimmable later without renumbering anything else.*
+
+**Purpose-built-for-judging framing, stated here first — the inverse of
+RQ6's own caveat.** Where kev-8b (RQ6) was never trained on pairwise
+response judging at all, `auto-j-13b` (`GAIR/autoj-13b`, Li et al., ICLR
+2024, arXiv:2310.05470) is a Llama-2-13B model **purpose-trained
+specifically for this task** — fine-tuned on GPT-4-distilled critique-
+and-verdict data over `lmsys/chatbot_arena_conversations`. This closes
+the gap RQ6 could not: if a model actually built and trained to judge
+still shows the same failure modes RQ1–RQ3 found in a general-purpose
+judge, that is a materially stronger generalization claim than either RQ1
+or RQ6 alone. Served here via its 4-bit GPTQ quantization (confirmed
+working on this project's pinned `vllm==0.28.0` via a real Colab smoke
+test) rather than the full fp16 model, for GPU-cost reasons (`DECISIONS.md`
+D28) — the authors' own documentation notes quantized behavior "might be
+different" from the full model, a real caveat restated below, not
+dropped.
+
+*Population: 1,904 MT-Bench items, both AB/BA orders, `clean` and
+`verbose` conditions, **both turns** — `src/judge_autoj.py` reuses
+`load_full_items_df()`/`verbose_pad()`/`apply_order()` from the primary
+judge's own pipeline unchanged. Unlike RQ6, there is no coverage-regime
+split: auto-j's disclosed 8,192-token context comfortably covers this
+population (a small, skip-and-logged exclusion of 362/15,232 calls over a
+conservative 7,168-token ceiling, concentrated in `verbose`/turn=2 — see
+D28). Two signals, both self-consistency-based since auto-j exposes no
+native per-call confidence or probability the way kev-8b did:
+`conf_sc_autoj` (direct port of the primary judge's own `conf_sc`
+formula, `clean` only — no sampled draws exist on `verbose`) and
+`conf_sc_bpe_autoj` (an order-swap bidirectional-entropy analog, built
+from self-consistency proportions rather than a per-call logprob ratio —
+computed on both conditions, at coarser resolution on `verbose`). Whether
+to report `turn=2` at all was a real, live question mid-arm — a smoke
+test found its `verbose` failure rate dramatically higher than `turn=1`'s
+own — but the final call was to report both turns always, with that
+failure rate stated as its own finding below, not used to silently drop
+data (full back-and-forth in `DECISIONS.md` D28).*
+
+**Headline: purpose-built training does not solve the calibration
+problem, but it is not a wash either — it measurably cuts one specific
+failure mode roughly in half while introducing a new one neither the
+primary judge nor kev-8b ever showed.** Overconfidence and the Bayesian
+meta-model's inability to beat the best single signal both replicate
+exactly, for a third architecture in a row. Position-swap flip rate is
+roughly **half** the primary judge's and kev-8b's own — the first real
+evidence in this project that purpose-built training can reduce a failure
+mode itself, not just report it more honestly. Set against that: under
+the verbosity attack, auto-j fails to produce **any** usable verdict at
+all in a meaningful fraction of cases (up to 39.8% for `verbose`/turn=2)
+— a qualitatively different, more severe failure than a calibration gap,
+and one neither the schema-constrained primary judge nor the deterministic
+kev-8b could exhibit by construction.
+
+### Calibration check
+
+*Population: N=1,797 (`clean`, human-labeled, `correct` present).
+`analysis/rq7.py::main_calibration`, reusing
+`src/metrics.py::ece`/`brier`/`overconfidence_gap`/`auroc_error`
+unchanged. Unlike RQ6's kev arm, auto-j's two signals have genuinely
+different null patterns from each other and from `correct` even on
+`clean` (real Tie/parse-failure rates there), so each signal's own row
+below uses its own filtered N, not one shared population size.*
+
+| Turn | Signal | N | ECE | 95% CI | Overconfidence gap | AUROC | 95% CI |
+|---|---|---|---|---|---|---|---|
+| turn=1 | `conf_sc_autoj` | 889 | 0.1465 | [0.1182, 0.1810] | +0.1105 | 0.6778 | [0.6346, 0.7194] |
+| turn=1 | `conf_sc_bpe_autoj` | 872 | 0.1356 | [0.1070, 0.1658] | +0.0913 | 0.6832 | [0.6469, 0.7210] |
+| turn=2 | `conf_sc_autoj` | 908 | 0.1242 | [0.0980, 0.1547] | +0.0906 | 0.6794 | [0.6343, 0.7235] |
+| turn=2 | `conf_sc_bpe_autoj` | 898 | 0.1262 | [0.1090, 0.1626] | +0.0583 | 0.6806 | [0.6371, 0.7217] |
+
+**Both signals are meaningfully overconfident, in both turns** — unlike
+kev-8b, where `conf_kev_bpe` was mildly *underconfident*, both of auto-j's
+signals sit on the same (overconfident) side the primary judge's own
+signals did. Turn=1 and turn=2 are close to each other in magnitude
+despite the sharp gap in their *failure rates* (see Verbosity attack,
+below) — calibration quality among the calls that do succeed doesn't
+itself degrade much turn-to-turn. AUROC (~0.68 for both signals, both
+turns) is **the weakest of the three judges tested in this project** —
+below the primary judge's own best signal (`conf_bpe`, 0.794) and
+kev-8b's (`conf_kev_bpe`, 0.772–0.781). This needs a real caveat, stated
+in full below: auto-j's signals are self-consistency-proportion-based, a
+structurally coarser construction than either of the other two judges'
+continuous, logprob-derived signals, so this is not a fully clean
+apples-to-apples comparison — but it at least argues against "purpose-
+built judge training obviously yields sharper uncertainty for free."
+Figures: `reliability_conf_sc{,_bpe}_autoj_turn{1,2}_autoj_13b_gptq_4bits.png`.
+Table: `rq7_calibration_autoj_13b_gptq_4bits.csv`.
+
+### Position-swap attack
+
+*Same population and recipe as RQ3a/RQ6's own position-swap test
+(`analysis/rq3.py::compute_flip_rate`/`compute_confidence_gap`, reused
+unchanged). N=1,770 (`clean`, human-labeled, `flipped` present).*
+
+| Turn | Flip rate | 95% CI | Signal | Confidence gap (flipped − unflipped) | 95% CI |
+|---|---|---|---|---|---|
+| turn=1 | 12.5% | [9.0%, 16.2%] | `conf_sc_autoj` | **−0.2317** | [−0.3094, −0.1621] |
+| turn=1 | " | " | `conf_sc_bpe_autoj` | **−0.5574** | [−0.5835, −0.5305] |
+| turn=2 | 13.8% | [10.8%, 16.9%] | `conf_sc_autoj` | **−0.2649** | [−0.3285, −0.2073] |
+| turn=2 | " | " | `conf_sc_bpe_autoj` | **−0.5512** | [−0.5754, −0.5233] |
+
+**The standout result of this arm: auto-j's own flip rate (12.5%/13.8%)
+is roughly half the primary judge's (27.8%) and kev-8b's (23.7–24.6%) on
+the identical test.** This is the first evidence in this project that
+purpose-built judge training can *reduce* position bias itself, not just
+report it more honestly after the fact — every other cross-architecture
+comparison so far (calibration, the Bayesian meta-model check) has been a
+replication or a null result, not an improvement. Both signals also track
+their own position-bias-induced errors strongly and significantly (every
+CI excludes zero), with a gap magnitude in the same range as kev-8b's own
+(`conf_sc_bpe_autoj`'s −0.55 vs. `conf_kev_bpe`'s −0.49) and far larger
+than the primary judge's weak `conf_verb` tracking (−0.020) — so while the
+*rate* of position bias is new and lower, the *pattern* of strong
+confidence-gap tracking replicates kev-8b's own finding, not something
+newly discovered here. Figures:
+`rq7_position_swap_gap_autoj_13b_gptq_4bits_turn{1,2}.png`. Table:
+`rq7_position_swap_autoj_13b_gptq_4bits.csv`.
+
+### Verbosity attack
+
+*Population: 1,137 paired items — the intersection of `clean` and
+`verbose` where both `conf_sc_bpe_autoj` and `correct` are valid on both
+sides (an item missing on either side is dropped from **both** sides, or
+the paired bootstrap silently loses its pairing — the same requirement
+D27/D28 already established for kev-8b and this arm alike). Only
+`conf_sc_bpe_autoj` runs here — `conf_sc_autoj` is unconditionally null on
+`verbose` (no sampled draws exist there at all), mirroring D21's own
+`conf_sc`-excluded/`conf_bpe`-included precedent for the primary judge
+exactly, not a new judgment call.*
+
+**Before the calibration numbers: a real, severe failure mode neither the
+primary judge nor kev-8b could exhibit.** Measured directly against the
+full 15,232-call dataset, the rate at which auto-j fails to produce *any*
+parseable verdict at all:
+
+| Condition / turn | Generated calls | Parse failures | Rate |
+|---|---|---|---|
+| `clean` / turn=1 | 5,688 | 2 | 0.04% |
+| `clean` / turn=2 | 5,736 | 2 | 0.04% |
+| `verbose` / turn=1 | 1,862 | 253 | 13.6% |
+| `verbose` / turn=2 | 1,584 | 630 | **39.8%** |
+
+The mechanism is exact, not approximate: every failure traces to
+`finish_reason == "length"` (the completion was truncated at 1,024 tokens
+before reaching a decision line) — every completion that finished
+naturally parsed successfully, 0% failure. A handful of truncated
+completions were inspected by eye; some showed a coherent critique running
+out of room, others showed genuine model-level degenerate token
+repetition from the first few tokens (e.g. looping on a single phrase
+dozens of times) — consistent with the GPTQ-quantization caveat stated
+above, though the exact cause (quantization instability vs. `verbose_pad`'s
+own repetitive-list structure priming repetition) is not resolved here.
+This is a materially more severe failure than a calibration gap: neither
+the primary judge (schema-constrained decoding, effectively guarantees a
+verdict) nor kev-8b (a single deterministic classifier forward pass,
+always returns something) could fail this way at all.
+
+| Turn | Signal | ΔECE (verbose − clean) | 95% CI | ΔAccuracy | 95% CI | ΔAUROC | 95% CI |
+|---|---|---|---|---|---|---|---|
+| turn=1 (n=709) | `conf_sc_bpe_autoj` | +0.0420 | [−0.0037, 0.0743] | −0.0282 | [−0.0569, 0.0040] | −0.0236 | [−0.0729, 0.0267] |
+| turn=2 (n=428) | `conf_sc_bpe_autoj` | +0.0463 | [−0.0076, 0.0870] | **−0.0421** | **[−0.0791, −0.0028]** | −0.0194 | [−0.0871, 0.0508] |
+
+**ΔECE trends the same direction the primary judge's and kev-8b's own
+best signal did (calibration worsening under verbose) but does not reach
+significance here at either turn** — a genuinely ambiguous result: it
+could reflect real partial robustness, or it could simply be that the
+surviving paired sample (already filtered down by the failure rate above)
+is too small and too pre-selected to detect the same effect. **Accuracy
+itself drops significantly for turn=2 specifically** (−0.042, CI excludes
+zero) — unlike both the primary judge and kev-8b, where verbosity never
+measurably changed accuracy in either arm. Combined with the failure-rate
+table above, turn=2 is the one population in this whole project where the
+verbosity attack does more than fool the judge's confidence — it makes
+the judge measurably more likely to be wrong, or to not answer at all.
+Figures: `rq7_verbosity_deltas_autoj_13b_gptq_4bits_turn{1,2}.png`. Table:
+`rq7_verbosity_autoj_13b_gptq_4bits.csv`.
+
+### Bayesian recalibration check
+
+*Full D8 protocol (`StratifiedGroupKFold(5)` × 10 repeats, NUTS) — same
+rigor as the primary judge's and kev-8b's own Bayesian arms. Clean-only
+population, restricted to rows where both signals are simultaneously
+valid.*
+
+| Turn | Meta-model AUROC | D8 spread | Best single signal AUROC | Fold-fits flagged |
+|---|---|---|---|---|
+| turn=1 | 0.6788 | [0.6653, 0.6981] | 0.6832 | 0/50 |
+| turn=2 | 0.6737 | [0.6612, 0.6924] | 0.6806 | **3/50** |
+
+**The meta-model does not beat the best single signal in either turn** —
+essentially tied-to-slightly-worse in both, the same qualitative pattern
+already found for the primary judge (RQ4) and kev-8b (RQ6): three
+architectures, three null results. `conf_sc_autoj` and `conf_sc_bpe_autoj`
+share one of their two underlying self-consistency proportions
+(correlated, not collinear, the same distinction D28 already draws for
+kev's own signal pair), so a coherent null is the expected outcome, not a
+modeling failure. Convergence is clean at turn=1 (0/50 flagged) with a
+small, real uptick at turn=2 (3/50, ~6%) — worth stating honestly rather
+than minimized, though still a small minority of fold-fits, not a
+systemic convergence problem. Figures:
+`rq4_bayesian_convergence_autoj_13b_gptq_4bits_turn{1,2}.png`. Table:
+`rq7_bayesian_recalibration_autoj_13b_gptq_4bits.csv`.
+
+### Limitations specific to this section
+
+- **auto-j-13b is served here as a 4-bit GPTQ quantization, not the full
+  fp16 model**, for GPU-cost reasons stated up front, not hidden — the
+  authors' own documentation notes quantized behavior "might be
+  different." The degenerate-repetition failures found in the verbosity
+  attack (above) are consistent with, but not proven to be caused by,
+  this choice; the full model was not tested for comparison.
+- **The two signals are self-consistency-proportion-based, structurally
+  coarser than either the primary judge's or kev-8b's own continuous
+  signals** (`conf_sc_autoj` in particular takes only `k_sc+1` discrete
+  values, the same resolution limitation D14 already found for the
+  primary judge's own `conf_sc`). The AUROC comparison against the other
+  two judges (Calibration check, above) should be read with this in mind
+  — a like-for-like signal-construction comparison was not attempted.
+  `conf_lp`-style logprob-based signals were considered and deferred
+  (D28): auto-j is not schema-constrained, so locating a clean two-
+  candidate decision token is real, unsolved work, not attempted here.
+- **Auto-j's own template offers a third "Tie" option** (2.35% of
+  generated calls) the rest of this project's `A|B|None` schema was never
+  built for. Tie is treated as a missing verdict for every analysis above
+  — the same treatment as a genuine parse failure — but tracked
+  separately via a raw label column in `calls_autoj_13b_gptq_4bits.parquet`,
+  so a future reader can distinguish "the model explicitly declined to
+  choose" from "the model failed to answer" if that distinction matters.
+- **The verbosity attack's non-significant ΔECE findings are likely
+  underpowered, not necessarily null** — the paired population is already
+  filtered down by the failure rate documented in that section, and a
+  smaller, self-selected surviving sample is a weaker test of the same
+  effect the primary judge and kev-8b both found significant on their own,
+  larger surviving populations.
+- **Whether to report `turn=2` at all was seriously reconsidered mid-arm**
+  after a smoke test found its `verbose` failure rate dramatically higher
+  than `turn=1`'s own, and a turn=1-only version of this section was
+  briefly built and then reverted once the real cost-benefit of that
+  choice changed (`DECISIONS.md` D28's full back-and-forth). The finding
+  itself — `verbose`/turn=2's much higher failure rate and its
+  significant accuracy drop — is unaffected by that history and is
+  reported here exactly as it would have been either way.
+- **Unlike kev-8b, auto-j-13b is not standing in for anything** — it is
+  evaluated directly, not as a proxy for an inaccessible proprietary
+  system. This section carries no analog of RQ6's own "is this a fair
+  proxy" caveat; the trade-off made here instead is fidelity to the full
+  model (traded for GPU cost via quantization, first bullet above).
+
+---
+
 ## Methods notes
 
 Small, dated empirical observations that inform a design decision but don't belong to
