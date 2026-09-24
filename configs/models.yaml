@@ -1,3 +1,0 @@
-# Filled in at TASKS.md task 0.2. Judge model is a config key, never
-# hardcoded in src/ (CLAUDE.md sec 1). A second judge model is explicitly
-# out of scope for this pass — see PLAN.md sec 4, drop order item 1.

@@ -2,7 +2,7 @@
 
 Read this before doing anything in this repo. It is the contract, not a summary.
 
-**Also read `DECISIONS.md`** — it carries D4–D28 from the Week-0 design review, the 31 Aug 2026 professor-feedback integration (`PROFESSORFEEDBACK.md`), and two later owner-initiated additions (D27, 22 Sep 2026 — the industry-counterexample stress test; D28, 23 Sep 2026 — the purpose-built-judge generalization test), which override anything here that contradicts them.
+**Also read `DECISIONS.md`** — D4–D28 (the Week-0 design review, the 31 Aug 2026 professor-feedback integration, and the owner-initiated RQ6/RQ7 additions) override anything here that contradicts them.
 
 ---
 
@@ -10,12 +10,12 @@ Read this before doing anything in this repo. It is the contract, not a summary.
 
 An empirical study of **whether small open-weight LLM judges know when they are wrong**, and whether their uncertainty is usable for selective evaluation (abstain-and-escalate).
 
-- **Judge model:** `Qwen2.5-7B-Instruct` (config key, never hardcoded)
+- **Primary judge model:** `Qwen2.5-7B-Instruct` (config key, never hardcoded). RQ6 and RQ7 add `kev-8b` and `auto-j-13b`.
 - **Data:** `lmsys/mt_bench_human_judgments`, `human` split (3,355 rows = one row per *human vote*, not per item)
 - **Compute:** Google Colab Pro (L4/A100 preferred), vLLM offline batch inference
 - **Deadline:** mid-October 2026. This is a certification capstone, not a paper. Working and honest beats clever.
 
-### The five research questions
+### The research questions
 
 | RQ | Question | Primary metric |
 |----|----------|----------------|
@@ -27,7 +27,11 @@ An empirical study of **whether small open-weight LLM judges know when they are 
 | RQ6 | Does kev-8b — an open, RLCD-trained stand-in for the industry's "System One" calibration counterclaim (Jev/TypeSafe) — actually resist the same failure modes (position bias, verbosity degradation, exploitable residual structure) this project already found in a general-purpose LLM judge? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison (D22's Bayesian machinery reused) |
 | RQ7 | Does auto-j-13b — a model purpose-trained via GPT-4-distilled critique+verdict data specifically for pairwise response judging — still exhibit the same position-bias and verbosity-degradation failure modes found for a general-purpose judge (RQ1–RQ3) and an out-of-domain industry stand-in (RQ6)? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison, each split by turn=1/turn=2 |
 
-RQ4 is the owner's own idea and is **not** optional. Protect it. See `PLAN.md` §RQ4. RQ5 was added 31 Aug 2026 from professor feedback (`PROFESSORFEEDBACK.md`, `DECISIONS.md` D18–D24) and is equally binding. See `PLAN.md` §6. RQ6 was added 22–23 Sep 2026, owner-initiated (not professor feedback) — `DECISIONS.md` D27, `PLAN.md` §7, `TASKS.md`'s own K1–K5/GATE K addendum block (deliberately outside the W0–W7 numbering so it stays easy to isolate or trim if later feedback says to scope it down). Its population is a different judge model (kev-8b, not Qwen2.5-7B-Instruct) evaluated on the same MT-Bench items — none of invariant 14's `prompt_variant`/`condition` filtering applies to it, since kev-8b has no prompt-ensemble axis at all. RQ7 was added 23 Sep 2026, also owner-initiated — `DECISIONS.md` D28, `PLAN.md` §8, `TASKS.md`'s own L1–L6/GATE L addendum block (same isolable-outside-W0–W7 treatment as the K-block). Its population is a third judge model (auto-j-13b) on the same MT-Bench items, **both turns** — a same-day interim decision to drop turn=2 entirely (after a 100-item smoke test found a 36.1% output-truncation-driven parse-failure rate for verbose/turn=2 vs 0% for clean/turn=2 and 7.1% for verbose/turn=1) was itself reversed a few hours later, once ~54% of the full both-turns run had already completed and the remaining-time gap between the two options had shrunk to ~2.5-3 hours; the 36.1% finding stands regardless and must be reported prominently. Full back-and-forth in `DECISIONS.md` D28. Like RQ6, none of invariant 14's `prompt_variant` filtering applies (auto-j has no prompt-ensemble axis either); unlike RQ6 there is no coverage-regime split — auto-j's disclosed 8,192-token context covers the population without a ceiling issue.
+RQ4 is the owner's own idea and is **not** optional. Protect it (`PLAN.md` §2). RQ5 came from professor feedback on 31 Aug 2026 (`DECISIONS.md` D18–D24, `PLAN.md` §6) and is equally binding.
+
+RQ6 and RQ7 are owner-initiated additions (`DECISIONS.md` D27/D28, `PLAN.md` §7–8), tracked in `TASKS.md`'s K- and L-blocks outside the W0–W7 numbering so they can be trimmed later without renumbering anything. Each evaluates a different judge model on the same MT-Bench items. Neither model has a prompt-ensemble axis, so invariant 14's `prompt_variant` filter does not apply to them.
+- **RQ6** splits its population by kev-8b's training coverage (`input_tokens` ≤ 1,024 vs above) and skips the 52 verbose items over kev's 8,160-token serving ceiling.
+- **RQ7** splits its population by `turn`. It skips the 4.75% of calls whose prompt exceeds auto-j's context (almost all verbose/turn=2), and auto-j produces no verdict at all on 39.8% of verbose/turn=2 calls (output truncated at `max_tokens`). That failure rate must be reported prominently wherever RQ7 is discussed.
 
 ---
 
@@ -40,7 +44,7 @@ Violating any of these silently corrupts a result. Never do it, never suggest it
 1. **Never use plain `KFold` or `train_test_split`.** Items cluster inside MT-Bench `question_id` (same prompt, often same responses). Always group by `question_id`.
    ⚠️ **Use `StratifiedGroupKFold(shuffle=True, random_state=seed)`, not `GroupKFold`.** sklearn's `GroupKFold` has **no `shuffle` parameter** — it is deterministic, so repeating it across seeds silently produces identical splits and a fake stability result. There are only **80 questions**, so effective N for fold-to-fold variance is ~80, not ~1000: repeat 5-fold across **10 seeds** and report the spread as the headline uncertainty. See D8.
 2. **Never bootstrap by resampling rows.** Cluster-bootstrap: resample `question_id` values with replacement, then take all rows belonging to the sampled questions. CIs from row-resampling are too narrow and will make noise look significant.
-3. **Condition comparisons are paired.** Same items appear in `clean`, `verbose`. Compare with a paired cluster-bootstrap on the per-item difference, never as two independent samples. Order (AB vs BA) is likewise paired within a condition.
+3. **Condition comparisons are paired.** Same items appear in `clean`, `verbose`. Compare with a paired cluster-bootstrap on the per-item difference, never as two independent samples. Order (AB vs BA) is likewise paired within a condition. A paired comparison must also score the *same signal construction* on both sides — e.g. RQ7's verbosity test uses the greedy-only `conf_sc_bpe_autoj_greedy`, because `verbose` has no sampled draws to pool.
 4. **ECE uses equal-mass (quantile) bins, not equal-width** — *unless the signal is discrete.* Verbalized confidence piles up at 0.8/0.9/0.95/1.0; equal-width bins leave most bins empty and the number becomes meaningless.
    **`ece()` selects its own strategy and returns `(ece, n_effective_bins)`:** if `n_unique(conf) <= n_bins`, bin by **unique value** — for a discrete signal that is the *exact* ECE, not a fallback; otherwise quantile bins with duplicate edges dropped. `conf_sc` has only 5 possible values at `k_sc=4`, and naive `qcut` either raises on tied edges or silently returns fewer bins than asked. Always emit the reliability diagram alongside the scalar, and **always print `n_effective_bins`**. See D14.
 5. **Never report accuracy without Cohen's κ.** Raw agreement overstates judge ability by 33–41pp on MT-Bench (Reliability without Validity, 2026). This applies on the risk–coverage curve too: plot **κ@coverage** as well as accuracy@coverage, because dropping items shifts the base rate and inflates accuracy for free.
@@ -48,36 +52,27 @@ Violating any of these silently corrupts a result. Never do it, never suggest it
 
 **Data flow**
 
-7. **Analysis code never touches raw model output.** `calls.parquet` (one row per model call) → `items.parquet` (one row per item×condition) → analysis. Parsing lives only in `src/parse.py`. If an analysis function references `raw_output`, it is in the wrong file.
-8. **Every call row carries provenance:** `judge_model`, `prompt_hash`, `git_sha`, `seed`, `condition`, `order`, `sample_idx`. No exceptions. This is what makes "reproducible" a true claim.
-9. **All runs are resumable.** Append to JSONL after every batch, keyed by `(item_id, condition, order, sample_idx)`. A re-run skips completed keys. Colab disconnects; design for it from the first line.
+7. **Analysis code never touches raw model output.** `calls.parquet` (one row per model call) → `items.parquet` (one row per item×condition) → analysis. Parsing lives only in `src/parse.py` (for RQ6/RQ7, in `src/kev_signals.py` / `src/autoj_signals.py`, each touching raw output in exactly one function). If an analysis function references `raw_output`, it is in the wrong file.
+8. **Every call row carries provenance:** `judge_model`, `prompt_hash`, `git_sha`, `seed`, `condition`, `order`, `sample_idx`. This is what makes "reproducible" a true claim. The one exception is the kev-8b arm: kev has no prompt template and no sampling, so its rows carry no `prompt_hash`/`seed`/`sample_idx`.
+9. **All runs are resumable.** Append to JSONL after every batch, keyed by `(item_id, condition, order, sample_idx)`. A re-run skips completed keys. Colab disconnects; design for it from the first line. `git pull` does not change an already-running process — restart it to pick up new code.
 10. **Prompt templates are frozen and hashed.** After Week 1, changing a template means a new version string and a full re-run. Ask before touching `src/prompts.py`.
 
 **Modelling**
 
-11. **No neural nets for RQ4, and no hyperparameter tuning.** N ≈ 1000 rows but only ~80 groups. The permitted model set is `LogisticRegression` (frequentist baseline, interpretable), `HistGradientBoostingClassifier` (nonlinearity check), and the Bayesian hierarchical logistic regression with question-level random intercepts (D22 — partial pooling is exactly the standard tool for this few-groups problem, not an exception to the invariant's logic). **Hyperparameters are fixed and preregistered** — `LogisticRegression(C=1.0)` on standardized features; `HistGradientBoostingClassifier(max_depth=3, max_iter=200, learning_rate=0.05)`. No nested CV, no tuning, for any of the three. At 80 groups, tuning is noise plus a researcher degree of freedom you cannot defend. See D8, D22.
-12. **Every RQ4 result ships with a permutation null.** Shuffle labels within folds, re-run, report the null AUROC distribution. Without it, 0.62 is not distinguishable from noise.
+11. **No neural nets for RQ4, and no hyperparameter tuning.** N ≈ 1000 rows but only ~80 groups. The permitted model set is `LogisticRegression` (frequentist baseline, interpretable), `HistGradientBoostingClassifier` (nonlinearity check), and the Bayesian hierarchical logistic regression with question-level random intercepts (D22 — partial pooling is exactly the standard tool for this few-groups problem, not an exception to the invariant's logic). **Hyperparameters are fixed and preregistered** — `LogisticRegression(C=1.0)`; `HistGradientBoostingClassifier(max_depth=3, max_iter=200, learning_rate=0.05)`. No nested CV, no tuning, for any of the three. At 80 groups, tuning is noise plus a researcher degree of freedom you cannot defend. **LogReg and the Bayesian model both see features standardized on the training fold only** — `β ~ Normal(0, 1)` is only a comparable prior across features that share a scale. See D8, D22.
+12. **Every RQ4 result ships with a permutation null.** Shuffle `correct` **within each `question_id`** (one fresh permutation per replicate), re-run the same grouped CV, report the null AUROC distribution and the observed AUROC's percentile in it. Within-question, not global: a global shuffle also destroys the question-level clustering of `correct` and understates how high a no-information model can score (D8 amendment). Without it, 0.62 is not distinguishable from noise.
 13. **Every Bayesian RQ4 result ships with convergence diagnostics** — R-hat, effective sample size, divergence count — with the same never-optional status as the permutation null in #12. **Held-out random intercepts are marginalized over the population-level prior** (`α_q_new ~ Normal(0, σ_q)`), never the value a held-out question would have fitted to — getting this wrong leaks exactly the way plain `GroupKFold` leaks. See D22.
 
 **Schema**
 
 14. **Once `prompt_variant` exists as a column, filter to `prompt_variant == "P1"` before any RQ1–RQ4 analysis reads `items.parquet`.** The table's grain became `(item_id, condition, prompt_variant)` when the P1/P2/P3 ensemble was added (D19, D20); P2/P3 rows will silently inflate every sample size and corrupt every RQ1–RQ4 headline number otherwise. This is the single easiest thing to get wrong in the whole prompt-ensemble addition.
-   ⚠️ **`prompt_variant == "P1"` alone is not enough for RQ1, RQ2, or RQ4's core analysis.** Once `verbose` runs land (W4+), `items.parquet` holds `(clean, P1)` *and* `(verbose, P1)` rows — filtering on `prompt_variant` alone silently mixes the two. RQ1, RQ2, and RQ4's core tiers additionally need `condition == "clean"`. RQ3 and the transfer tests (5.7) are the deliberate exceptions that read `verbose` too, and each is already scoped explicitly where that happens.
+   ⚠️ **`prompt_variant == "P1"` alone is not enough for RQ1, RQ2, or RQ4's core analysis.** `items.parquet` holds `(clean, P1)` *and* `(verbose, P1)` rows — filtering on `prompt_variant` alone silently mixes the two. RQ1, RQ2, and RQ4's core tiers additionally need `condition == "clean"`. RQ3 and the transfer tests (5.7) are the deliberate exceptions that read `verbose` too, and each is scoped explicitly where that happens.
 
 ---
 
 ## 3. Data schemas
 
-**A note on the paths below before reading further (D26):** every path shown here
-(`results/calls.parquet`, `results/items.parquet`, `runs/logprobs/`, ...) is the
-*logical* name — what the schema describes, not literally what's on disk. In
-practice, every file that depends on which judge model produced it carries a
-`_{model_slug}` suffix (`Config.model_slug`, e.g. `calls_qwen2.5_7b_instruct.parquet`),
-and `runs/` is namespaced by model as a subfolder (`runs/{model_slug}/`) rather than
-suffixed filenames, since `runs/logprobs/` holds one file per call. The one
-exception is `results/items_labels.parquet`, never suffixed — it's built from human
-votes alone and doesn't depend on the judge model at all. This is what makes adding
-a second judge model later a one-field config change, not a refactor.
+**Paths below are logical names (D26).** Every file that depends on which judge model produced it carries a `_{model_slug}` suffix (`Config.model_slug`, e.g. `calls_qwen2.5_7b_instruct.parquet`), and `runs/` is namespaced by model as a subfolder (`runs/{model_slug}/`). The one exception is `results/items_labels.parquet`, never suffixed — it's built from human votes alone and doesn't depend on the judge model. The RQ6/RQ7 tables (`calls_kev_8b`, `items_autoj_13b_gptq_4bits`, ...) have their own, smaller schemas, documented in `src/kev_signals.py` and `src/autoj_signals.py`.
 
 ### `results/calls.parquet` — one row per model call
 ```
@@ -102,43 +97,29 @@ parse_ok            bool
 parse_failure_type  str    none|no_verdict|no_confidence|malformed_json|truncated
 verdict             str    A|B|null
 verbalized_conf     float  [0,1] or null
-reasoning_len       int    character length of just the "reasoning" field's value
-                           (not len(raw_output) as a whole, which would include a
-                           near-constant ~40-char JSON-boilerplate offset). Exact
-                           when raw_output parses as JSON; an approximate substring-
-                           search fallback on the near-unreachable malformed/
-                           truncated rows (parse.py::reasoning_length(), added
-                           18 Sep 2026 for task 5.2's judge_output_len). null only
-                           when neither path can locate a reasoning value at all.
+reasoning_len       int    character length of the "reasoning" field's value alone (not the
+                           JSON wrapper); approximate on the rare malformed rows, null only when
+                           no reasoning value can be located at all
 verdict_token_logprob float ┐
 p_a                 float  │ ⚠ p_a VALID ONLY WHEN sample_idx == 0 — temperature scales
                            │ the reported logprobs (D6). Every column on this brace is
-cot_logprob_mean    float  │ computed in src/parse.py (task 1.5) from the full
-cot_logprob_min     float  │ per-token logprobs saved for every call (D4, amended
-cot_logprob_std     float  │ 4 Sep 2026 - originally a 10% sample, raised to 100%
-cot_logprob_p10     float  │ coverage specifically so parse.py can compute these from
-cot_entropy_mean    float  │ saved data alone rather than judge.py needing to compute
-n_cot_tokens        int    ┘ them at generation time before the raw data vanished.
+cot_logprob_mean    float  │ computed in src/parse.py from the full per-token logprobs
+cot_logprob_min     float  │ saved for every call (D4).
+cot_logprob_std     float  │
+cot_logprob_p10     float  │
+cot_entropy_mean    float  │
+n_cot_tokens        int    ┘
 n_prompt_tokens     int
 n_out_tokens        int
-latency_ms          float
+latency_ms          float  batch-averaged, not true per-request latency
 ```
 
-A raw per-token logprob file goes to `runs/logprobs/*.jsonl.gz` (gzipped) for **every** call
-(D4, amended 4 Sep 2026 — originally a 10% sample at `runs/logprobs_sample/`, raised to 100%
-coverage: the storage cost scales to roughly 10x the sample's own quoted sizes, which stays
-comfortably small, and full coverage means `src/parse.py` can compute every logprob-derived
-field from saved data alone, keeping all parsing logic in the one file invariant 7 requires
-instead of splitting it against `judge.py`). `judge.py` itself only ever writes `raw_output`
-plus call-identifying provenance to its checkpoint — it computes no derived signal itself.
-The CoT aggregate columns are stored as `*_greedy` and `*_sampled_t07` pairs at the
-items.parquet stage; the temperature is in the name so the two are never averaged together.
+A raw per-token logprob file goes to `runs/logprobs/*.jsonl.gz` (gzipped) for **every** call (D4). `judge.py` only ever writes `raw_output` plus provenance to its checkpoint — it computes no derived signal itself.
 
 ### `results/items.parquet` — one row per (item_id, condition, prompt_variant)
-⚠ Grain changed from (item_id, condition) when the P1/P2/P3 ensemble was added (D19, D20).
-**Filter to `prompt_variant == "P1"` before any RQ1-RQ4 analysis** — see invariant 14.
+⚠ **Filter to `prompt_variant == "P1"` before any RQ1-RQ4 analysis** — see invariant 14.
 ```
-item_id, question_id, category, condition, prompt_variant
+item_id, question_id, category, condition, prompt_variant, turn
 human_label         str    A|B          (majority over non-tie human votes)
 n_human_votes       int
 frac_prefer_a       float  soft label — the differentiator lives here
@@ -163,8 +144,16 @@ ens_entropy_aleatoric   float  mean(H[p_a]) across P1,P2,P3. clean ONLY (D20)
 ens_entropy_epistemic   float  total - aleatoric (BALD / mutual information). clean ONLY (D20)
 flipped             bool   canonical verdict differs between order AB and BA,
                            within this (condition, prompt_variant) pair
-len_a, len_b        int
-len_ratio           float
+                           ── RQ4 Tier B ──
+len_a, len_b        int    character length of each side's judged response
+len_ratio           float  len_a / len_b; null when len_b == 0
+abs_len_diff        int
+longer_is_chosen    bool   judge picked the strictly longer side; null on equal lengths
+judge_output_len    int    reasoning_len of the canonical AB greedy call
+                           ── RQ4 Tier C ──
+verdict_margin      float  |2*p_a - 1| on the canonical AB greedy call
+cot_*_greedy        the six CoT aggregate columns of the AB greedy call
+cot_*_sampled_t07   the same six, averaged over the k_sc sampled calls; clean/P1 only
 ```
 
 ---
@@ -172,48 +161,42 @@ len_ratio           float
 ## 4. Layout
 
 ```
-configs/     run.yaml  models.yaml  conditions.yaml     # everything tunable
+configs/     run.yaml (primary judge)   run_kev.yaml (RQ6)   run_autoj.yaml (RQ7)
 src/
-  __init__.py
-  config.py     Config dataclass, YAML loader (task 0.2)
-  data.py       MT-Bench → item table; tie policy; vote aggregation; human-human κ
-  prompts.py    P1/P2/P3 judge templates, each versioned + hashed   # FROZEN after W1 (D19)
-  perturb.py    verbose-pad / vacuum   (order lives in prompts.py; attribution cut, D18)
-  judge.py      vLLM wrapper: batched, checkpointed, resumable
-  parse.py      verdict + confidence extraction, failure taxonomy
-  signals.py    conf_verb / conf_lp / conf_sc / conf_bpe / conf_ens + its entropy
-                decomposition, judge-level (D20)
-  features.py   RQ4 feature tiers A / B / C
-  metrics.py    ece, mce, brier+decomposition, auroc, kappa, risk_coverage, aurc
-  boot.py       cluster_bootstrap, paired_cluster_bootstrap
-  predictor.py  RQ4: repeated StratifiedGroupKFold, LogReg + HistGBM, permutation
-                null, transfer tests
-  bayesian.py   RQ4: hierarchical logistic regression (NumPyro/NUTS), convergence
-                diagnostics, meta-model-level entropy decomposition (D22)
-  plots.py
-tests/
-  test_config.py  test_data.py      test_parse.py       test_metrics.py
-  test_perturb.py test_prompts.py   test_boot.py         test_features.py
-  test_predictor.py
-  test_bayesian.py    held-out random-intercept marginalization, convergence checks (D22)
-  fixtures/     real malformed judge outputs (task 1.5)
-runs/        *.jsonl checkpoints, logprobs/  (gitignored) - full per-token logprobs for
-             every call, not a sample (D4, amended 4 Sep 2026)
-results/     calls.parquet  items.parquet  figures/   (gitignored)
+  config.py       Config dataclass, YAML loader
+  data.py         MT-Bench votes → item table; tie policy; human-human κ
+  prompts.py      P1/P2/P3 judge templates, each versioned + hashed   # FROZEN (invariant 10)
+  perturb.py      verbose_pad, vacuum inputs
+  judge.py        vLLM wrapper for the primary judge: batched, checkpointed, resumable
+  parse.py        verdict/confidence extraction, failure taxonomy, logprob signals → calls.parquet
+  signals.py      calls → items: conf_verb/lp/sc/bpe/ens + entropy decomposition, Tier B/C columns
+  features.py     RQ4 feature tiers A / B / C
+  predictor.py    RQ4: repeated StratifiedGroupKFold, LogReg + HistGBM, permutation null
+  bayesian.py     RQ4: hierarchical logistic regression (NumPyro/NUTS), convergence
+                  diagnostics, meta-model-level entropy decomposition (D22)
+  metrics.py      ece, mce, brier+decomposition, auroc, kappa, risk_coverage, aurc, threshold_sweep
+  boot.py         cluster_bootstrap, paired_cluster_bootstrap
+  plots.py        one figure per function
+  vacuum_test.py        task 1.8's identical/empty-pair probe (Colab)
+  ablation_decoding.py  task 4.5's constrained vs free-form decoding ablation (Colab)
+  judge_kev.py, kev_signals.py        RQ6: kev-8b HTTP client; checkpoint → calls/items
+  judge_autoj.py, autoj_signals.py    RQ7: auto-j-13b vLLM wrapper; checkpoint → calls/items
+analysis/    rq1.py … rq7.py (one per RQ), human_disagreement.py (tasks 3.3/3.4), vacuum.py (task 1.8),
+             decoding_ablation.py (task 4.5) — each a CLI over items.parquet
+tests/       one test file per src/ module. analysis/ scripts are verified against
+             real data rather than unit-tested.
+learning/    study exercises, not part of the pipeline
+runs/        per-model checkpoints and logprobs/ (gitignored)
+results/     parquet tables, per-RQ CSVs, figures/ (gitignored)
 pyproject.toml   pinned deps; base install excludes vllm (`colab` extra adds it, D17)
                  but includes numpyro/jax/arviz (D24)
-.gitignore
-README.md
-LICENSE
 PLAN.md      design rationale, RQ definitions, week plan
-TASKS.md     atomic tasks with definition-of-done
+TASKS.md     atomic tasks with definition-of-done and closeout notes
 DECISIONS.md resolutions from the design reviews, D4–D28
-LEARNING.md  reading / courses / skills tracker
 PREREGISTRATION.md   frozen before the Week 2 full run
 REPORT.md    written incrementally, not at the end
+LEARNING.md  reading / courses / skills tracker
 ```
-
-`test_prompts.py`, `test_features.py`, and `test_predictor.py` were missing from this list even though §5 and the tasks that build them already require specific assertions in each — fixed here so the layout matches what's actually mandated.
 
 ---
 
@@ -224,17 +207,18 @@ REPORT.md    written incrementally, not at the end
 - Plots: matplotlib only, one figure per function, always return the `Figure`, always save to `results/figures/` with a deterministic name.
 - Logging via `logging`, not `print`, except in CLI entrypoints.
 - Randomness: every stochastic function takes an explicit `seed` or `rng`. No bare `np.random.*`.
+- Comments and docstrings say what the code does and why a non-obvious choice was made. Dates, task numbers, and the history of how a decision was reached belong in `DECISIONS.md`/`TASKS.md`, not in code.
 
 ### Testing — this is the owner's edge, use it
 
 The owner has six years as an SDET. Test code is expected to be good, and it is a deliverable, not overhead.
 
 - `test_metrics.py` must check `ece()` against a **hand-computed** example. Reference case: two bins, (conf 0.9, acc 0.75, weight 0.4) and (conf 0.6, acc 0.33, weight 0.6) → ECE = 0.4·0.15 + 0.6·0.27 = **0.222**.
-- `test_data.py` must check `build_items()`'s tie-policy branching against small hand-constructed vote groups (tie-dominant, clean majority, unanimous, single-vote, and the strict-vs-lenient boundary case that motivated D1), and `human_human_kappa()` against a hand-computed κ **and** a determinism check that row order doesn't change which votes get paired (a real bug found and fixed during development).
-- `test_parse.py` runs against a fixture file of **real malformed judge outputs** collected during Week 1. Add every new failure mode you see as a fixture.
-- `test_perturb.py` property-tests `verbose_pad()`: it preserves the verdict-relevant content. (`attribution()` is cut, D18 — there is no attribution property test.) **The `order` round-trip property (rendering AB then BA returns the original assignment) belongs in `test_prompts.py`, not here — order is a renderer concern, not a perturbation (D5).**
+- `test_data.py` must check `build_items()`'s tie-policy branching against small hand-constructed vote groups (tie-dominant, clean majority, unanimous, single-vote, and the strict-vs-lenient boundary case that motivated D1), and `human_human_kappa()` against a hand-computed κ **and** a determinism check that row order doesn't change which votes get paired.
+- `test_parse.py` uses hand-built malformed outputs — no malformed output occurred naturally in the real runs. Add any real failure mode seen later as a fixture.
+- `test_perturb.py` property-tests `verbose_pad()`: it preserves the verdict-relevant content. **The `order` round-trip property (rendering AB then BA returns the original assignment) belongs in `test_prompts.py`, not here — order is a renderer concern, not a perturbation (D5).**
 - `test_predictor.py` must assert (a) no `question_id` appears in both train and test of any fold, and (b) two different seeds produce **different** fold assignments — the `GroupKFold`-has-no-shuffle trap in §2.1.
-- `test_bayesian.py` must assert a held-out question's random intercept is marginalized over the population prior, never its would-be fitted value (D22) — the hierarchical-model analogue of `test_predictor.py`'s no-leakage assertion.
+- `test_bayesian.py` must assert a held-out question's random intercept is marginalized over the population prior, never its would-be fitted value (D22), and that predictions don't change when a feature is rescaled.
 - `test_boot.py` checks that the cluster bootstrap produces wider intervals than a naive row bootstrap on the same data. If it doesn't, the grouping is broken.
 
 Run `pytest` before any commit that touches `src/metrics.py`, `src/boot.py`, `src/predictor.py`, `src/bayesian.py`, or `src/data.py`.
@@ -254,26 +238,38 @@ Run `pytest` before any commit that touches `src/metrics.py`, `src/boot.py`, `sr
 ## 7. Commands
 
 ```bash
-pytest                                   # always green before commit
-python -m src.data      --config configs/run.yaml    # build item table
-python -m src.judge     --config configs/run.yaml --condition clean
-python -m src.signals   --config configs/run.yaml    # calls → items
-python -m src.predictor --config configs/run.yaml --tier B
-python -m src.bayesian  --config configs/run.yaml               # RQ4 Bayesian arm (D22)
+pytest                                                             # always green before commit
+
+# Primary judge (configs/run.yaml)
+python -m src.data      --config configs/run.yaml                  # items_labels.parquet
+python -m src.judge     --config configs/run.yaml --condition clean    # Colab; then --condition verbose
+python -m src.parse     --config configs/run.yaml                  # checkpoints → calls.parquet
+python -m src.signals   --config configs/run.yaml                  # calls → items.parquet
+python -m analysis.rq1  --config configs/run.yaml                  # likewise rq2, rq3, human_disagreement, vacuum, decoding_ablation
+python -m analysis.rq4  --config configs/run.yaml --task {ablation,h4,transfer,category,calibration,bayesian_comparison,verbose_shift}
+python -m analysis.rq5  --config configs/run.yaml --task {threshold_sweep,distillation,human_disagreement}
+
+# RQ6 — kev-8b (needs kev.serve running, D27)
+python -m src.judge_kev    --config configs/run_kev.yaml
+python -m src.kev_signals  --config configs/run_kev.yaml
+python -m analysis.rq6     --config configs/run_kev.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}
+
+# RQ7 — auto-j-13b (Colab)
+python -m src.judge_autoj   --config configs/run_autoj.yaml
+python -m src.autoj_signals --config configs/run_autoj.yaml
+python -m analysis.rq7      --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}
 ```
 
 ---
 
 ## 8. Environment & workflow
 
-- **Local (VSCode, dedicated conda env `judge-calib`, python 3.11):** everything except running the judge itself — writing and testing all of `src/`, all RQ1–RQ4 analysis once `calls.parquet` exists, the Gradio demo. `pip install -e .` here never installs `vllm`.
-- **Colab (fresh `venv`, GPU):** the only place `judge.py` actually runs — the pilot, the full clean run (now including the P2/P3 ensemble calls, D19), and the verbose run. `pip install -e ".[colab]"` there, inside the fresh venv (D11) — never Colab's system Python. The Bayesian model (`bayesian.py`) is analysis, not inference — it runs locally like everything else in `src/` except `judge.py` (D24).
+- **Local (VSCode, dedicated conda env `judge-calib`, python 3.11):** everything except running the judge models — writing and testing all of `src/`, all analysis, the Gradio demo. `pip install -e .` here never installs `vllm`.
+- **Colab (fresh `venv`, GPU):** the only place `judge.py`/`judge_autoj.py` actually run. `pip install -e ".[colab]"` inside the fresh venv (D11) — never Colab's system Python. The Bayesian model (`bayesian.py`) is analysis, not inference — it runs locally (D24).
 - **A GitHub remote** carries code between the two: commit and push locally, `git clone`/`git pull` in Colab.
 - **`runs/` and `results/` are gitignored on purpose** — move generated data (checkpoints, `calls.parquet`) back from Colab via a Drive-mounted folder or direct download, never through git.
 - See D17 for the full reasoning.
 
 ## 9. Current status
 
-**Week 0 — tasks 0.1–0.6 done** (repo scaffold, `Config`, `ece()`, `cohens_kappa()`, all tested). Tasks 0.7–0.10 (data loading, item table, human-human κ, `PREREGISTRATION.md`) still pending and **unaffected by the 31 Aug 2026 professor-feedback pivot** — start there next.
-
-**31 Aug 2026 — scope revision.** Professor feedback (`PROFESSORFEEDBACK.md`) added RQ5 and a Bayesian hierarchical model to RQ4; see `DECISIONS.md` D18–D24 and `PLAN.md` §6. This landed before any GPU time was spent and before `judge.py`/`prompts.py` existed, so nothing already built needed to be redone — only the not-yet-started Week 1/4/5 tasks changed scope.
+RQ1–RQ7 are complete and written up in `REPORT.md`. GATE 5, GATE K, and GATE L are left unchecked in `TASKS.md` pending the owner's review. Remaining: Week 6 (Gradio demo, finishing `REPORT.md`'s framing sections, slides) and Week 7 (fresh-clone reproducibility check, `REPRODUCE.md`).

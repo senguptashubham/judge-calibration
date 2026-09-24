@@ -1,22 +1,11 @@
-"""vLLM wrapper: batched generation, JSONL append-checkpointing, resumability.
-Only runs on Colab (DECISIONS.md D17) - `vllm` is imported lazily, inside
-the one function that needs it, so this module stays importable (and its
-schedule/checkpoint logic stays locally testable) without vllm installed at
-all. See TASKS.md task 1.4, DECISIONS.md D4, D6, D19.
+"""vLLM wrapper for the primary judge: batched generation, JSONL
+append-checkpointing, resumability. Colab only (D17) - vllm is imported
+inside _run_generation(), so the schedule and checkpoint logic stay
+importable and testable without it.
 
-Scope, deliberately narrow: this file runs the model and saves raw
-materials - `raw_output` text plus every call's full per-token logprobs
-(D4, amended 4 Sep 2026: 100% coverage, not a 10% sample) - and nothing
-else. It computes no derived signal itself. `verdict`, `verbalized_conf`,
-`verdict_token_logprob`, `p_a`, and the CoT logprob aggregates are all
-computed later by `src/parse.py` (task 1.5) from the saved data, keeping
-every bit of "turn raw model output into a signal" logic in the one file
-CLAUDE.md invariant 7 says it belongs in. This only works because 100% of
-calls now keep their full logprobs on disk - under the old 10%-sample
-design, the raw data would have vanished for 90% of rows before parse.py
-ever ran, which is why an earlier version of this file computed those
-fields itself. See DECISIONS.md D4's 4 Sep 2026 amendment for the full
-reasoning.
+This file saves raw materials only: `raw_output` plus provenance in the
+checkpoint, and every call's full per-token logprobs (D4). Every derived
+signal is computed later by src/parse.py (invariant 7).
 """
 
 import argparse
@@ -34,18 +23,8 @@ from src.data import item_id
 from src.perturb import verbose_pad
 from src.prompts import prompt_hash, render_prompt
 
-# The per-item call schedule (DECISIONS.md D19) - 12 calls/item. Encoded as
-# logic, not config, because which (condition, variant) combos exist at all
-# is a frozen design decision (D19/D20/D21: P2/P3 and self-consistency
-# sampling only exist for clean/P1), not a tunable number. k_sc and the two
-# temperatures *are* tunable and come from config.
-
-
-# The structured-output JSON schema every real call is constrained to
-# (matches prompts.py's own JSON output contract - reasoning/verdict/
-# confidence, in that order). Module-level so src/ablation_decoding.py
-# (task 4.5) can import the exact same schema for its "constrained" arm,
-# rather than risking a second, silently-drifted copy.
+# The structured-output schema every call is constrained to - prompts.py's
+# JSON output contract. Shared with ablation_decoding.py and vacuum_test.py.
 VERDICT_SCHEMA = {
     "type": "object",
     "properties": {
@@ -66,9 +45,10 @@ class CallSpec:
 
 
 def call_schedule(config: Config) -> list[CallSpec]:
-    """Every (condition, prompt_variant, order, sample_idx) combination one
-    item needs, per D19's schedule table. Independent of any specific item -
-    the same schedule applies to every row in items_labels.parquet.
+    """Every call one item needs - D19's 12 calls/item. Which (condition,
+    variant) combinations exist is a frozen design decision (D19-D21:
+    P2/P3 and sampling are clean/P1-only), so it is encoded here, not in
+    config; k_sc and the temperatures do come from config.
     """
     specs = [
         CallSpec("clean", "P1", "AB", 0),
@@ -89,18 +69,13 @@ def git_sha() -> str:
 
 
 def load_full_items_df(config: Config) -> "pd.DataFrame":
-    """Every non-tie item, with conversation content joined back in - the
-    same population this module's own CLI builds, factored out so
-    src/ablation_decoding.py (task 4.5) can reuse it exactly rather than
-    risking a second, silently-drifted copy of this join.
+    """Every non-tie item, with its conversations joined back in from the
+    raw votes (build_items() doesn't carry them). Shared by every harness.
     """
     from src.data import build_items, load_votes
 
     votes = load_votes(config.dataset)
     items_labels = build_items(votes, tie_policy=config.tie_policy)
-    # build_items() doesn't carry conversation_a/conversation_b - join them
-    # back in from votes (one row per (question_id, model_a, model_b, turn)
-    # is enough, conversation content is identical across a group's votes).
     conv_cols = votes[
         ["question_id", "model_a", "model_b", "turn", "conversation_a", "conversation_b"]
     ].drop_duplicates(subset=["question_id", "model_a", "model_b", "turn"])
@@ -113,9 +88,8 @@ def checkpoint_key(item: str, condition: str, prompt_variant: str, order: str, s
 
 
 def load_completed_keys(checkpoint_path: Path) -> set[str]:
-    """Reads a JSONL checkpoint and returns the set of already-completed
-    call keys, so a re-run can skip them (CLAUDE.md invariant 9). Missing
-    file means nothing is completed yet, not an error.
+    """Keys already in the checkpoint, so a re-run skips them (invariant 9).
+    A missing file means nothing is done yet.
     """
     completed: set[str] = set()
     if not checkpoint_path.exists():
@@ -141,12 +115,8 @@ def append_checkpoint(checkpoint_path: Path, row: dict) -> None:
 
 
 def pending_calls(items_df, specs: list[CallSpec], completed: set[str]) -> list[tuple[str, "pd.Series", CallSpec]]:
-    """Cross-joins every item in `items_df` with every `CallSpec` in
-    `specs`, minus whatever's already in `completed` (from
-    `load_completed_keys`). Pulled out as its own pure function - no vllm,
-    no I/O - specifically so the resumability guarantee (CLAUDE.md
-    invariant 9: "running twice does not duplicate rows") is directly
-    testable without a GPU or vllm installed.
+    """Every (item, spec) pair not already in `completed`. Pure - no vllm,
+    no I/O - so "running twice does not duplicate rows" is testable locally.
     """
     pending: list[tuple[str, "pd.Series", CallSpec]] = []
     for _, item_row in items_df.iterrows():
@@ -159,11 +129,8 @@ def pending_calls(items_df, specs: list[CallSpec], completed: set[str]) -> list[
 
 
 def filter_schedule(specs: list[CallSpec], prompt_variants: list[str] | None) -> list[CallSpec]:
-    """Restricts a call schedule to a subset of prompt variants - what lets
-    a pilot/smoke-test run (task 1.6: 20 items, clean/P1 only) stay scoped
-    down instead of accidentally launching the full D19 schedule against
-    every item. `None` means no restriction (every configured variant runs,
-    the normal case for the real W2 run).
+    """Restricts a schedule to some prompt variants, for scoped pilot runs.
+    None means no restriction.
     """
     if prompt_variants is None:
         return specs
@@ -173,21 +140,9 @@ def filter_schedule(specs: list[CallSpec], prompt_variants: list[str] | None) ->
 def _conversations_for_condition(
     condition: str, model_a_conversation: list[dict], model_b_conversation: list[dict]
 ) -> tuple[list[dict], list[dict]]:
-    """Applies `condition`'s perturbation to both sides' conversations,
-    in canonical model_a/model_b identity, BEFORE order gets applied and
-    the prompt gets rendered. `"verbose"` -> `verbose_pad()` (task 4.1,
-    D18); every other condition (`"clean"`) -> passed through unchanged.
-
-    Pulled out as its own pure function, not inlined into the batch-
-    building loop, specifically so this condition -> perturbation mapping
-    is unit-testable without vllm installed (D17) - same reason
-    pending_calls() is its own function. This is exactly the kind of
-    thing that otherwise only surfaces empirically, after burning real
-    GPU time on a mislabeled run: task 4.1b's smoke test (18 Sep 2026)
-    found 40 "verbose" generations that were actually unpadded, because
-    the condition was never wired to verbose_pad() at all anywhere in
-    this file. A test on this function is what would have caught that
-    locally, before any Colab session, for zero GPU cost.
+    """Applies the condition's perturbation to both sides, before order is
+    applied: "verbose" -> verbose_pad(), anything else unchanged. Separate
+    and pure so the condition -> perturbation wiring is unit-tested.
     """
     if condition == "verbose":
         return verbose_pad(model_a_conversation), verbose_pad(model_b_conversation)
@@ -195,15 +150,9 @@ def _conversations_for_condition(
 
 
 def _build_prompts(batch: list[tuple[str, "pd.Series", CallSpec]]) -> list[str]:
-    """Renders the full prompt text for one batch of pending calls -
-    applying each call's condition perturbation (_conversations_for_condition)
-    before rendering, not after. Pulled out of _run_generation as its own
-    pure function so the ENTIRE prompt-construction step (condition
-    perturbation + order + template rendering together) is testable
-    without vllm installed, not just the perturbation mapping in isolation -
-    closes the gap between "the helper function is correct" and "the
-    helper function is actually wired into the real call site", which is
-    exactly where the missing-verbose_pad() bug lived.
+    """Full prompt text for a batch: perturbation, then order, then
+    template. Pure, so the whole construction path is tested, not just its
+    parts.
     """
     return [
         render_prompt(
@@ -217,42 +166,23 @@ def _build_prompts(batch: list[tuple[str, "pd.Series", CallSpec]]) -> list[str]:
 
 
 def logprobs_path(runs_dir: str, item: str, condition: str, prompt_variant: str, order: str, sample_idx: int) -> Path:
-    """Where one call's full per-token logprobs get saved (D4, amended
-    4 Sep 2026: every call, not a 10% sample - directory renamed from
-    `logprobs_sample/` to `logprobs/` to match). Keyed identically to
-    `checkpoint_key()` so `parse.py` can look up the matching file for any
-    `calls.parquet` row.
-    """
+    """Where one call's per-token logprobs are saved, keyed like checkpoint_key()."""
     key = checkpoint_key(item, condition, prompt_variant, order, sample_idx).replace("|", "_")
     return Path(runs_dir) / "logprobs" / f"{key}.jsonl.gz"
 
 
 def write_logprobs(path: Path, token_ids: list[int], per_token_logprobs: list[dict]) -> None:
-    """Full per-token top-K logprobs for one call, gzipped, PLUS which token
-    was actually generated at each position (`token_ids`/`token_texts`) AND
-    the decoded text of every top-K *candidate*, not just the chosen one.
-
-    Both are necessary, for different reasons:
-    - `token_ids`/`token_texts` (the chosen sequence) is what
-      split_cot_and_verdict_tokens() needs to find the CoT/verdict boundary
-      in `raw_output` - without it parse.py would have no way to reconstruct
-      which generated token corresponds to which piece of text.
-    - Per-candidate decoded text (inside `token_logprobs` itself) is what
-      p_a needs: to renormalize P(A) vs P(B) at the verdict position,
-      parse.py must find *which* of the ~20 candidate token ids there
-      decode to the literal text "A" and "B" - the chosen token's own text
-      alone doesn't tell you that for the *other* candidate.
-
-    Saving both here, rather than parse.py re-tokenizing `raw_output` or
-    the literal strings "A"/"B" itself, keeps parse.py from needing a
-    tokenizer/transformers dependency at all (D17 - parse.py stays a
-    light, local-only module).
+    """One call's full per-token top-K logprobs, gzipped, plus:
+    - `token_ids`/`token_texts`: the generated sequence, which parse.py
+      needs to locate the CoT/verdict boundary inside raw_output;
+    - each candidate's decoded text, which parse.py needs to find which of
+      the ~20 candidates at the verdict position are "A" and "B" (for p_a).
+    Saving both means parse.py never needs a tokenizer (D17).
 
     Args:
-      token_ids: the actually-generated token id at each position, in order.
-      per_token_logprobs: vLLM's own per-position dict (token_id -> object
-        with `.logprob` and `.decoded_token`), one dict per generated
-        token, in generation order - same order/length as token_ids.
+      token_ids: the generated token id at each position.
+      per_token_logprobs: vLLM's per-position dict (token_id -> object with
+        `.logprob` and `.decoded_token`), same order and length.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     with gzip.open(path, "wt", encoding="utf-8") as f:
@@ -278,18 +208,9 @@ def _run_generation(
     batch_size: int = 32,
     prompt_variants: list[str] | None = None,
 ) -> None:
-    """The only function in this module that touches vLLM. Kept separate so
-    everything above stays importable/testable without vllm installed
-    (DECISIONS.md D17 - vllm only exists in Colab's venv).
-
-    `prompt_variants`: passed straight to filter_schedule() - restricts
-    which variants actually run, for scoped pilot/smoke-test invocations
-    (task 1.6). `None` runs the full D19 schedule, the normal case.
-
-    NOTE: verify `StructuredOutputsParams`'s exact JSON-schema keyword
-    against the installed vllm==0.28.0 build before the first real run
-    (`from vllm.sampling_params import StructuredOutputsParams; help(...)`)
-    - this couldn't be checked locally since vllm isn't installed here.
+    """The only function that touches vLLM. Runs `condition`'s pending
+    calls (optionally restricted to `prompt_variants`) in batches,
+    checkpointing each row and its logprobs as it completes.
     """
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams
@@ -320,11 +241,8 @@ def _run_generation(
         batch_start_time = time.time()
         outputs = llm.generate(prompts, sampling_params)
         batch_elapsed_ms = (time.time() - batch_start_time) * 1000
-        # Batch-averaged, not true per-request latency - vLLM processes the
-        # whole batch concurrently, so individual request times aren't
-        # cleanly separable from one wall-clock measurement around the call.
-        # Good enough for GPU-budget extrapolation (task 1.6's DoD), not a
-        # latency SLA - documented as an average, not claimed as precise.
+        # vLLM runs the batch concurrently, so this is a batch average, not
+        # per-request latency - fine for budgeting, not for anything finer.
         avg_latency_ms = batch_elapsed_ms / len(batch)
 
         for (item, item_row, spec), output in zip(batch, outputs):
@@ -367,15 +285,14 @@ if __name__ == "__main__":
         "--n-items",
         type=int,
         default=None,
-        help="Limit to a seeded random sample of N items - for scoped pilot/smoke-test runs "
-        "(task 1.6's 20-item pilot). Default: no limit, every non-tie item.",
+        help="Limit to a seeded random sample of N items, for scoped pilot/smoke-test runs. "
+        "Default: every non-tie item.",
     )
     parser.add_argument(
         "--prompt-variants",
         type=str,
         default=None,
-        help="Comma-separated subset of prompt variants to run, e.g. 'P1' for task 1.6's "
-        "clean/P1-only pilot. Default: every variant in the schedule.",
+        help="Comma-separated subset of prompt variants to run, e.g. 'P1'. Default: every variant.",
     )
     args = parser.parse_args()
 
@@ -384,10 +301,7 @@ if __name__ == "__main__":
     items_df = load_full_items_df(cfg)
 
     if args.n_items is not None:
-        # Seeded, not the first N - a naive head() risks clustering on a
-        # handful of question_ids (each has multiple model_a/model_b
-        # pairs), giving a pilot with far less category diversity than a
-        # random sample of the same size.
+        # Seeded sample, not head(): head() would cluster on a few questions.
         items_df = items_df.sample(n=args.n_items, random_state=cfg.seed)
 
     prompt_variants = args.prompt_variants.split(",") if args.prompt_variants else None

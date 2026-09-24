@@ -1,34 +1,16 @@
 """RQ4: repeated StratifiedGroupKFold cross-validation for the two
-frequentist error predictors (task 5.3, D8/CLAUDE.md invariant 1). Fits
-`LogisticRegression(C=1.0)` (standardized features) and
-`HistGradientBoostingClassifier(max_depth=3, max_iter=200,
-learning_rate=0.05)` - the two frequentist models invariant 11 permits
-(the third, the Bayesian hierarchical model, lives in src/bayesian.py,
-D22 - a different tool for a different question, not a competitor to
-tune away).
+frequentist error predictors (D8, invariants 1, 11, 12) - LogisticRegression
+and HistGradientBoostingClassifier. The Bayesian model is src/bayesian.py.
 
-Never `GroupKFold` (invariant 1): sklearn's `GroupKFold` has no
-`shuffle` parameter, so repeating it across seeds silently produces
-IDENTICAL splits every time - a fake stability result, not a real one.
-Always `StratifiedGroupKFold(shuffle=True, random_state=seed)`, which
-stratifies on the target while keeping every `question_id`'s rows
-together in one fold - no `question_id` ever appears in both a fold's
-train and test set.
+Never `GroupKFold`: it has no `shuffle` parameter, so repeating it across
+seeds reproduces the identical split every time - a fake stability result.
+`StratifiedGroupKFold(shuffle=True, random_state=seed)` stratifies on the
+target while keeping every question_id's rows in one fold.
 
-5-fold CV, repeated over 10 independently-seeded runs (D8): only ~80
-question_id groups means fold-to-fold variance is real at that scale
-(effective N for split-to-split noise is ~80, not ~1800 rows), so the
-headline uncertainty this file's callers should report is the
-ACROSS-REPEAT spread of each repeat's whole-population AUROC, never a
-single split's own CI.
-
-Also `permutation_null()` (task 5.4, invariant 12): every RQ4 result
-ships with a permutation null, or an AUROC like 0.62 is not
-distinguishable from what a feature set with no real relationship to
-`correct` would produce under this exact same pipeline. Shuffles `y`
-globally, reruns a single 5-fold CV per permutation, n=200 times - the
-standard permutation-test construction (same shape as sklearn's own
-`permutation_test_score`).
+5-fold CV repeated over 10 seeds (D8). With only ~80 questions, effective N
+for split-to-split noise is ~80, not ~1,800 rows, so the headline
+uncertainty is the ACROSS-REPEAT spread of each repeat's AUROC, never one
+split's CI.
 
 `python -m src.predictor --config configs/run.yaml --tier B --model logreg [--permutation-null]`
 """
@@ -49,23 +31,15 @@ from sklearn.preprocessing import StandardScaler
 from src.config import Config
 from src.features import build_tier_a, build_tier_b, build_tier_c, load_rq4_population
 
-# Tier B/C carry these non-numeric columns (features.py's own module
-# docstring defers encoding to this file, task 5.3's job, not 5.2's).
-# Tier A has neither - encode_features() is then a no-op on it.
 _CATEGORICAL_COLUMNS = ("category",)
 _BOOLEAN_COLUMNS = ("longer_is_chosen", "flipped")
 
 
 def encode_features(X: pd.DataFrame) -> pd.DataFrame:
-    """One-hot encodes `category` and casts the boolean feature columns
-    to int - both target-independent, deterministic transforms (MT-Bench's
-    8 categories are a fixed, known vocabulary; a bool -> int cast reads
-    no data statistics at all), so - unlike StandardScaler, which must be
-    fit inside each CV fold to avoid leaking test-fold statistics into
-    train (handled inside make_logreg()'s Pipeline, not here) - this is
-    safe to apply exactly ONCE, before cross-validation ever starts.
-
-    A no-op on Tier A (has neither column).
+    """One-hot `category`, cast boolean features to int. Both transforms
+    read no data statistics (the 8 categories are a fixed vocabulary), so
+    unlike StandardScaler they are safe to apply once, before CV. A no-op
+    on Tier A.
     """
     X = X.copy()
     present_categorical = [c for c in _CATEGORICAL_COLUMNS if c in X.columns]
@@ -79,35 +53,22 @@ def encode_features(X: pd.DataFrame) -> pd.DataFrame:
 
 def make_logreg(seed: int = 0) -> Pipeline:
     """LogisticRegression(C=1.0) on standardized features - the fixed,
-    preregistered frequentist baseline (invariant 11). `seed` is accepted
-    and ignored (default solver "lbfgs" has no randomness to seed) purely
-    so this shares one call signature with make_histgbm() - both are
-    usable interchangeably as `make_model(repeat_seed)`.
+    preregistered baseline (invariant 11).
 
-    `max_iter=1000` (default 100) is a numerical-convergence setting, NOT
-    a hyperparameter deviation from the preregistered `C=1.0` - it exists
-    only so the optimizer reliably reaches its actual optimum on this
-    feature count rather than stopping early and emitting a
-    ConvergenceWarning; it does not change what's being optimized or
-    introduce any search.
-
-    StandardScaler lives inside the Pipeline, not applied upfront in
-    encode_features() - so `.fit()` on a training fold alone determines
-    its mean/std, never the held-out test fold's (the standard scaling-
-    inside-CV leakage guard).
+    StandardScaler sits inside the Pipeline, so it is fit on each training
+    fold only and never sees held-out data. `max_iter=1000` only lets the
+    optimizer converge; it changes nothing about what is optimized. `seed`
+    is unused (lbfgs is deterministic) and exists so both factories share a
+    signature.
     """
     return Pipeline([("scaler", StandardScaler()), ("clf", LogisticRegression(C=1.0, max_iter=1000))])
 
 
 def make_histgbm(seed: int = 0) -> HistGradientBoostingClassifier:
     """HistGradientBoostingClassifier(max_depth=3, max_iter=200,
-    learning_rate=0.05) - the fixed, preregistered nonlinearity check
-    (invariant 11). No scaling - tree splits are scale-invariant.
-
-    `random_state=seed` is the one exception to "no tuning": it controls
-    the model's OWN internal randomness (histogram-binning tie-breaks),
-    not a hyperparameter search, and is set to the fold's own repeat seed
-    so the whole pipeline stays fully reproducible end to end.
+    learning_rate=0.05) - the fixed nonlinearity check (invariant 11).
+    Trees are scale-invariant, so no scaling. `random_state` seeds only the
+    model's own tie-breaking, not a search.
     """
     return HistGradientBoostingClassifier(max_depth=3, max_iter=200, learning_rate=0.05, random_state=seed)
 
@@ -121,23 +82,11 @@ MODEL_FACTORIES: dict[str, Callable[[int], object]] = {
 def make_fold_splits(
     X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, n_splits: int, seed: int
 ) -> list[tuple[np.ndarray, np.ndarray]]:
-    """One 5-fold StratifiedGroupKFold split (D8). `shuffle=True` and a
-    per-repeat `random_state=seed` are both mandatory: GroupKFold has no
-    shuffle at all (invariant 1's own trap), and a fixed random_state is
-    what makes ONE seed's split reproducible while still differing
-    between seeds (D8's repeated-CV protocol depends on that).
+    """One StratifiedGroupKFold split. Kept free of any model fitting so
+    invariant 1's two properties - no group on both sides of a fold, and
+    different seeds give different splits - are testable directly.
 
-    Pulled out as its own function - no model fitting inside it at all -
-    specifically so invariant 1's two mandatory properties (no group ever
-    split across a fold's train/test; different seeds give different
-    assignments) are directly testable without fitting any classifier,
-    the same reasoning judge.py's pending_calls() is kept separate from
-    _run_generation().
-
-    Returns:
-        List of (train_idx, test_idx) - positional (iloc-style) index
-        arrays into X/y/groups, one pair per fold, in sklearn's own
-        split() order.
+    Returns (train_idx, test_idx) pairs of positional indices.
     """
     splitter = StratifiedGroupKFold(n_splits=n_splits, shuffle=True, random_state=seed)
     return list(splitter.split(X, y, groups))
@@ -145,13 +94,8 @@ def make_fold_splits(
 
 @dataclass
 class RepeatResult:
-    """One repeat's worth of repeated_stratified_group_kfold()'s output.
-
-    oof_pred is in POSITIONAL order matching X.iloc - i.e. oof_pred[i]
-    is the prediction for X.iloc[i], regardless of what X's own pandas
-    index labels happen to be. Callers that need to zip this back to
-    item_id/question_id must do so positionally against the SAME X they
-    passed in, not via X's index.
+    """One repeat of repeated_stratified_group_kfold(). `oof_pred[i]` is the
+    prediction for X.iloc[i] - positional, not by X's index labels.
     """
 
     seed: int
@@ -168,31 +112,16 @@ def repeated_stratified_group_kfold(
     n_repeats: int = 10,
     seed: int = 0,
 ) -> list[RepeatResult]:
-    """D8's full protocol: `n_repeats` independent 5-fold
-    StratifiedGroupKFold CVs, each with its own seed (`seed`, `seed+1`,
-    ..., `seed+n_repeats-1`) - shuffling plus a different random_state
-    per repeat is what makes the repeats independent draws rather than
-    the identical split repeated `n_repeats` times.
-
-    Every row gets exactly one out-of-fold prediction per repeat (each
-    row sits in exactly one fold's test set per 5-fold split). A fresh,
-    unfitted model is built per FOLD (not reused across folds or
-    repeats) via `make_model(repeat_seed)`, so nothing about a previous
-    fold's fit can leak into the next.
+    """D8's protocol: `n_repeats` independent 5-fold splits, repeat i
+    seeded with seed + i. Every row gets exactly one out-of-fold prediction
+    per repeat, and a fresh model is built per fold, so nothing leaks
+    between folds.
 
     Args:
-        X: feature matrix, already encoded (encode_features()'s output) -
-            `correct`/`human_label`/etc. must NOT be columns of X.
-        y: binary target (`correct`, as 0/1), same row order as X.
-        groups: clustering column (`question_id`), same row order as X.
-        make_model: seed -> a fresh, unfitted estimator/Pipeline
-            (make_logreg or make_histgbm).
-        n_splits: folds per repeat (5, D8).
-        n_repeats: independent repeats (10, D8).
-        seed: base seed - repeat i uses seed + i.
-
-    Returns:
-        One RepeatResult per repeat, in seed order.
+        X: encoded features (encode_features()); no target columns.
+        y: binary `correct` target, same row order as X.
+        groups: question_id per row, same order.
+        make_model: seed -> fresh unfitted estimator (make_logreg/make_histgbm).
     """
     y = np.asarray(y)
     groups = np.asarray(groups)
@@ -213,6 +142,17 @@ def repeated_stratified_group_kfold(
     return results
 
 
+def shuffle_within_groups(y: np.ndarray, groups: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    """A copy of `y` with values permuted within each group only, so every
+    group keeps exactly the same multiset of labels.
+    """
+    y_shuffled = y.copy()
+    for group in np.unique(groups):
+        rows = np.flatnonzero(groups == group)
+        y_shuffled[rows] = rng.permutation(y[rows])
+    return y_shuffled
+
+
 def permutation_null(
     X: pd.DataFrame,
     y: np.ndarray,
@@ -222,50 +162,27 @@ def permutation_null(
     n_splits: int = 5,
     seed: int = 0,
 ) -> np.ndarray:
-    """Invariant 12: every RQ4 result ships with a permutation null.
-    Without it, an AUROC like 0.62 isn't distinguishable from what a
-    feature set with NO real relationship to `correct` would produce
-    under this exact same pipeline.
+    """Invariant 12: the null AUROC distribution, so an observed AUROC can
+    be distinguished from what a feature set with no item-level
+    relationship to `correct` would score through this exact pipeline.
 
-    One permutation = shuffle `y` GLOBALLY (breaking any real X-y
-    relationship at the row level), then run ONE 5-fold
-    StratifiedGroupKFold CV (not the full 10-repeat protocol - n=200
-    permutations x 5 folds is already 1000 fits, matching standard
-    permutation-test practice, e.g. sklearn's own
-    `permutation_test_score`, which also uses one CV pass per
-    permutation). Reuses repeated_stratified_group_kfold with
-    n_repeats=1 rather than a second, parallel CV loop.
+    One permutation shuffles `y` WITHIN each question (shuffle_within_groups),
+    then runs one grouped 5-fold CV. A global shuffle would also break the
+    clustering of `correct` - some questions are simply harder - and so
+    understate how high a no-information model can score by chance. Keeping
+    each question's error rate intact is the stricter null: features that
+    only track question difficulty still score above 0.5 under it.
+    Permutation i seeds both the shuffle and the split with seed + i.
 
-    Why a GLOBAL shuffle of y, not shuffling only each fold's own
-    training labels: permuting y once, before the split, is the
-    textbook permutation-test construction, and it leaves `groups`
-    completely untouched - shuffling VALUES never changes which
-    question_id a row belongs to, so the grouping constraint is exactly
-    as valid on permuted data as on real data. A correctly-implemented,
-    leak-free pipeline should center this null at AUROC ~= 0.5 either
-    way; the global-shuffle form is the well-established standard
-    construction, not a bespoke technique invented for this project.
-
-    Args:
-        X, y, groups: same shapes as repeated_stratified_group_kfold's -
-            y is the REAL target; shuffling happens internally, fresh
-            per permutation.
-        make_model: seed -> a fresh, unfitted estimator/Pipeline.
-        n: number of permutations (200, invariant 12/task 5.4).
-        n_splits: folds per permutation (5, matching the real protocol).
-        seed: base seed - permutation i uses seed + i for BOTH the
-            label-shuffle rng and the fold split's random_state, so
-            every permutation is an independent, reproducible draw.
-
-    Returns:
-        Array of n null AUROCs, one per permutation.
+    Returns n null AUROCs.
     """
     y = np.asarray(y)
+    groups = np.asarray(groups)
     null_aurocs = np.empty(n)
 
     for i in range(n):
         permutation_seed = seed + i
-        y_shuffled = np.random.default_rng(permutation_seed).permutation(y)
+        y_shuffled = shuffle_within_groups(y, groups, np.random.default_rng(permutation_seed))
 
         [result] = repeated_stratified_group_kfold(
             X, y_shuffled, groups, make_model, n_splits=n_splits, n_repeats=1, seed=permutation_seed
@@ -276,15 +193,9 @@ def permutation_null(
 
 
 def percentile_of_null(observed: float, null_distribution: np.ndarray) -> float:
-    """Where the REAL, observed AUROC falls within its own permutation
-    null distribution - e.g. 0.97 means only 3% of label-shuffled runs
-    scored as well as the real result by chance.
-
-    The empirical percentile, not a parametric p-value formula: AUROC's
-    null isn't guaranteed normal/symmetric (it's bounded in [0,1], and
-    this project's specific population/pipeline shape its exact form) -
-    reading the empirical rank directly avoids assuming a parametric
-    null shape nobody has checked holds here.
+    """Empirical percentile of `observed` within its null - e.g. 0.97 means
+    only 3% of shuffled runs scored as high. Empirical rather than a
+    parametric p-value, since AUROC's null isn't guaranteed normal.
     """
     return float(np.mean(null_distribution <= observed))
 
@@ -300,23 +211,9 @@ def run_predictor(
     n_splits: int = 5,
     n_repeats: int = 10,
 ) -> list[RepeatResult]:
-    """Ties features.py::load_rq4_population()'s output to one tier +
-    one model's full repeated-CV run: builds the tier's feature matrix,
-    encodes it (encode_features), and cross-validates against `correct`
-    (D7's single-pass, deployed-verdict definition - RQ4 predicts THAT
-    error, not verdict_bidir's), grouped on `question_id`.
-
-    Args:
-        population: features.py::load_rq4_population()'s output.
-        tier_builder: build_tier_a, build_tier_b, or build_tier_c
-            (TIER_BUILDERS's values).
-        model_name: "logreg" or "histgbm" (MODEL_FACTORIES's keys).
-        seed: base seed - repeat i uses seed + i (D8).
-        n_splits, n_repeats: D8's 5-fold / 10-repeat protocol - override
-            only for tests, never for a reported result.
-
-    Returns:
-        One RepeatResult per repeat, in seed order.
+    """One tier + one model through the full repeated CV, predicting
+    `correct` (D7's single-pass verdict), grouped on question_id.
+    Override n_splits/n_repeats only in tests.
     """
     if model_name not in MODEL_FACTORIES:
         raise ValueError(f"model_name must be one of {list(MODEL_FACTORIES)}, got {model_name!r}")
@@ -331,13 +228,7 @@ def run_predictor(
 def build_xyg(
     population: pd.DataFrame, tier_builder: Callable[[pd.DataFrame], pd.DataFrame]
 ) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """The (X, y, groups) triple every CV entry point needs - encoded
-    tier features, the `correct` target (D7's single-pass definition),
-    and `question_id` as the grouping column. Factored out of
-    run_predictor() so permutation_null() can be pointed at the exact
-    same X/y/groups the real result used, from the CLI, without
-    duplicating this three-line construction.
-    """
+    """(X, y, groups): encoded tier features, `correct` as 0/1, question_id."""
     X = encode_features(tier_builder(population))
     y = population["correct"].astype(int).to_numpy()
     groups = population["question_id"].to_numpy()
@@ -352,10 +243,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--permutation-null",
         action="store_true",
-        help="Also run the n=200 permutation null (invariant 12) and report the real result's "
-        "percentile against it. Off by default - it's ~20x the model fits of the real result "
-        "alone (200 permutations x 5 folds vs. 10 repeats x 5 folds), not something to pay for "
-        "on every invocation.",
+        help="Also run the n=200 permutation null (invariant 12) - about 20x the model fits of the real result.",
     )
     args = parser.parse_args()
 
@@ -375,6 +263,6 @@ if __name__ == "__main__":
         percentile = percentile_of_null(aurocs.mean(), null_aurocs)
         print(
             f"  Permutation null (n=200): mean={null_aurocs.mean():.4f}, "
-            f"std={null_aurocs.std():.4f} (invariant 12: should center near 0.5)"
+            f"std={null_aurocs.std():.4f} (invariant 12: near 0.5, a little above if features track question difficulty)"
         )
         print(f"  Observed AUROC ({aurocs.mean():.4f}) is at the {percentile:.1%} percentile of the null")

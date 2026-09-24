@@ -1,19 +1,8 @@
-"""Tests for src/parse.py. See TASKS.md task 1.5.
+"""Tests for src/parse.py.
 
-split_cot_and_verdict_tokens() tests moved here from test_judge.py on
-4 Sep 2026 when the function relocated to parse.py (DECISIONS.md D4's
-amendment).
-
-No real-malformed-output fixtures - deliberately skipped, 10 Sep 2026
-(see TASKS.md task 1.5's note). 220 real generations across the pilot,
-P2/P3 smoke test, and vacuum test produced zero malformed outputs:
-structured decoding schema-enforces no_verdict/no_confidence away, and
-guarantees valid JSON syntax by construction, so malformed_json is close
-to impossible while it's active. Only `truncated` is realistically
-triggerable, and only via a deliberate low-max_tokens stress test that
-was judged not worth the extra Colab time right now. The tests below use
-hand-constructed cases covering CLAUDE.md §3's full failure taxonomy
-instead.
+The failure-taxonomy cases are hand-built: structured decoding meant no
+malformed output ever occurred in the real runs, so there are no real
+fixtures to test against. Together they cover CLAUDE.md §3's full taxonomy.
 """
 
 import numpy as np

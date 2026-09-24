@@ -1,4 +1,4 @@
-"""Tests for src/ablation_decoding.py's locally-testable logic (task 4.5).
+"""Tests for src/ablation_decoding.py's locally-testable logic.
 Deliberately does not import vllm - same D17 pattern as test_judge.py.
 """
 

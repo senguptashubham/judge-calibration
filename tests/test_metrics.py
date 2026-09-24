@@ -1,6 +1,6 @@
 """Tests for src/metrics.py, including the hand-computed ECE reference case
 (CLAUDE.md sec 5: expected 0.222) and the discrete-signal ECE case
-(DECISIONS.md D14). See TASKS.md tasks 0.4, 0.6, 2.5, 3.1.
+(DECISIONS.md D14).
 """
 
 import numpy as np
@@ -118,7 +118,7 @@ def test_kappa_matches_sklearn():
         )
 
 
-# --- TASKS.md task 2.5 ------------------------------------------------------
+# --- mce, brier, brier_decomposition, overconfidence_gap, auroc_error -----
 #
 # overconfidence_gap/mce/brier/brier_decomposition reuse test_ece_reference's
 # dataset (200 items @ conf=0.9, 150 correct; 300 items @ conf=0.6, 99
@@ -247,7 +247,7 @@ def test_auroc_error_raises_when_only_one_class_present():
         auroc_error([0.1, 0.2, 0.3], [True, True, True])
 
 
-# --- TASKS.md task 3.1 -------------------------------------------------------
+# --- risk_coverage, oracle_risk_coverage, aurc -----------------------------
 #
 # risk_coverage()/oracle_risk_coverage()/aurc() reference case, hand-computed
 # during planning. n=5, with a tied pair at uncertainty=0.3 specifically to
@@ -376,7 +376,7 @@ def test_risk_coverage_uninformative_signal_stays_near_base_error_rate():
     np.testing.assert_allclose(risk_at_grid, base_error_rate, atol=0.05)
 
 
-# --- TASKS.md task 3.1b -----------------------------------------------------
+# --- threshold_sweep --------------------------------------------------------
 #
 # threshold_sweep() reference case, hand-computed during planning then
 # cross-checked against the function itself (ece()/cohens_kappa() are

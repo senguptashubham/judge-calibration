@@ -1,30 +1,14 @@
 """Task 4.5: does constraining generation to a JSON schema (vs free-form)
-change parse rate or the judge's actual verdict? See TASKS.md task 4.5,
-DECISIONS.md D25.
+change the parse rate or the judge's verdict? (D25)
 
-`python -m analysis.decoding_ablation --config configs/run.yaml`.
+`python -m analysis.decoding_ablation --config configs/run.yaml`
 
-Reads runs/{model_slug}/ablation_decoding.jsonl directly
-(src/ablation_decoding.py, Colab) - NOT calls.parquet/items.parquet,
-since this is a standalone diagnostic outside the main D19 call schedule,
-not part of the RQ1-RQ4 item table. Parses each row's raw_output via
-parse.py::parse_verdict_and_confidence() (CLAUDE.md invariant 7 - the
-same strict JSON parser every real call is scored with, unmodified), so
-a free-form row's "does this still count as parse_ok" question is
-answered by the actual production parser, not a purpose-built lenient
-one - that's the whole point of the ablation.
-
-Reports two things:
-  - parse rate per decoding_mode (parse_ok fraction, plus a breakdown of
-    parse_failure_type among the failures).
-  - verdict agreement: among items where BOTH modes parsed successfully,
-    the fraction whose verdict is IDENTICAL.
-
-No inferential statistics (no bootstrap CI) - N=100 items is a scoping/
-limitations check per its own DoD ("a limitations paragraph... saying
-whether constraining moved the verdicts"), not one of the five core RQs,
-so a plain proportion is reported as-is rather than manufacturing a CI
-this task's own DoD doesn't ask for.
+Reads {runs_dir}/ablation_decoding.jsonl (src/ablation_decoding.py) and
+scores every row with the production parser, parse.py::
+parse_verdict_and_confidence(), unmodified. Reports the parse rate per
+decoding mode and, among items where both modes parsed, the fraction with
+identical verdicts. Plain proportions, no CI: a 100-item limitations
+check, not a core RQ.
 
 Writes results/ablation_decoding_{model_slug}.csv (parse-rate table).
 """
@@ -39,11 +23,8 @@ from src.parse import parse_verdict_and_confidence
 
 
 def load_ablation_calls(checkpoint_path: str) -> pd.DataFrame:
-    """runs/{model_slug}/ablation_decoding.jsonl -> one row per (item,
-    decoding_mode) call, with parse_verdict_and_confidence() merged in.
-    Mirrors src/parse.py::build_calls_dataframe()'s own shape (raw row +
-    parsed fields), scoped to this ablation's own checkpoint instead of
-    the main schedule's.
+    """ablation_decoding.jsonl -> one row per (item, decoding_mode), with
+    parse_verdict_and_confidence() merged in.
     """
     records = []
     with open(checkpoint_path, "r", encoding="utf-8") as f:
@@ -71,10 +52,7 @@ def compute_parse_rates(calls: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_verdict_agreement(calls: pd.DataFrame) -> dict:
-    """Among items where BOTH decoding_mode arms parsed successfully, the
-    fraction whose verdict is identical - the ablation's actual headline
-    question (does constraining move the verdict, not just conf_lp, D25).
-    """
+    """Among items where both arms parsed, the fraction with identical verdicts."""
     wide = calls.pivot(index="item_id", columns="decoding_mode", values="verdict")
     both_parsed = wide.dropna(subset=["constrained", "free_form"])
     n_disagree = int((both_parsed["constrained"] != both_parsed["free_form"]).sum()) if len(both_parsed) else 0
@@ -104,7 +82,7 @@ def main(config_path: str) -> None:
         f"{agreement['agreement_rate']:.4f} ({agreement['n_disagree']} disagreements)"
     )
 
-    table_path = f"results/ablation_decoding_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/ablation_decoding_{config.model_slug}.csv"
     parse_rates.to_csv(table_path, index=False)
     print(f"Wrote {table_path}")
 

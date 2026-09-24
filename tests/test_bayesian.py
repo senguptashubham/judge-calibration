@@ -1,8 +1,8 @@
 """Tests for src/bayesian.py: a held-out question's random intercept must be
 marginalized over the population prior, never its would-be fitted value
 (DECISIONS.md D22) - the hierarchical-model analogue of test_predictor.py's
-no-leakage assertion. Also convergence-diagnostics presence (R-hat, ESS,
-divergence count) for every fold-fit. See TASKS.md task 5.9b.
+no-leakage assertion. Also convergence diagnostics (R-hat, ESS, divergence
+count) for every fold-fit, and invariance to feature scale.
 """
 
 import numpy as np
@@ -148,8 +148,6 @@ def test_convergence_diagnostics_flags_a_badly_mixed_fit():
 
 
 def test_convergence_diagnostics_flags_nan_rhat_even_with_no_divergences(monkeypatch):
-    # A narrow edge case found during 5.9b's own review (21 Sep 2026),
-    # not something a real tiny fit reliably reproduces on demand:
     # pandas' .max() already tolerates ONE parameter's NaN R-hat
     # gracefully (skipna=True), so this constructs an ALL-NaN r_hat
     # summary directly - the case where max_rhat itself ends up NaN -
@@ -356,6 +354,18 @@ def test_cv_wrapper_uses_a_fresh_seed_per_repeat_so_repeats_differ():
     )
     assert [r.seed for r in results] == [0, 1]
     assert not np.array_equal(results[0].oof_pred, results[1].oof_pred)
+
+
+def test_cv_wrapper_is_invariant_to_feature_scale():
+    # beta ~ Normal(0, 1) is only a comparable prior across features once
+    # they share a scale. Features are standardized per fold, so multiplying
+    # one by 1000 must leave every prediction unchanged.
+    X, y, question_ids = _tiny_cv_data()
+    rescaled = X.assign(f1=X["f1"] * 1000.0)
+    kwargs = dict(n_splits=2, n_repeats=1, seed=0, num_warmup=10, num_samples=10, num_chains=2)
+    base = repeated_stratified_group_kfold_bayesian(X, y, question_ids, **kwargs)[0]
+    scaled = repeated_stratified_group_kfold_bayesian(rescaled, y, question_ids, **kwargs)[0]
+    np.testing.assert_allclose(base.oof_pred, scaled.oof_pred, atol=1e-3)
 
 
 # --- posterior_predictive_entropy_decomposition -------------------------

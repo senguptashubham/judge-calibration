@@ -1,131 +1,32 @@
-"""RQ5, task 3.2b: does the epistemic component of the judge-level entropy
-decomposition beat total entropy as a threshold-sweep filter? See
-TASKS.md task 3.2b (D20, D23). Also tasks 5.9d (distillation comparison)
-and 5.9e (human-disagreement validation) - the Week 5 growth this
-module's own original docstring promised.
+"""RQ5: does marginalizing over the judge prompt improve uncertainty
+quality, and does that survive distillation to a single call? (D20, D23)
 
 `python -m analysis.rq5 --config configs/run.yaml --task {threshold_sweep,distillation,human_disagreement}`
 
---- Task 5.9d (distillation comparison, D23) --------------------------
+threshold_sweep (task 3.2b) - RQ1's population. threshold_sweep() over
+each of ens_entropy_{total,aleatoric,epistemic} (already uncertainty-typed,
+no 1 - x flip), with ECE on the retained set always scored against
+conf_ens so the three curves answer one comparable question. Tests the
+preregistered prediction that epistemic thresholding beats total (a
+paired cluster-bootstrap on the AURC gap - one item set, two signals).
+Writes results/rq5_threshold_sweep_table_{model_slug}.csv and
+results/figures/entropy_threshold_sweep_{model_slug}.png.
 
-Population: features.py::load_rq4_population() (N=1819), NOT this
-module's own wider load_rq5_items() (N=1836) - confirmed empirically
-(21 Sep 2026) that RQ4's population is a STRICT SUBSET of RQ5's,
-differing by exactly the 17 len_ratio-undefined items features.py
-already documents dropping. Using the smaller, common population keeps
-the ensemble-vs-single-call comparison apples-to-apples: the ensemble's
-own conf_ens/ens_entropy_* signals are defined on the wider 1836, but
-scoring them against a Bayesian model trained/evaluated on only 1819 of
-those items would conflate "which items" with "which method is better."
+distillation (task 5.9d) - RQ4's population (N=1,819, a strict subset of
+RQ5's 1,836), so both arms are scored on the same items. Teacher: the
+3-call ensemble's conf_ens and ens_entropy_epistemic. Student: the 1-call
+Bayesian meta-model (analysis/rq4.py::compute_bayesian_arm, Tier A) and
+its own posterior epistemic entropy. AUROC gaps get paired
+cluster-bootstrap CIs; ECE is reported side by side. "% of the edge
+retained" measures AUROC above chance (0.5). Writes
+results/rq5_distillation_{model_slug}.csv and a figure.
 
-Teacher = the 3-call ensemble's conf_ens / ens_entropy_epistemic (D20).
-Student = the 1-call Bayesian model (5.9b/5.9c, Tier A, P1-only
-features) - reuses analysis/rq4.py::compute_bayesian_arm() directly
-rather than re-deriving the CV wiring a third time. Real cost: ~7
-minutes (TASKS.md 5.9b/5.9c's own measured runtime) - no caching layer
-exists anywhere in this project's analysis/ scripts, so this pays that
-cost fresh again.
-
-AUROC/ECE for conf_ens: genuinely NEW computation - analysis/rq1.py's
-own SIGNALS list deliberately excludes conf_ens (it's D20's own signal,
-outside RQ1/RQ2's scope), so it has never had its own AUROC/ECE
-computed anywhere else in this project before this task.
-
-Entropy quality: AUROC(ens_entropy_epistemic -> error) - already
-uncertainty-typed, no 1-x flip, same convention this module's own
-threshold-sweep task already established - vs AUROC(Bayesian's OWN
-meta-model-level epistemic -> error), via bayesian.py::
-posterior_predictive_entropy_decomposition() on compute_bayesian_arm()'s
-pooled_draws. Entropy is symmetric in p vs 1-p, so it makes no
-difference that pooled_draws is P(correct) rather than P(wrong) - the
-resulting total/aleatoric/epistemic come out identical either way.
-
-Every gap (AUROC, entropy-quality AUROC) gets a PAIRED cluster-bootstrap
-CI - same items, two different scores, invariant 3's paired-comparison
-logic, the SAME rename-to-a-shared-column trick this module's own
-compute_epistemic_vs_total_gap() already uses for exactly this shape of
-problem. ECE gets no such gap/CI - reported as two numbers side by side,
-since there's no natural "which one is better by how much" statistic to
-bootstrap the way there is for AUROC's rank-based difference.
-
-"% of the ensemble's AUROC edge over chance retained at 1 call" uses 0.5
-as the normalizing zero-point - a principled choice specific to AUROC
-(chance = 0.5 is what "no information" means for a ranking statistic).
-No equivalent framing is forced onto ECE or the entropy-quality AUROC -
-those are reported as plain numbers/gaps, not squeezed into the same
-percentage framing where it wouldn't have a natural interpretation.
-
-Writes results/rq5_distillation_{model_slug}.csv (D26).
-
-Reads results/items.parquet via load_rq1_items() (clean, P1, human_label
-not null) - conf_ens/ens_entropy_* are populated exactly on that slice
-(Gate 2: 1904/1904 clean/P1 rows), so this is the same filter RQ1/RQ2 use,
-not a coincidence.
-
-For each of ens_entropy_total, ens_entropy_aleatoric, ens_entropy_epistemic,
-runs threshold_sweep() (task 3.1b) - these are already uncertainty-typed
-(higher entropy = more uncertain), so unlike the confidence signals in
-rq2.py, no `1 - x` sign flip is needed. ECE-on-the-retained-set is computed
-against conf_ens (1 - ens_entropy_total) throughout, for all three sweeps -
-using the same confidence column across all three keeps the three curves
-answering a comparable question ("how calibrated is the ensemble's own
-confidence on what THIS filter keeps"), rather than three different,
-unrelated calibration stories.
-
-Writes results/rq5_threshold_sweep_table_{model_slug}.csv (long format, one
-row per (entropy_signal, threshold)) and
-results/figures/entropy_threshold_sweep_{model_slug}.png (src/plots.py's
-plot_risk_coverage, reused as-is - task 3.2b's DoD figure). model_slug =
-Config.model_slug, so a second judge model never overwrites the first's
-output.
-
-Prints the preregistered-prediction verdict (D23): epistemic thresholding
-should beat total thresholding on AURC, since epistemic is the reducible
-part of the uncertainty and total conflates it with aleatoric noise a
-threshold can never remove. Tested via a paired cluster-bootstrap on
-AURC(epistemic) - AURC(total) over the SAME items (not two independent
-samples - invariant 3's paired-comparison logic applies to two signals on
-one item set exactly like it applies to two conditions), using the same
-rename-to-a-shared-column trick analysis/rq1.py's compute_verdict_gap uses
-for its own single-item-set paired comparison.
-
---- Task 5.9e (human-disagreement validation, D23) ---------------------
-
-Population: analysis/human_disagreement.py::load_disagreement_items()
-(N=595, D9's own population - clean/P1, n_human_votes >= 2) - REUSED
-directly, not re-derived: the same population tasks 3.3/3.4/H4 already
-use for d_human-based analysis, and it already handles d_human's own
-float-tie rounding gotcha (see that function's own docstring - raw
-|frac_prefer_a - 0.5| produces float64 values ~1e-17 apart for the "same"
-true fraction, silently corrupting rank-based ties otherwise).
-
-Correlation: reuses analysis/human_disagreement.py::
-compute_d_human_correlation() directly (task 3.4's own Spearman +
-cluster-bootstrap recipe, question_id-grouped) - NOT re-derived - over
-["ens_entropy_aleatoric", "ens_entropy_epistemic"].
-
-WARNING, resolved 21 Sep 2026: TASKS.md's own task 5.9e text has an
-internal contradiction. It reads "aleatoric high specifically where
-humans actually disagreed (high d_human)" - but src/data.py defines
-d_human = |frac_prefer_a - 0.5|, so HIGH d_human means STRONG CONSENSUS
-(votes clustered near 0% or 100%), not disagreement; LOW d_human is the
-50/50-split disagreement zone. CLAUDE.md's own schema calls d_human
-"consensus strength," and D23/H4's closeout both describe that same
-direction independently - three sources agree against the one that
-doesn't, and TASKS.md's parenthetical is a typo, confirmed with the
-owner. Tested here as originally intended: aleatoric should correlate
-NEGATIVELY with d_human (high aleatoric where consensus is weak, i.e.
-low d_human, the genuine disagreement zone), and epistemic should show a
-much weaker (or no) such relationship - NOT the literal-but-backwards
-reading TASKS.md's own parenthetical would otherwise imply.
-
-Writes results/rq5_human_disagreement_{model_slug}.csv (D26) +
-results/figures/d_human_correlations_ensemble_entropy_{model_slug}.png
-(src/plots.py's plot_d_human_correlations, reused via its own
-filename_suffix/title params - added specifically so this call doesn't
-silently overwrite task 3.4's own existing
-d_human_correlations_{model_slug}.png, which plots a DIFFERENT signal
-set on the same base filename).
+human_disagreement (task 5.9e) - human_disagreement.py's N=595
+population. Spearman of the ensemble's aleatoric and epistemic entropy
+against d_human. d_human = |frac_prefer_a - 0.5| is CONSENSUS strength, so
+"aleatoric tracks human disagreement" means a NEGATIVE correlation
+(TASKS.md's original wording had the direction backwards). Writes
+results/rq5_human_disagreement_{model_slug}.csv and a figure.
 """
 
 import argparse
@@ -148,23 +49,16 @@ ENTROPY_SIGNALS = ["ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_ep
 
 
 def load_rq5_items(items_parquet: str) -> pd.DataFrame:
-    """load_rq1_items() plus a defensive dropna on the entropy columns.
-
-    Expected to be a no-op on real data (Gate 2 confirmed conf_ens/entropy
-    populated for all 1904 clean/P1 rows) - kept explicit rather than
-    silently trusting that invariant holds forever, the same spirit as
-    load_rq1_items()'s own human_label.notna() filter.
+    """load_rq1_items() plus a defensive dropna on the entropy columns
+    (a no-op on the real data, where they are populated for every row).
     """
     items = load_rq1_items(items_parquet)
     return items[items[ENTROPY_SIGNALS].notna().all(axis=1)]
 
 
 def compute_entropy_sweep(items: pd.DataFrame, signal: str, n_bins: int) -> pd.DataFrame:
-    """threshold_sweep() for one entropy signal, as a tidy DataFrame with
-    the signal name attached - point estimates only (no bootstrap CI; see
-    module docstring for why the one number this task actually needs to
-    defend statistically, the epistemic-vs-total AURC gap, gets its own
-    paired bootstrap in main() instead of bootstrapping all of this table).
+    """threshold_sweep() for one entropy signal as a tidy table (point
+    estimates; the AURC gap gets its own CI in compute_epistemic_vs_total_gap).
     """
     result = threshold_sweep(
         signal=items[signal].to_numpy(dtype=float),
@@ -180,16 +74,9 @@ def compute_entropy_sweep(items: pd.DataFrame, signal: str, n_bins: int) -> pd.D
 
 
 def compute_epistemic_vs_total_gap(items: pd.DataFrame, seed: int) -> dict:
-    """Paired cluster-bootstrap CI on AURC(epistemic) - AURC(total), the
-    preregistered prediction's actual statistical test (D23): epistemic
-    thresholding beats total thresholding means this difference is
-    negative, and the CI excluding 0 is what makes that a defensible claim
-    rather than an eyeballed gap between two point estimates.
-
-    Same rows scored by two different signal columns is a paired
-    comparison, not two independent samples (invariant 3's logic) - reuses
-    the rename-to-"score" trick analysis/rq1.py's compute_verdict_gap uses
-    for exactly this same shape of problem (one item set, two columns).
+    """Paired cluster-bootstrap CI on AURC(epistemic) - AURC(total). The
+    D23 prediction holds if this is negative with a CI below 0. Same items,
+    two columns, so each is renamed to "score" for one shared stat_fn.
     """
     def _aurc(df: pd.DataFrame) -> float:
         uncertainty = df["score"].to_numpy(dtype=float)
@@ -230,7 +117,7 @@ def main_threshold_sweep(config_path: str) -> None:
     )
 
     full_table = pd.concat(tables, ignore_index=True)
-    table_path = f"results/rq5_threshold_sweep_table_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq5_threshold_sweep_table_{config.model_slug}.csv"
     full_table.to_csv(table_path, index=False)
     print(f"Wrote {len(full_table)} rows to {table_path}")
 
@@ -248,16 +135,12 @@ def main_threshold_sweep(config_path: str) -> None:
     )
 
 
-# --- Task 5.9d (distillation comparison, D23) ---------------------------
-#
-# See this module's own docstring for the full population/metric
-# rationale.
+# --- Task 5.9d: distillation ----------------------------------------------
 
 
 def compute_ensemble_metrics(items: pd.DataFrame, n_bins: int, seed: int) -> dict:
-    """conf_ens's own AUROC(uncertainty -> error) and ECE - genuinely new
-    computation, see this module's own docstring for why it's never been
-    computed anywhere else in this project.
+    """conf_ens's AUROC(uncertainty -> error), with a cluster-bootstrap CI,
+    and its ECE as P(wrong).
     """
     def _auroc(df: pd.DataFrame) -> float:
         uncertainty = 1 - df["conf_ens"].to_numpy(dtype=float)
@@ -275,18 +158,9 @@ def compute_ensemble_metrics(items: pd.DataFrame, n_bins: int, seed: int) -> dic
 def build_distillation_comparison_df(
     population: pd.DataFrame, bayesian_mean_oof_correct: np.ndarray, bayesian_epistemic: np.ndarray
 ) -> pd.DataFrame:
-    """One row per item, both arms' relevant columns side by side - what
-    every paired-gap bootstrap below needs, built once so the ensemble
-    and Bayesian arms are never accidentally scored on rows in different
-    orders.
-
-    Args:
-        population: load_rq4_population()'s output.
-        bayesian_mean_oof_correct: compute_bayesian_arm()'s own
-            mean_oof_correct, positionally aligned to population.
-        bayesian_epistemic: posterior_predictive_entropy_decomposition()'s
-            "epistemic" array on compute_bayesian_arm()'s pooled_draws,
-            same alignment.
+    """One row per item with both arms' uncertainty and epistemic columns,
+    positionally aligned to `population`, so every paired gap scores the
+    same rows.
     """
     return pd.DataFrame(
         {
@@ -305,12 +179,7 @@ def _auroc_from_column(df: pd.DataFrame, column: str) -> float:
 
 
 def compute_auroc_gap(comparison_df: pd.DataFrame, ensemble_col: str, bayesian_col: str, seed: int) -> dict:
-    """Paired cluster-bootstrap CI on AUROC(ensemble_col) -
-    AUROC(bayesian_col) - same items, two different signals (invariant
-    3's paired-comparison logic), the same rename-to-a-shared-column
-    trick this module's own compute_epistemic_vs_total_gap() already
-    uses for exactly this shape of problem.
-    """
+    """Paired cluster-bootstrap CI on AUROC(ensemble_col) - AUROC(bayesian_col)."""
     df_ensemble = comparison_df.rename(columns={ensemble_col: "score"})
     df_bayesian = comparison_df.rename(columns={bayesian_col: "score"})
 
@@ -375,7 +244,7 @@ def main_distillation(config_path: str) -> None:
             },
         ]
     )
-    table_path = f"results/rq5_distillation_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq5_distillation_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(table.to_string(index=False))
     print(f"Wrote {len(table)} rows to {table_path}")
@@ -395,6 +264,17 @@ def main_distillation(config_path: str) -> None:
         f"3-call ensemble's AUROC edge over chance (0.5)."
     )
 
+    gaps = pd.DataFrame.from_records(
+        [
+            {"comparison": "auroc_ensemble_minus_bayesian", **auroc_gap},
+            {"comparison": "epistemic_auroc_ensemble_minus_bayesian", **epistemic_auroc_gap},
+            {"comparison": "pct_auroc_edge_retained", "gap": pct_auroc_retained, "ci_low": np.nan, "ci_high": np.nan},
+        ]
+    )
+    gaps_path = f"{config.paths.results_dir}/rq5_distillation_gaps_{config.model_slug}.csv"
+    gaps.to_csv(gaps_path, index=False)
+    print(f"Wrote {len(gaps)} rows to {gaps_path}")
+
     plot_rq5_distillation(
         auroc_ensemble=ensemble["auroc"],
         auroc_ensemble_ci=(ensemble["auroc_ci_low"], ensemble["auroc_ci_high"]),
@@ -407,12 +287,7 @@ def main_distillation(config_path: str) -> None:
     )
 
 
-# --- Task 5.9e (human-disagreement validation, D23) ----------------------
-#
-# See this module's own docstring for the full population/direction
-# rationale, INCLUDING the TASKS.md wording contradiction found and
-# resolved (21 Sep 2026) - read that before touching the sign of
-# anything here.
+# --- Task 5.9e: human-disagreement validation -------------------------------
 
 DISAGREEMENT_VALIDATION_SIGNALS = ["ens_entropy_aleatoric", "ens_entropy_epistemic"]
 
@@ -433,7 +308,7 @@ def main_human_disagreement(config_path: str) -> None:
         )
 
     table = pd.DataFrame.from_records(rows)[["signal", "spearman", "spearman_ci_low", "spearman_ci_high"]]
-    table_path = f"results/rq5_human_disagreement_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq5_human_disagreement_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
@@ -449,10 +324,8 @@ def main_human_disagreement(config_path: str) -> None:
 
     aleatoric_row = table[table["signal"] == "ens_entropy_aleatoric"].iloc[0]
     epistemic_row = table[table["signal"] == "ens_entropy_epistemic"].iloc[0]
-    # Aleatoric "tracks disagreement" means its correlation with d_human
-    # (consensus strength) is NEGATIVE and the CI excludes 0 - see this
-    # module's own docstring for why negative, not positive, is the
-    # correct direction to check.
+    # "Tracks disagreement" = negative correlation with d_human (consensus
+    # strength) whose CI excludes 0.
     aleatoric_tracks_disagreement = aleatoric_row["spearman_ci_high"] < 0
     epistemic_also_tracks = epistemic_row["spearman_ci_high"] < 0
 

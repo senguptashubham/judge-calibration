@@ -1,26 +1,14 @@
-"""Task 4.5's decoding ablation: constrained (JSON-schema guided
-decoding) vs. free-form generation on the SAME N items, same single call
-(clean/P1/AB/greedy) - does constraining the output format actually
-change the judge's verdict, or just its absolute logprobs (D25)?
-
-Only runs on Colab (D17) - `vllm` is imported lazily, inside the one
-function that needs it, same pattern as `src/judge.py`. Deliberately its
-own module, not folded into judge.py's own schedule/CLI: this is a
-one-off diagnostic (2N generations, not part of the resumable 12-calls/
-item D19 schedule), reusing judge.py's already-tested
-`CallSpec`/`_build_prompts`/`VERDICT_SCHEMA`/`load_full_items_df` rather
-than re-deriving any of them.
+"""Task 4.5's decoding ablation: constrained (JSON-schema guided decoding)
+vs free-form generation on the same N items and the same single call
+(clean/P1/AB/greedy). Does constraining the format change the verdict, or
+only the absolute logprobs (D25)? Colab only (D17).
 
 `python -m src.ablation_decoding --config configs/run.yaml --n-items 100`
 
-Writes `runs/{model_slug}/ablation_decoding.jsonl` - one row per (item,
-decoding_mode), `decoding_mode` in {constrained, free_form}. Each row
-carries `raw_output` plus the same provenance fields judge.py's own
-checkpoint rows carry, so `src/parse.py::parse_verdict_and_confidence()`
-can be reused UNMODIFIED to score both arms (CLAUDE.md invariant 7 -
-parsing logic lives only in parse.py). Using the exact same strict
-parser for both arms is the point: whether free-form generation's raw
-text still satisfies it is what "parse rate" is measuring here.
+Writes {runs_dir}/ablation_decoding.jsonl, one row per (item,
+decoding_mode). Both arms are later scored by the unmodified strict parser
+in parse.py - whether free-form text still satisfies it is exactly what
+the parse rate measures.
 """
 
 import argparse
@@ -38,21 +26,16 @@ DECODING_MODES = ("constrained", "free_form")
 
 
 def sample_ablation_items(config: Config, n_items: int) -> pd.DataFrame:
-    """Seeded random sample of `n_items` non-tie items - same seeding
-    convention as judge.py's own `--n-items` (task 1.6's pilot): a random
-    sample, not a head(), so the ablation isn't accidentally clustered on
-    a handful of question_ids.
+    """Seeded random sample of non-tie items - random rather than head(),
+    so the sample isn't clustered on a few question_ids.
     """
     items_df = load_full_items_df(config)
     return items_df.sample(n=n_items, random_state=config.seed)
 
 
 def load_completed_ablation_keys(checkpoint_path: Path) -> set[str]:
-    """(item_id, decoding_mode) pairs already written - this ablation's
-    own tiny resumability key, distinct from judge.py's checkpoint_key()
-    since decoding_mode isn't one of that key's five fields (condition/
-    prompt_variant/order/sample_idx are all fixed here - only
-    decoding_mode varies).
+    """(item_id, decoding_mode) pairs already written. Its own key: only
+    decoding_mode varies here, and it isn't one of judge.py's key fields.
     """
     completed: set[str] = set()
     if not checkpoint_path.exists():
@@ -68,9 +51,8 @@ def load_completed_ablation_keys(checkpoint_path: Path) -> set[str]:
 
 
 def run_ablation(config: Config, n_items: int, checkpoint_path: Path, batch_size: int = 64) -> None:
-    """Generates both decoding arms for `n_items` items and appends every
-    row to `checkpoint_path` as it completes (resumable - a Colab
-    disconnect mid-run just needs the same command re-run).
+    """Generates both decoding arms and appends each row as it completes
+    (resumable: re-run the same command after a disconnect).
     """
     from vllm import LLM, SamplingParams
     from vllm.sampling_params import StructuredOutputsParams

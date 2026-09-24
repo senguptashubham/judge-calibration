@@ -1,5 +1,5 @@
 """Tests for src/data.py: build_items()'s tie-policy logic (D1) and
-human_human_kappa()'s pairing logic. See TASKS.md tasks 0.8, 0.9.
+human_human_kappa()'s pairing logic.
 """
 
 import numpy as np

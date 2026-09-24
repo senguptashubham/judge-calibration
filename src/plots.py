@@ -1,5 +1,5 @@
-"""Matplotlib figure-producing functions, one per plot, always saved to
-results/figures/ with a deterministic name (CLAUDE.md sec 5).
+"""Matplotlib figures, one per function, each saved to results/figures/ under
+a deterministic, model_slug-suffixed name (CLAUDE.md §5, D26).
 """
 
 from pathlib import Path
@@ -16,36 +16,15 @@ FIGURES_DIR = Path("results/figures")
 
 
 def plot_ece_auroc_orthogonal() -> Figure:
-    """LEARNING.md block C4: two hand-built 6-point (confidence, correct)
-    examples proving ECE and AUROC measure genuinely different properties -
-    a signal can ace one while failing the other completely.
+    """LEARNING.md C4: two hand-built 6-item examples showing ECE and AUROC
+    measure different things (invariant 6).
 
-    Example A: ECE ~= 0.3, AUROC = 1.0. Badly miscalibrated confidence
-    numbers can still coexist with perfect discrimination - the signal
-    ranks every correct item above every incorrect one, it just reports the
-    wrong absolute numbers while doing it. Calibration and ranking ability
-    are independent properties; this is why CLAUDE.md invariant 6 requires
-    ECE to always ship alongside accuracy/AUROC, never alone.
+    A: correct items at confidence 0.9, wrong at 0.5 - perfect ranking
+       (AUROC 1.0) with miscalibrated numbers (ECE ~0.3).
+    B: every item at 0.5 on a 50% base rate - perfectly calibrated (ECE 0)
+       and useless for ranking (AUROC 0.5): "a judge that always says 50%".
 
-    Example B: ECE = 0, AUROC = 0.5. A signal that reports the IDENTICAL
-    confidence for every single item is perfectly calibrated in aggregate
-    (its one bin's mean confidence trivially equals its own accuracy) while
-    being completely uninformative at telling any individual item apart
-    from another. This is CLAUDE.md invariant 6's own example made
-    concrete: "a judge that always says 50% has perfect ECE and zero
-    usefulness."
-
-    Example A: correct items all at confidence 0.9, incorrect items all at
-    0.5 - clean separation (AUROC=1.0) with a big enough confidence gap
-    (0.4 vs the forced-choice floor) to land ECE at 0.3. Example B: every
-    item at the forced-choice floor (0.5) regardless of correctness - no
-    ranking information at all (AUROC=0.5), but the single confidence
-    value happens to equal the dataset's own base rate exactly (ECE=0).
-    The asserts below catch any future edit that breaks either example -
-    don't silence them, fix the construction instead.
-
-    Returns:
-        The Figure (also saved to results/figures/ece_auroc_orthogonal.png).
+    The asserts guard the construction; fix the example, never silence them.
     """
     confidences_a = np.array([0.5, 0.5, 0.9, 0.5, 0.9, 0.9])
     correct_a = np.array([0, 0, 1, 0, 1, 1])
@@ -88,13 +67,8 @@ def plot_ece_auroc_orthogonal() -> Figure:
 def _binned_means(
     x: np.ndarray, y: np.ndarray, n_bins: int, strategy: str
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-bin (mean x, mean y, weight), binning on x - the same binning
-    ece() uses internally (reuses get_bin_edges() so a diagram and its
-    scalar metric are always computed on identical bins). Generic in x/y:
-    a reliability diagram bins on confidence and averages correct; the
-    human-disagreement figure bins on d_human and averages correct (or
-    confidence) - same computation either way, just which column plays
-    which role changes.
+    """Per-bin (mean x, mean y, weight), binning on x with get_bin_edges() -
+    the same bins ece() uses, so a figure and its metric always agree.
     """
     edges = get_bin_edges(x, n_bins, strategy)
     bin_labels = np.digitize(x, edges)
@@ -112,30 +86,15 @@ def _binned_means(
 def _reliability_points(
     confidences: np.ndarray, correct: np.ndarray, n_bins: int, strategy: str
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-bin (mean confidence, accuracy, weight) for a reliability
-    diagram. Thin wrapper over _binned_means() - kept as its own name at
-    reliability-diagram call sites since "confidence"/"accuracy" reads
-    better there than the generic x/y.
-    """
+    """Per-bin (mean confidence, accuracy, weight) for a reliability diagram."""
     return _binned_means(confidences, correct, n_bins, strategy)
 
 
 def _marker_sizes(weights: np.ndarray) -> np.ndarray:
-    """Bin weight (share of the data, in [0, 1]) -> scatter `s` (marker
-    area in points^2), bounded to [40, 350] rather than a raw
-    `weight * constant` scale.
-
-    An unbounded scale breaks in two ways once a real (non-uniform) weight
-    distribution shows up: a bin holding most of the data gets a marker
-    whose radius, in screen points, is large enough to visually extend
-    past the axes and get clipped at the boundary (matplotlib draws
-    marker size in screen space, not data space, so this isn't self-
-    correcting); and matplotlib's default legend handle reuses the
-    scatter's own size, so the legend key becomes enormous too. Bounding
-    the range keeps every marker readable and clipping-free regardless of
-    how concentrated the weight distribution is - the legend uses its own
-    fixed-size proxy handles instead (see plot_reliability_diagram), so
-    this bound doesn't need to account for the legend at all anymore.
+    """Bin weight in [0, 1] -> marker area bounded to [40, 350] points².
+    Unbounded, a bin holding most of the data gets a marker that spills
+    past the axes (marker size is in screen space); legends use fixed-size
+    proxy handles instead.
     """
     return 40 + weights * 310
 
@@ -149,42 +108,14 @@ def plot_reliability_diagram(
     strategy: str = "auto",
     correct_bidir: np.ndarray | None = None,
 ) -> Figure:
-    """RQ1 (task 2.6): mean confidence vs. accuracy, per quantile bin, for
-    one confidence signal - the standard reliability diagram. Points on
-    the y=x diagonal are perfectly calibrated; points below it are
-    overconfident (CLAUDE.md invariant 6's signed gap, visualized).
+    """Mean confidence vs accuracy per bin, for one signal. Points below the
+    diagonal are overconfident. Marker size is the bin's share of the data.
 
-    If `correct_bidir` is given, both verdict definitions (D7) are plotted
-    as two overlaid curves on the SAME figure rather than two separate
-    files - `confidences` doesn't change between them (conf_verb/conf_lp/
-    conf_sc/conf_bpe don't depend on which verdict definition scores
-    them), only which correctness label each bin's accuracy is computed
-    against - so this is the natural way to make "what does debiasing-by-
-    averaging buy you" (task 2.6's framing) visible as an actual picture,
-    not just two rows in a table, while still producing exactly the 4
-    files (one per signal) the task's DoD asks for.
+    With `correct_bidir`, the verdict_bidir definition (D7) is overlaid as a
+    second curve - the confidences don't change, only what each bin is
+    scored against.
 
-    Marker size is proportional to each bin's share of the data (its
-    weight in ece()'s own weighted average) - a bin with few items sits
-    on the diagonal-vs-not question just as validly, but visually it
-    should read as less evidence than a bin holding most of the data.
-
-    Args:
-        confidences: stated confidence per item, in [0, 1].
-        correct: whether the judge was actually right, per item (aligned
-            with `confidences` - typically the `judge_verdict` definition).
-        signal_name: e.g. "conf_verb" - used in the title and the saved
-            filename (results/figures/reliability_{signal_name}_{model_slug}.png).
-        n_bins: requested number of bins - see get_bin_edges.
-        model_slug: Config.model_slug - namespaces the saved filename so a
-            second judge model never overwrites the first's figure.
-        strategy: one of "uniform", "quantile", "auto" (default).
-        correct_bidir: optional second correctness array (the
-            `verdict_bidir` definition) to overlay as a second curve.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/reliability_{signal_name}_{model_slug}.png).
+    Saved to results/figures/reliability_{signal_name}_{model_slug}.png.
     """
     confidences_arr = np.asarray(confidences, dtype=float)
     correct_arr = np.asarray(correct, dtype=float)
@@ -192,10 +123,6 @@ def plot_reliability_diagram(
     fig, ax = plt.subplots(figsize=(5, 5))
     ax.plot([0, 1], [0, 1], linestyle="--", color="gray")
 
-    # Fixed-size proxy handles for the legend, built separately from the
-    # actual (variable, weight-scaled) scatter markers - see
-    # _marker_sizes()'s docstring for why reusing the real markers there
-    # breaks.
     legend_handles = [Line2D([0], [0], linestyle="--", color="gray", label="perfect calibration")]
 
     conf_pts, acc_pts, weights = _reliability_points(confidences_arr, correct_arr, n_bins, strategy)
@@ -232,11 +159,7 @@ def plot_reliability_diagram(
             Line2D([0], [0], marker="o", linestyle="", color="tab:orange", markersize=10, label="verdict_bidir")
         )
 
-    # A small margin beyond the data's true [0, 1] range - without it, a
-    # bin whose mean confidence sits right at the edge (common; confidence
-    # piles up near 1.0) gets its marker clipped by the axes border, since
-    # marker size is drawn in screen points, not data units, and a point
-    # exactly at the boundary has no room to render outward.
+    # A margin beyond [0, 1] so markers at the edge (common near 1.0) aren't clipped.
     ax.set_xlim(-0.05, 1.05)
     ax.set_ylim(-0.05, 1.05)
     ax.set_xlabel("mean confidence in bin")
@@ -256,45 +179,20 @@ def plot_risk_coverage(
     filename: str = "risk_coverage.png",
     title: str = "Risk-coverage: RQ2",
 ) -> Figure:
-    """RQ2's thesis figure (task 3.2): every confidence signal's risk-
-    coverage curve, overlaid with the oracle upper bound, on one axis.
-
-    A flat curve is a finding (the signal isn't informative - abstaining
-    doesn't lower risk), and the oracle overlay is what makes that legible:
-    without it, there's no visual reference for how much headroom a flat
-    or shallow curve is actually leaving on the table.
-
-    Also reused as-is for task 3.2b's entropy_threshold_sweep.png (RQ5) -
-    the curve shape (coverage, risk) and the oracle-overlay framing are
-    identical there, just with the three ens_entropy_* signals in place of
-    the four original confidence signals, hence the `filename`/`title`
-    overrides rather than a second, near-duplicate plotting function.
+    """Every signal's risk-coverage curve plus the oracle, on one axis -
+    RQ2's thesis figure, and RQ5's entropy threshold sweep via
+    `filename`/`title`. A flat curve is a finding; the oracle shows how much
+    headroom it leaves.
 
     Args:
-        curves: {signal_name: (coverage, risk)} - typically the output of
-            risk_coverage() per signal, real (non-bootstrapped) data only,
-            one line per signal.
-        oracle: (coverage, risk) from oracle_risk_coverage() - the one
-            curve every real signal must fall on or above at every
-            coverage level.
-        filename: saved under results/figures/{filename}.
-        title: figure title.
-
-    Returns:
-        The Figure (also saved to results/figures/{filename}).
+        curves: {name: (coverage, risk)}.
+        oracle: (coverage, risk) from oracle_risk_coverage().
     """
     fig, ax = plt.subplots(figsize=(6, 5))
 
-    # Curves can be near-identical or exactly overlapping in places (e.g.
-    # RQ5's ens_entropy_total vs ens_entropy_aleatoric, which coincide
-    # almost everywhere by construction whenever epistemic ~ 0 - see
-    # analysis/rq5.py's module docstring). Color alone can't disambiguate
-    # two lines drawn on top of each other, so linestyle/marker are cycled
-    # independently of color - a dashed line traced directly over a solid
-    # one of a different color stays visually distinguishable at every
-    # point, which relying on color (or opacity, which only controls how
-    # much of the UNDER line shows through, not whether the OVER line
-    # reads as distinct) does not guarantee.
+    # Curves can coincide (RQ5's total and aleatoric entropy almost do), so
+    # linestyle and marker vary too - color alone can't separate lines drawn
+    # on top of each other.
     _LINESTYLES = ["-", "--", "-.", ":"]
     _MARKERS = ["o", "s", "^", "D"]
 
@@ -329,14 +227,8 @@ def plot_risk_coverage(
 
 
 def _ols_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """(slope, intercept) of the OLS fit of y on x, for drawing the trend
-    line overlay only - NOT imported from analysis/human_disagreement.py's
-    _ols_slope(): src/ must not depend on analysis/ (analysis/ builds on
-    src/, never the reverse - same layering every other module here
-    follows). Small enough to duplicate the two-line slope formula rather
-    than restructure the layering for it; this version additionally
-    returns the intercept, which the bootstrap-focused _ols_slope() has no
-    use for and deliberately doesn't compute.
+    """(slope, intercept) for the trend-line overlay. A small copy of
+    analysis/human_disagreement.py's formula: src/ must not import analysis/.
     """
     x_mean, y_mean = x.mean(), y.mean()
     slope = float(np.sum((x - x_mean) * (y - y_mean)) / np.sum((x - x_mean) ** 2))
@@ -345,16 +237,8 @@ def _ols_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
 
 
 def _spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
-    """Spearman rank correlation, for the plot's annotation only - NOT
-    imported from analysis/human_disagreement.py's own _spearman_corr()
-    for the same layering reason _ols_fit() doesn't import _ols_slope()
-    (src/ must not depend on analysis/). Duplicated rather than shared
-    since it's two small, self-contained formulas, not worth restructuring
-    the module layering for.
-
-    pd.Series.rank() (average method) handles d_human's heavy ties
-    correctly - see analysis/human_disagreement.py's fuller explanation of
-    why a plain double-argsort would be wrong here.
+    """Spearman correlation for the figure's annotation (average ranks for
+    ties) - a copy of analysis/human_disagreement.py's, for the same reason.
     """
     x_ranks = pd.Series(x).rank().to_numpy()
     y_ranks = pd.Series(y).rank().to_numpy()
@@ -371,49 +255,16 @@ def plot_human_disagreement(
     n_bins: int,
     model_slug: str,
 ) -> Figure:
-    """RQ2/task 3.3's figure (D9): does judge accuracy, and separately the
-    judge's stated confidence, track human consensus strength (d_human)?
+    """Task 3.3 (D9): accuracy (left) and conf_verb (right) against human
+    consensus strength d_human. Binned means (marker size = weight) plus the
+    OLS trend line in a different style, with Spearman in the title.
+    d_human has few distinct values, so the "auto" binning bins it exactly.
 
-    Two panels sharing a d_human x-axis: accuracy on the left, confidence
-    on the right. Each panel shows the binned real data (mean of the
-    y-quantity within each d_human bin, marker size ~ bin weight) as
-    scatter points, plus the OLS trend line the regression itself tested,
-    as a separate, deliberately differently-styled element - dashed and a
-    third color, not just relying on the scatter/line distinction, per the
-    lesson from RQ2/RQ5's risk-coverage figures: two elements that could
-    visually coincide (here, if the binned means happen to fall right on
-    the fit line) need more than color to stay legible, so linestyle and
-    marker carry the distinction too, not opacity alone.
-
-    d_human is naturally a low-cardinality signal (a handful of distinct
-    values arise from typical small per-item vote counts), so get_bin_edges'
-    "auto" strategy (reused via _binned_means) is likely to bin it by exact
-    value here rather than falling back to quantile bins - the same
-    "exact, not a fallback" property ece() already relies on for conf_sc.
-
-    Args:
-        d_human: |frac_prefer_a - 0.5| per item, in [0, 0.5].
-        correct: whether the judge was actually right, per item.
-        confidence: conf_verb per item (the one signal this figure uses -
-            see analysis/human_disagreement.py's module docstring for why).
-        n_bins: requested number of bins for the binned view (see
-            get_bin_edges - may bin exactly, not just approximately).
-        model_slug: Config.model_slug - namespaces the saved filename so a
-            second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/human_disagreement_{model_slug}.png).
+    Saved to results/figures/human_disagreement_{model_slug}.png.
     """
-    # Rounded to 6dp before binning: d_human = |frac_prefer_a - 0.5| computed
-    # from small vote-count fractions (e.g. 1/3 vs 2/3) can land on adjacent
-    # float64 values for the SAME true fraction (verified on real data:
-    # abs(1/3-0.5) and abs(2/3-0.5) differ by ~6e-17, both "really" 1/6) -
-    # get_bin_edges' exact-value branch uses np.unique()'s bitwise equality,
-    # so without rounding this silently doubles a bin that should be one,
-    # splitting its accuracy across two near-identical x positions instead
-    # of averaging it. 6dp is far below the real spacing between distinct
-    # d_human values (>= 0.05 apart) and far above float64 noise (~1e-16).
+    # Rounded to 6 dp: the same true fraction can land on adjacent float64
+    # values (|1/3 - 0.5| vs |2/3 - 0.5|), which exact-value binning would
+    # split into two bins.
     d_human_arr = np.round(np.asarray(d_human, dtype=float), 6)
     correct_arr = np.asarray(correct, dtype=float)
     confidence_arr = np.asarray(confidence, dtype=float)
@@ -444,9 +295,7 @@ def plot_human_disagreement(
             linestyle="--", color="black", linewidth=1.5, zorder=1,
         )
 
-        # Spearman rho isn't a line in (d_human, y) space - it's a unitless
-        # rank-correlation summary, so it's reported as text, not a second
-        # plotted curve that would imply a shape it doesn't have.
+        # Spearman is a rank summary, not a curve, so it goes in the title.
         rho = _spearman_corr(d_human_arr, y_arr)
 
         legend_handles = [
@@ -481,31 +330,14 @@ def _draw_forest(
     colors: list[str] | None = None,
     annotate: bool = True,
 ) -> None:
-    """Draws one forest/coefficient panel - point estimate + CI error bar
-    per label, plus a reference line at 0 - onto an existing `ax`. No
-    title, no savefig: this is the shared drawing primitive both
-    _forest_plot() (one panel, own figure) and plot_rq3b_deltas() (two
-    panels, one figure) build on, so the panel layout exists in exactly
-    one place.
+    """Draws a forest panel onto `ax`: a point + CI bar per label (first
+    label at the top) and a reference line at 0. No title, no save - the
+    shared primitive under every forest figure.
 
     Args:
-        ax: the Axes to draw on.
-        labels: category names, in display order (top to bottom).
-        values: point estimate per label, same order.
-        ci_low, ci_high: CI bounds per label, same order.
-        xlabel: x-axis label (what the point estimates measure).
-        colors: optional per-label color (e.g. one color per feature
-            family, task 5.9's plot_rq4_coefficients). Defaults to a
-            single "tab:blue" for every point - every existing caller
-            omits this and is unaffected.
-        annotate: whether to draw the exact-value text label above each
-            point (default True, matching every existing caller). False
-            for a DENSE many-row panel (task 5.9's "appendix" full-
-            feature-set figure) - the text labels are what force a tall
-            per-row pitch in the first place (see the annotation loop's
-            own comment), and with 30+ rows the exact values are already
-            in the companion CSV, so the geometry alone (which points
-            clear zero) is the figure's job at that row count.
+        colors: optional per-label colors (default: all tab:blue).
+        annotate: print "value [lo, hi]" above each point. Turn off for
+            dense panels whose exact values live in a CSV.
     """
     labels = list(labels)
     values_arr = np.asarray(values, dtype=float)
@@ -514,15 +346,12 @@ def _draw_forest(
     point_colors = list(colors) if colors is not None else ["tab:blue"] * len(labels)
 
     y_pos = np.arange(len(labels))
-    # errorbar wants the half-widths from the point estimate, not the
-    # absolute CI bounds themselves.
+    # errorbar takes distances from the point, not absolute CI bounds.
     err_low = values_arr - ci_low_arr
     err_high = ci_high_arr - values_arr
 
     ax.axvline(0, linestyle="--", color="gray", linewidth=1, zorder=1)
-    # Drawn one point at a time (rather than one vectorized ax.errorbar
-    # call) SPECIFICALLY so each point can take its own color - a single
-    # errorbar() call only accepts one color for the whole series.
+    # One errorbar call per point, since one call takes only one color.
     for x, y, lo_err, hi_err, color in zip(values_arr, y_pos, err_low, err_high, point_colors):
         ax.errorbar(
             [x], [y],
@@ -535,13 +364,8 @@ def _draw_forest(
             zorder=2,
         )
 
-    # Exact-value text labels, not just the visual point+whisker: when one
-    # label's magnitude dwarfs the others (e.g. task 4.3's conf_bpe, whose
-    # gap is ~30x conf_verb's), the small-but-real estimates collapse to a
-    # dot with an invisible error bar at this axis scale - the number
-    # stays legible even where the geometry doesn't. Placed above each
-    # point, not to the side, so the label never competes with the CI
-    # whiskers or gets clipped at the axis edge for an extreme value.
+    # Exact values as text: when one estimate dwarfs the others, small but
+    # real ones shrink to a dot with an invisible bar.
     if annotate:
         for x, y, lo, hi in zip(values_arr, y_pos, ci_low_arr, ci_high_arr):
             ax.annotate(
@@ -552,11 +376,7 @@ def _draw_forest(
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels)
-    # Headroom above the top point and below the bottom one. Only the
-    # annotate=True case needs the larger 0.75 pad (room for the value
-    # label offset 10 points above the topmost marker, or it clips
-    # against the axes border) - annotate=False has nothing above the
-    # marker to protect, so a tight 0.5 pad keeps the dense panel compact.
+    # Annotated panels need extra headroom for the label above the top point.
     pad = 0.75 if annotate else 0.5
     ax.set_ylim(len(labels) - 0.5, -pad)
     ax.set_xlabel(xlabel)
@@ -571,35 +391,8 @@ def _forest_plot(
     title: str,
     filename: str,
 ) -> Figure:
-    """Generic forest/coefficient plot: one point estimate + CI error bar
-    per label, plus a reference line at 0, labels on the y-axis in reading
-    order top-to-bottom. The standard visualization for "several point
-    estimates with CIs, compared against a null value" - simple, no new
-    dependencies, no randomness (unlike the raw-point jitter idea
-    considered for the human-disagreement scatter figure and deliberately
-    skipped there for adding complexity without adding information). Here
-    the plot adds real legibility a markdown table doesn't: which CIs
-    cross the zero reference line is immediate, not something a reader
-    has to check bracket-by-bracket.
-
-    Shared by task 3.4's signal-vs-d_human correlations
-    (plot_d_human_correlations) and task 4.3's flipped-vs-unflipped
-    confidence gap (plot_rq3a_confidence_gap) - same shape (N signals,
-    each one point estimate + CI against zero), different data and axis
-    labels, not worth two near-duplicate implementations. The actual panel
-    drawing lives in _draw_forest(), shared again with task 4.4's two-panel
-    plot_rq3b_deltas().
-
-    Args:
-        labels: category names, in display order (top to bottom).
-        values: point estimate per label, same order.
-        ci_low, ci_high: CI bounds per label, same order.
-        xlabel: x-axis label (what the point estimates measure).
-        title: figure title.
-        filename: saved under results/figures/{filename}.
-
-    Returns:
-        The Figure (also saved to results/figures/{filename}).
+    """A single-panel forest plot (several estimates with CIs against 0),
+    saved to results/figures/{filename}. Height scales with the label count.
     """
     fig, ax = plt.subplots(figsize=(6, 0.9 * len(labels) + 1.5))
     _draw_forest(ax, labels, values, ci_low, ci_high, xlabel)
@@ -620,35 +413,11 @@ def plot_d_human_correlations(
     filename_suffix: str = "",
     title: str = "Signal-vs-d_human correlations (task 3.4)",
 ) -> Figure:
-    """Task 3.4's figure: a forest plot of signals' Spearman rho against
-    d_human. Thin wrapper over _forest_plot() - see that docstring for
-    the shared rationale/mechanics.
+    """Forest plot of signals' Spearman correlation with d_human (task 3.4;
+    reused by 5.9e). A second caller with a different signal set must pass
+    a `filename_suffix`, or it overwrites the first caller's figure.
 
-    `filename_suffix`/`title` default to task 3.4's own original values
-    (empty suffix, "task 3.4" in the title) so that call is completely
-    unaffected - added (21 Sep 2026) so task 5.9e could reuse this same
-    function for a DIFFERENT set of signals (ens_entropy_aleatoric/
-    epistemic vs. 3.4's four confidence signals) without silently
-    overwriting 3.4's own already-existing figure: both calls would
-    otherwise save to the exact same `d_human_correlations_{model_slug}.
-    png` path, since the filename before this change depended only on
-    model_slug, not on which signals were plotted.
-
-    Args:
-        signals: signal names, in display order (top to bottom).
-        spearman: point estimate per signal, same order.
-        ci_low, ci_high: CI bounds per signal, same order.
-        model_slug: Config.model_slug - namespaces the saved filename so a
-            second judge model never overwrites the first's figure.
-        filename_suffix: appended before ".png" - a second caller with a
-            different signal set MUST pass a non-empty suffix here, or
-            it will silently overwrite an earlier caller's figure.
-        title: figure title - override when plotting a different signal
-            set than task 3.4's own four confidence signals.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/d_human_correlations{filename_suffix}_{model_slug}.png).
+    Saved to results/figures/d_human_correlations{filename_suffix}_{model_slug}.png.
     """
     return _forest_plot(
         labels=signals,
@@ -668,27 +437,11 @@ def plot_rq3a_confidence_gap(
     ci_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 4.3's figure: a forest plot of the four signals'
-    flipped-minus-unflipped confidence gap (mean confidence on items where
-    the AB/BA order changed the verdict, minus mean confidence on items
-    where it didn't). Thin wrapper over _forest_plot() - see that
-    docstring for the shared rationale/mechanics.
+    """RQ3a: forest plot of each signal's flipped-minus-unflipped mean
+    confidence. A negative gap with a CI excluding 0 means the signal drops
+    exactly where order changed the verdict.
 
-    A negative gap with a CI excluding 0 means the signal IS picking up on
-    its own position-bias-induced errors (lower confidence exactly when
-    the order flipped the verdict); a CI crossing 0 means it isn't.
-
-    Args:
-        signals: signal names, in display order (top to bottom).
-        gap: point estimate (mean_flipped - mean_unflipped) per signal,
-            same order.
-        ci_low, ci_high: CI bounds per signal, same order.
-        model_slug: Config.model_slug - namespaces the saved filename so a
-            second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq3a_confidence_gap_{model_slug}.png).
+    Saved to results/figures/rq3a_confidence_gap_{model_slug}.png.
     """
     return _forest_plot(
         labels=signals,
@@ -711,33 +464,12 @@ def plot_rq3b_deltas(
     auroc_ci_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 4.4's figure: two forest panels side by side - ΔECE and
-    ΔAUROC, both verbose-minus-clean, for the three signals RQ3b scores
-    (`conf_sc` dropped, D21). Two panels rather than two separate files:
-    the headline finding is a joint one (AUROC drops for all three,
-    ECE only breaks for conf_bpe specifically), which only reads as one
-    finding when both panels share a figure and a signal ordering, not as
-    two tables a reader has to cross-reference by eye.
+    """RQ3b: ΔECE and ΔAUROC (verbose - clean) side by side, sharing one
+    signal order - the finding (AUROC drops everywhere, calibration breaks
+    only for conf_bpe) only reads as one result on one figure. Positive
+    ΔECE = worse calibration; negative ΔAUROC = less informative signal.
 
-    A positive ΔECE means the judge is MORE miscalibrated under verbose;
-    a negative ΔAUROC means its uncertainty signal is LESS informative
-    about its own errors under verbose. Both panels share _draw_forest()
-    with plot_rq3a_confidence_gap()/plot_d_human_correlations() - same
-    point+CI-vs-zero shape, just two of them on one figure instead of one.
-
-    Args:
-        signals: signal names, in display order (top to bottom), shared
-            by both panels.
-        delta_ece, ece_ci_low, ece_ci_high: ECE panel's point estimate and
-            CI bounds per signal, same order as `signals`.
-        delta_auroc, auroc_ci_low, auroc_ci_high: AUROC panel's point
-            estimate and CI bounds per signal, same order.
-        model_slug: Config.model_slug - namespaces the saved filename so a
-            second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq3b_deltas_{model_slug}.png).
+    Saved to results/figures/rq3b_deltas_{model_slug}.png.
     """
     fig, axes = plt.subplots(1, 2, figsize=(11, 0.9 * len(signals) + 1.5))
 
@@ -768,43 +500,12 @@ def plot_rq4_ablation(
     baseline_label: str,
     model_slug: str,
 ) -> Figure:
-    """Task 5.5's figure: grouped bar chart, one bar per (tier, model)
-    combination, PLUS a standalone bar for the best-single-signal
-    baseline (recomputed on the SAME human_agreed population the
-    ablation itself uses - see analysis/rq4.py's own module docstring
-    for why reusing RQ2's stored number would compare across two
-    different populations) in its own distinct color, so "does combining
-    signals into a tier actually beat the single best signal alone" is a
-    direct bar-to-bar height comparison, not a bar-vs-line one. A thin
-    reference line at the same height is kept too, so that comparison
-    stays easy even for the tiers sitting furthest from the baseline bar.
+    """Task 5.5: one bar per (tier, model), grouped by tier and colored by
+    model, next to its own bar for the best single signal (with a thin
+    reference line at its height). Whiskers are D8's across-repeat spread
+    for the tiers and a cluster-bootstrap CI for the baseline.
 
-    Bars are grouped by tier (A/B/C) on the x-axis, colored by model -
-    this reading order puts "does the next tier beat the last one" (the
-    RQ4 headline question) directly adjacent on the page, with "does
-    either model beat the cheap single-signal baseline" answered by
-    whether a bar clears the baseline bar's own height.
-
-    Args:
-        tiers: tier label per bar, e.g. ["A","B","C","A","B","C"].
-        models: model label per bar, same order/length as `tiers`, e.g.
-            ["logreg"]*3 + ["histgbm"]*3.
-        auroc_mean: point estimate per bar (mean across the 10 D8
-            repeats), same order.
-        auroc_low, auroc_high: the across-repeat spread bounds per bar
-            (D8's own headline-uncertainty convention - NOT a bootstrap
-            CI), same order.
-        baseline: the best single signal's AUROC on this task's own
-            population.
-        baseline_ci_low, baseline_ci_high: that baseline's own CI
-            (cluster-bootstrap, matching RQ2's convention).
-        baseline_label: which signal the baseline is (e.g. "conf_bpe"),
-            used as that bar's own x-axis label and legend entry.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to results/figures/rq4_ablation_{model_slug}.png).
+    Saved to results/figures/rq4_ablation_{model_slug}.png.
     """
     tier_order = ["A", "B", "C"]
     model_order = sorted(set(models))
@@ -812,15 +513,9 @@ def plot_rq4_ablation(
 
     fig, ax = plt.subplots(figsize=(8, 5))
 
-    # Thin reference line at the baseline's height, threaded across the
-    # whole plot - a cheap way to judge clearance for the tiers sitting
-    # far from the baseline's own bar, without competing visually with it
-    # (thinner + no shaded band, since the bar itself now carries the CI).
     ax.axhline(baseline, linestyle="--", color="tab:gray", linewidth=1, zorder=1)
 
-    # The baseline bar itself sits at x=0, in its own distinct color (not
-    # reused from the model color cycle below) so it reads as "a single
-    # signal alone", never mistaken for a third model.
+    # The baseline bar at x=0, in its own color so it never reads as a model.
     baseline_err_low = baseline - baseline_ci_low
     baseline_err_high = baseline_ci_high - baseline
     ax.bar(
@@ -839,16 +534,14 @@ def plot_rq4_ablation(
         model_low = [v for v, keep in zip(auroc_low, model_mask) if keep]
         model_high = [v for v, keep in zip(auroc_high, model_mask) if keep]
 
-        # Reorders this model's own (tier, value) rows into tier_order -
-        # the caller's row order isn't assumed to already be tier-sorted.
+        # Reorder into tier_order; the caller's rows needn't be sorted.
         by_tier = dict(zip(model_tiers, zip(model_means, model_low, model_high)))
         ordered = [by_tier[t] for t in tier_order if t in by_tier]
         means = np.array([v[0] for v in ordered])
         err_low = means - np.array([v[1] for v in ordered])
         err_high = np.array([v[2] for v in ordered]) - means
 
-        # +1 shifts every tier group one slot right of the baseline bar
-        # at x=0.
+        # +1 shifts the tier groups right of the baseline bar at x=0.
         x = 1 + np.arange(len(ordered)) + (i - (len(model_order) - 1) / 2) * bar_width
         ax.bar(x, means, width=bar_width, label=model, zorder=2)
         ax.errorbar(
@@ -874,30 +567,10 @@ def plot_rq4_progression(
     ci_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.5's paired-comparison figure: forest plot of each tier-
-    progression step's AUROC delta (baseline->A, A->B, B->C, per model -
-    analysis/rq4.py::compare_tier_progression()), against a zero
-    reference line. Thin wrapper over _forest_plot() - same point+CI-vs-
-    zero shape as plot_rq3a_confidence_gap()/plot_d_human_correlations().
+    """Task 5.5: forest plot of each tier step's paired AUROC change. A CI
+    excluding 0 means that step is real.
 
-    A CI excluding 0 means that step's change is real. Every CI crossing
-    0 (the actual result, 18 Sep 2026) means the ablation bar chart's
-    apparent A > B > C decline does not survive a paired test - this
-    figure is what makes that visible at a glance, instead of reading it
-    off a 6-row CSV.
-
-    Args:
-        comparisons: label per row, e.g. "logreg: A - baseline", in
-            display order (top to bottom).
-        auroc_diff: point estimate per row (higher tier's AUROC minus
-            lower tier's), same order.
-        ci_low, ci_high: CI bounds per row, same order.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq4_progression_{model_slug}.png).
+    Saved to results/figures/rq4_progression_{model_slug}.png.
     """
     return _forest_plot(
         labels=comparisons,
@@ -917,37 +590,12 @@ def plot_rq4_permutation_nulls(
     null_distributions: list[np.ndarray],
     model_slug: str,
 ) -> Figure:
-    """Task 5.5's permutation-null sanity-check figure: one small
-    histogram per (tier, model) cell's null AUROC distribution
-    (analysis/rq4.py::compute_permutation_null_summary()), with the real,
-    observed AUROC marked as a vertical line. Less essential than
-    plot_rq4_progression() - the result here is unambiguous (every cell
-    at the 100th percentile) - but a visual confirmation that each null
-    genuinely centers near 0.5 (not just a printed mean) is cheap and
-    catches a leaking pipeline at a glance, the same role the numeric
-    check already serves in text.
+    """Task 5.5: each (tier, model) cell's null AUROC histogram with the
+    observed AUROC marked - a visual check that the observed value sits well clear of its null.
+    Grid: one row per model, one column per tier, whatever the input order.
 
-    Args:
-        tiers: tier label per cell, e.g. ["A","A","B","B","C","C"] - any
-            input order accepted, the grid below re-sorts into columns
-            by tier regardless (so a caller's tier-major or model-major
-            list order never changes the figure).
-        models: model label per cell, same order/length as `tiers`.
-        observed: this cell's real (unshuffled) AUROC, same order.
-        null_distributions: this cell's null_aurocs array (n=50 values
-            each, compute_permutation_null_summary()'s own `n`), same
-            order.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq4_permutation_nulls_{model_slug}.png).
+    Saved to results/figures/rq4_permutation_nulls_{model_slug}.png.
     """
-    # Grid is (model) rows x (tier) columns - every model's panels read
-    # left-to-right as A->B->C on one row, and every tier's two models
-    # stack in one column, rather than a flat sequential fill (which
-    # mixed tiers and models across a row with no visual grouping).
     tier_order = [t for t in ["A", "B", "C"] if t in tiers]
     model_order = sorted(set(models))
     nrows, ncols = len(model_order), len(tier_order)
@@ -987,51 +635,13 @@ def plot_h4_interaction(
     log_odds_curves: list[np.ndarray],
     model_slug: str,
 ) -> Figure:
-    """Task 5.6's optional figure (requested 19 Sep 2026, after the
-    numeric interaction result): predicted P(correct) as a function of
-    the predictor's out-of-fold score, one curve per distinct d_human
-    level actually present in the data (analysis/rq4.py's
-    compute_h4_interaction_curves() - NOT a min/median/max summary,
-    which collapses under this population's real skew).
+    """Task 5.6: predicted P(correct) vs the predictor's OOF score, one curve
+    per d_human level. Left: probability scale, with a rug of the real
+    scores. Right: log-odds, where the model is linear and the interaction
+    is simply the slope difference - on the probability scale, sigmoid
+    saturation hides it where most real scores sit.
 
-    TWO panels, not one - checked empirically (19 Sep 2026) that the
-    probability panel alone undersells the fitted interaction (+2.3752
-    [1.6849, 3.0739]): the model's log-odds slope w.r.t. oof_score
-    genuinely increases with d_human (that's what the positive
-    interaction coefficient means, directly), but in probability space
-    that gets compressed by sigmoid saturation specifically in the
-    high-oof_score region where most of this project's real data sits
-    (most judge calls are high-confidence) - higher-d_human curves sit
-    closer to the probability ceiling there, where the sigmoid is
-    flattest, visually muting a slope difference that reads as large and
-    unambiguous on the log-odds scale, where the model is literally
-    linear and the interaction coefficient IS the slope difference,
-    undistorted.
-
-    Left panel: probability space (intuitive - P(correct) is directly
-    meaningful) with a rug plot of the real oof_score values along the
-    bottom, so the curves aren't read as equally well-supported across
-    their full domain. Right panel: log-odds (the linear predictor) -
-    same three lines, undistorted, visibly diverging in slope as
-    d_human rises. Together: "here's what it means" and "here's why the
-    number says it's real," not two redundant views of one thing.
-
-    Args:
-        oof_score: the real, per-item averaged OOF scores (for the left
-            panel's rug plot only, not the curves themselves).
-        oof_score_grid: shared x-axis grid every curve is evaluated on.
-        d_human_values: the distinct d_human levels, ascending - one
-            legend entry each, shared across both panels.
-        predicted_curves: one P(correct) array per d_human_values entry,
-            same order, each the same length as oof_score_grid.
-        log_odds_curves: the same curves on the linear-predictor scale,
-            same order/length.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/h4_interaction_{model_slug}.png).
+    Saved to results/figures/h4_interaction_{model_slug}.png.
     """
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     cmap = plt.get_cmap("viridis")
@@ -1040,8 +650,7 @@ def plot_h4_interaction(
     ax = axes[0]
     for color, d_human_value, curve in zip(colors, d_human_values, predicted_curves):
         ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
-    # Rug: real oof_score values along the bottom, outside the [0,1]
-    # probability axis so it never overlaps the curves themselves.
+    # Rug below the [0, 1] axis so it never overlaps the curves.
     ax.plot(
         oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color="black", alpha=0.3,
         markersize=8, clip_on=False,
@@ -1079,31 +688,10 @@ def plot_rq4_transfer(
     transfer_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.7's figure: grouped bar chart, one group per model
-    (logreg/histgbm), each group showing two bars - in-domain (trained
-    AND tested on clean, D8's repeated-CV spread) vs. transfer (trained
-    on clean, frozen, evaluated on verbose, cluster-bootstrap CI) - same
-    grouped-bars-plus-whiskers shape as plot_rq4_ablation, just grouped
-    by model instead of by tier.
+    """Task 5.7: per model, in-domain AUROC (clean CV, D8 spread) next to
+    transfer AUROC (fit on clean, evaluated on verbose, bootstrap CI).
 
-    Makes the actual 20 Sep 2026 result legible at a glance: logreg's
-    two bars land at essentially the same height (ΔAUROC +0.0001) while
-    histgbm's transfer bar sits visibly, though not dramatically, below
-    its in-domain bar (ΔAUROC -0.0254) - refuting, not confirming, "the
-    safety net degrades under attack" as a clean, dramatic story.
-
-    Args:
-        models: model name per group, e.g. ["logreg", "histgbm"].
-        baseline_mean, baseline_low, baseline_high: in-domain AUROC and
-            its D8 across-repeat spread, same order as `models`.
-        transfer_mean, transfer_low, transfer_high: transfer AUROC and
-            its cluster-bootstrap CI, same order.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq4_transfer_{model_slug}.png).
+    Saved to results/figures/rq4_transfer_{model_slug}.png.
     """
     n = len(models)
     x = np.arange(n)
@@ -1151,39 +739,11 @@ def plot_rq4_category_transfer(
     auroc: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.8's figure: grouped bar chart, one group per MT-Bench
-    category, one bar per model within each group - the held-out AUROC
-    from analysis/rq4.py::compute_category_held_out_auroc()'s
-    LeaveOneGroupOut protocol.
+    """Task 5.8: held-out AUROC per category (LeaveOneGroupOut), one bar per
+    model, categories sorted weakest to strongest. No category is singled
+    out in advance; the dashed line marks chance.
 
-    Categories are sorted WEAKEST TO STRONGEST (by mean AUROC across
-    models), not alphabetically - so "which categories does the
-    predictor struggle on" reads directly off the x-axis without
-    needing to scan a table. No category is singled out for highlight -
-    an earlier version flagged "coding" (PLAN.md §2.4's own illustrative
-    phrasing, "is it learning 'coding questions are hard'"), but that
-    turned out to be an unexamined example carried over into the plan
-    text, not a reasoned hypothesis about this specific judge/dataset
-    (20 Sep 2026 discussion) - singling it out visually would have kept
-    presenting it as the headline question when the plot itself is a
-    more honest, unprejudiced answer without picking a side beforehand.
-
-    A dashed reference line at 0.5 (chance) gives a visual floor - the
-    real story here is that every category clears it comfortably, no
-    category collapses to chance the way a "some categories are
-    unlearnable" failure would look.
-
-    Args:
-        categories: category label per row, e.g. 8 values repeated
-            once per model (16 rows for 2 models).
-        models: model label per row, same order/length as `categories`.
-        auroc: held-out AUROC per row, same order.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq4_category_transfer_{model_slug}.png).
+    Saved to results/figures/rq4_category_transfer_{model_slug}.png.
     """
     df = pd.DataFrame({"category": categories, "model": models, "auroc": auroc})
     category_order = df.groupby("category")["auroc"].mean().sort_values().index.tolist()
@@ -1218,14 +778,9 @@ _FEATURE_FAMILY_COLORS = {"A": "tab:blue", "B": "tab:green", "C": "tab:purple"}
 def _sort_coefficient_rows(
     features: list[str], coef: np.ndarray, ci_low: np.ndarray, ci_high: np.ndarray, family: list[str]
 ) -> pd.DataFrame:
-    """Shared row-ordering for both coefficient figures: family ascending
-    (A, then B, then C), |coefficient| descending within each family
-    block. _draw_forest() renders list index 0 at the TOP of the figure
-    (its own set_ylim puts y=0 nearest the top), so this order is already
-    "Tier A first, largest-magnitude-first within each block, reading top
-    to bottom" with no further reversal needed - a bug in an earlier
-    version added one anyway and rendered every block backwards (Tier C
-    on top), caught on visual review, 20 Sep 2026.
+    """Row order for both coefficient figures: family A, B, C, and largest
+    |coef| first within each. _draw_forest() puts the first row at the top,
+    so no reversal is needed.
     """
     df = pd.DataFrame(
         {"feature": features, "coef": coef, "ci_low": ci_low, "ci_high": ci_high, "family": family}
@@ -1251,52 +806,19 @@ def plot_rq4_coefficients(
     family: list[str],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9's headline figure - DoD's own words: "the coefficients
-    are the result, more than the AUROC is." Deliberately shows ONLY the
-    coefficients whose cluster-bootstrap CI excludes 0 (analysis/rq4.py::
-    bootstrap_coefficient_cis, question_id, B=2000, REFITTING each
-    resample - never a statsmodels/sklearn default SE, invariant 2), not
-    all ~37 Tier C features: at the full row count the figure is
-    unusably tall for a slide or a PDF page (0.9in/row x 37 rows), and
-    the CSV (results/rq4_coefficients_{model_slug}.csv, already written
-    by analysis/rq4.py's caller) is the complete record - this figure's
-    job is to make the headline readable, not to be the only place the
-    full table lives. The full 37-row picture is
-    plot_rq4_coefficients_full() (added 20 Sep 2026, on request, after
-    the first all-37-row version proved too tall for presentation use).
+    """Task 5.9's headline figure: only the coefficients whose CI excludes
+    0, colored by feature family (all ~37 rows would be too tall for a slide;
+    plot_rq4_coefficients_full() and the CSV have them). Takes the FULL
+    table and filters here, so "significant" has one definition. With no
+    significant coefficient it still renders, as an empty panel.
 
-    Colored by feature FAMILY (A/B/C, analysis/rq4.py::_feature_family):
-    5.5 already found the tiers statistically indistinguishable at the
-    whole-model AUROC level (every paired-progression CI crossed 0), and
-    the significant-only view here makes the sharper, coefficient-level
-    echo of that finding immediate - which families, if any, actually
-    have individually-nonzero features (as of 20 Sep 2026: only A and B
-    do; not one Tier C feature clears 0, so it never appears here).
-
-    Args:
-        features, coef, ci_low, ci_high, family: the FULL coefficient
-            table (same shape/order as compute_meta_coefficients()'s
-            output) - filtering to the significant subset happens here,
-            not in the caller, so "significant" has exactly one
-            definition used consistently by both figures.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq4_coefficients_{model_slug}.png). If NO
-        coefficient is significant, the figure still renders (an empty
-        panel with just the zero line) rather than raising - a null
-        result is a real result, not an error.
+    Saved to results/figures/rq4_coefficients_{model_slug}.png.
     """
     df = _sort_coefficient_rows(features, coef, ci_low, ci_high, family)
     df = df[(df["ci_low"] > 0) | (df["ci_high"] < 0)].reset_index(drop=True)
 
     colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
 
-    # 0.9in/row, matching _forest_plot()'s own established spacing - safe
-    # here because this panel only ever holds the significant subset
-    # (8 of 37, as of 20 Sep 2026), not the full feature count.
     fig, ax = plt.subplots(figsize=(7, 0.9 * max(len(df), 1) + 1.5))
     _draw_forest(
         ax,
@@ -1328,30 +850,15 @@ def plot_rq4_coefficients_full(
     family: list[str],
     model_slug: str,
 ) -> Figure:
-    """The appendix companion to plot_rq4_coefficients(): every Tier C
-    (encoded) feature, not just the significant ones - same data, same
-    family coloring and sort order, but dense (annotate=False, tight
-    row pitch) rather than presentation-sized, since exact values belong
-    to results/rq4_coefficients_{model_slug}.csv, not to this figure's
-    text labels. Whether each CI clears 0 is still visible from the
-    whisker geometry alone.
+    """Appendix companion to plot_rq4_coefficients(): every Tier C feature,
+    unannotated at a tight row pitch (~10in tall instead of ~35in); exact
+    values are in the CSV.
 
-    Args:
-        Same as plot_rq4_coefficients() - the FULL table, unfiltered.
-        model_slug: Config.model_slug - namespaces the saved filename.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq4_coefficients_full_{model_slug}.png).
+    Saved to results/figures/rq4_coefficients_full_{model_slug}.png.
     """
     df = _sort_coefficient_rows(features, coef, ci_low, ci_high, family)
     colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
 
-    # 0.22in/row (vs. the headline figure's 0.9in/row) - affordable only
-    # because annotate=False drops the per-point text label that forces
-    # the taller pitch elsewhere. ~37 rows -> ~9.6in tall: dense, but
-    # fits a single presentation slide or PDF page, unlike the ~35in the
-    # same row count would need at the annotated spacing.
     fig, ax = plt.subplots(figsize=(8, 0.22 * len(df) + 1.2))
     _draw_forest(
         ax,
@@ -1379,26 +886,10 @@ def plot_rq4_coefficients_full(
 
 
 def plot_bayesian_convergence(max_rhat: np.ndarray, flagged: np.ndarray, model_slug: str) -> Figure:
-    """Task 5.9c's convergence-diagnostics figure: one point per real
-    fold-fit (50 of them, D8's 5-fold x 10-repeat protocol) - max R-hat
-    against D22's 1.01 threshold, flagged fits colored differently. This
-    is the picture 5.9b's own results were missing - "1/50 fold-fits
-    flagged" (TASKS.md 5.9b) was only ever a number in a terminal
-    printout/closeout note until now, not something checkable at a
-    glance.
+    """Max R-hat for every fold-fit against D22's 1.01 threshold, flagged
+    fits in red (flagged = R-hat > 1.01, NaN, or any divergence).
 
-    Args:
-        max_rhat: max R-hat per fold-fit, in fit order (analysis/rq4.py::
-            compute_bayesian_arm()'s fold_diagnostics, flattened).
-        flagged: whether each fold-fit was flagged - convergence_
-            diagnostics()'s own definition (max_rhat > 1.01, max_rhat is
-            NaN, or divergences > 0), same order as max_rhat.
-        model_slug: Config.model_slug - namespaces the saved filename so
-            a second judge model never overwrites the first's figure.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq4_bayesian_convergence_{model_slug}.png).
+    Saved to results/figures/rq4_bayesian_convergence_{model_slug}.png.
     """
     max_rhat_arr = np.asarray(max_rhat, dtype=float)
     flagged_arr = np.asarray(flagged, dtype=bool)
@@ -1439,44 +930,14 @@ def plot_rq5_distillation(
     epistemic_auroc_bayesian_ci: tuple[float, float],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9d's figure: the ensemble (3-call, teacher) vs the
-    single-call Bayesian model (student) on two AUROC-shaped metrics -
-    overall AUROC(uncertainty -> error) and "entropy quality"
-    (AUROC(epistemic -> error)).
+    """Task 5.9d: the 3-call ensemble vs the 1-call Bayesian model on AUROC
+    and on entropy quality (AUROC of each one's epistemic signal).
 
-    `auroc_bayesian` gets NO error whisker (unlike every other bar) -
-    deliberately, not an oversight: it's a plain point (roc_auc_score on
-    the mean OOF prediction), while every other bar here has a matching-
-    methodology cluster-bootstrap CI (analysis/rq5.py's own
-    compute_ensemble_metrics/cluster_bootstrap calls). Rather than
-    reusing 5.9c's own D8-across-repeat-spread number for this bar (a
-    DIFFERENT kind of interval - fold-to-fold variance, not resampling
-    uncertainty) and implying a false equivalence with the bootstrap
-    whiskers next to it, this bar is shown honestly bare, with the real
-    number pointed to in an annotation instead.
+    The Bayesian AUROC bar has no whisker on purpose: every other bar has a
+    cluster-bootstrap CI, and borrowing D8's across-repeat spread for it
+    would imply a false equivalence between two kinds of interval.
 
-    The epistemic-AUROC pair is this task's actual headline finding, not
-    a footnote: it's large (ensemble ~0.56, barely above chance;
-    Bayesian ~0.78), it has a real cluster-bootstrap CI on BOTH sides,
-    and it runs in the OPPOSITE direction "how much distills" framing
-    would suggest - the single-call model's own epistemic signal beats
-    the expensive ensemble's, not just approaches it.
-
-    Args:
-        auroc_ensemble, auroc_ensemble_ci: ensemble conf_ens's own
-            AUROC(uncertainty -> error) and cluster-bootstrap CI.
-        auroc_bayesian: Bayesian model's own AUROC (point only, see
-            above).
-        epistemic_auroc_ensemble, epistemic_auroc_ensemble_ci: ensemble's
-            ens_entropy_epistemic AUROC(uncertainty -> error) and CI.
-        epistemic_auroc_bayesian, epistemic_auroc_bayesian_ci: Bayesian's
-            own meta-model-level epistemic AUROC and CI (both via
-            posterior_predictive_entropy_decomposition()).
-        model_slug: Config.model_slug.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq5_distillation_{model_slug}.png).
+    Saved to results/figures/rq5_distillation_{model_slug}.png.
     """
     metrics = ["AUROC", "Epistemic AUROC\n(entropy quality)"]
     x = np.arange(len(metrics))
@@ -1543,45 +1004,13 @@ def plot_rq5_verbose_shift(
     epistemic_gap_ci: tuple[float, float],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9f's figure: mean aleatoric/epistemic (meta-model-level,
-    src/bayesian.py::posterior_predictive_entropy_decomposition()) on
-    `clean` vs `verbose`, from the SAME once-fit-on-clean Bayesian model
-    evaluated in-sample both times (src/bayesian.py::predict_in_sample() -
-    never predict_held_out(), see that function's own docstring and
-    DECISIONS.md's D21 amendment for why).
+    """Task 5.9f: mean aleatoric and epistemic entropy on clean vs verbose,
+    from the one Bayesian model fit on clean. Two panels with separate
+    y-axes - epistemic is ~100x smaller than aleatoric and would look like
+    zero on a shared axis. Each panel is annotated with its paired-bootstrap
+    gap CI, the statistic the preregistered verdict rests on.
 
-    TWO PANELS, each metric on its OWN y-axis scale - not one shared-
-    scale bar chart. Checked empirically (22 Sep 2026): epistemic sits
-    ~150x smaller than aleatoric (real numbers: aleatoric ~0.44-0.46 nats,
-    epistemic ~0.003 nats) - a shared axis renders the epistemic bars as
-    visually flat zero, hiding a real, CI-significant gap. The scale gap
-    itself is a genuine finding (this simple 3-feature model's parameter
-    uncertainty is nearly negligible next to irreducible per-item noise),
-    so it's reported as a fact in each panel's own title, not smoothed
-    over by forcing both onto one axis.
-
-    The preregistered prediction (D21/D23, professor feedback
-    "consequences"): epistemic RISES under the verbose shift, aleatoric
-    stays FLAT. Each bar pair is annotated with its own paired cluster-
-    bootstrap gap + CI (analysis/rq4.py's own compute, invariant 3 - same
-    items, two conditions) rather than per-bar error whiskers: the
-    rigorous quantity here is the GAP's own CI, not two independent
-    per-condition CIs that were never computed (bootstrapping the gap
-    directly, the way the underlying test does, is not the same
-    statistic as bootstrapping each mean separately and is what the
-    preregistered verdict actually depends on).
-
-    Args:
-        aleatoric_clean, aleatoric_verbose: mean aleatoric per condition.
-        aleatoric_gap_ci: (ci_low, ci_high) for mean(verbose) -
-            mean(clean), aleatoric.
-        epistemic_clean, epistemic_verbose: mean epistemic per condition.
-        epistemic_gap_ci: same, epistemic.
-        model_slug: Config.model_slug.
-
-    Returns:
-        The Figure (also saved to
-        results/figures/rq5_verbose_shift_{model_slug}.png).
+    Saved to results/figures/rq5_verbose_shift_{model_slug}.png.
     """
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
 

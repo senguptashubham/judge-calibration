@@ -1,8 +1,6 @@
 """Tests for src/judge.py's locally-testable logic: the call schedule (D19),
-checkpoint dedup/resumability (invariant 9), and the per-call logprobs file
-path/writer (D4, amended 4 Sep 2026 to 100% coverage). Deliberately does not
-import vllm - none of this logic touches it (see judge.py's own module
-docstring). See TASKS.md task 1.4.
+checkpoint dedup/resumability (invariant 9), prompt construction, and the
+per-call logprobs file (D4). None of it needs vllm.
 """
 
 import gzip
@@ -40,7 +38,6 @@ def test_call_schedule_total_is_12_per_item(config):
 
 
 def test_call_schedule_sample_idx_only_nonzero_for_clean_p1(config):
-    # TASKS.md task 1.4's own required assertion.
     for spec in call_schedule(config):
         if spec.sample_idx > 0:
             assert (spec.condition, spec.prompt_variant) == ("clean", "P1")
@@ -68,17 +65,14 @@ def test_filter_schedule_restricts_to_requested_variants(config):
     filtered = filter_schedule(clean_specs, ["P1"])
     assert filtered  # non-empty - P1 exists for clean
     assert all(s.prompt_variant == "P1" for s in filtered)
-    # Task 1.6's pilot expects exactly 6 clean/P1 calls (2 greedy + 4 sampled).
+    # clean/P1 is 6 calls: 2 greedy + 4 sampled.
     assert len(filtered) == 6
 
 
 # --- _conversations_for_condition / _build_prompts --------------------------
 #
-# Regression guards for task 4.1b's finding (18 Sep 2026): verbose_pad()
-# existed, was tested, and was never actually wired into judge.py's real
-# generation path - 40 "verbose" generations were quietly unpadded clean-
-# style prompts, only caught after burning real GPU time on a smoke test.
-# These tests are what should have caught it locally, for zero GPU cost.
+# Regression guards: verbose_pad() was once tested but never wired into the
+# generation path, so a whole smoke test ran unpadded. These check the wiring.
 
 
 def test_conversations_for_condition_applies_verbose_pad_for_verbose():
@@ -185,8 +179,7 @@ def test_pending_calls_is_full_cross_join_when_nothing_completed():
 
 
 def test_pending_calls_skips_completed_keys_running_twice_does_not_duplicate():
-    # CLAUDE.md invariant 9 / task 1.4's DoD, directly: simulate "run once,
-    # then run again with the same checkpoint" and confirm nothing repeats.
+    # Invariant 9: run once, then again with the same checkpoint - nothing repeats.
     specs = [CallSpec("clean", "P1", "AB", 0), CallSpec("clean", "P1", "BA", 0)]
     items_df = _items_df()
 
@@ -231,8 +224,7 @@ def test_logprobs_path_is_deterministic_and_unique_per_call():
 
 
 def test_logprobs_path_lives_under_logprobs_dir_not_the_old_sample_name():
-    # D4, amended 4 Sep 2026: directory renamed logprobs_sample/ -> logprobs/
-    # now that coverage is 100%, not a 10% sample.
+    # D4: every call's logprobs are kept, under logprobs/ (formerly logprobs_sample/).
     path = logprobs_path("runs", "item1", "clean", "P1", "AB", 0)
     assert path.parent.name == "logprobs"
 

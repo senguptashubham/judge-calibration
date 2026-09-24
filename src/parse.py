@@ -1,17 +1,11 @@
-"""Verdict and confidence extraction, failure taxonomy. See TASKS.md task 1.5.
+"""Raw judge output -> calls.parquet: verdict and confidence extraction, the
+failure taxonomy, and every logprob-derived field. The only place in the
+primary pipeline that reads `raw_output` (invariant 7).
 
-Two independent extraction paths, since they need different raw materials:
-- `parse_verdict_and_confidence()` is pure text parsing - only needs
-  `raw_output`, works for every row.
+Two independent paths, since they need different raw materials:
+- `parse_verdict_and_confidence()` needs only `raw_output`.
 - `compute_logprob_signals()` needs the full per-token logprobs judge.py
-  saves for every call (D4, amended 4 Sep 2026: 100% coverage). It always
-  operates on data already loaded back from `runs/logprobs/*.jsonl.gz`
-  (via `load_logprobs_record()`), never on live vLLM objects - judge.py
-  never touches this file, and this file never touches vLLM (D17).
-
-`split_cot_and_verdict_tokens()` lives here (relocated from `judge.py` on
-4 Sep 2026) because it is itself parsing logic - CLAUDE.md invariant 7
-says logic that touches raw model output belongs only in this file.
+  saves for every call (D4), loaded back from runs/logprobs/*.jsonl.gz.
 """
 
 import argparse
@@ -31,30 +25,21 @@ _CATEGORY_DATASET = "philschmid/mt-bench"
 
 
 def parse_verdict_and_confidence(raw_output: str) -> dict:
-    """Extracts `verdict` and `verbalized_conf` from a judge call's raw JSON
-    text alone - no logprobs needed. Classifies failures per CLAUDE.md §3's
-    taxonomy: none|no_verdict|no_confidence|malformed_json|truncated.
+    """`verdict` and `verbalized_conf` from a call's raw JSON text, with
+    CLAUDE.md §3's failure taxonomy: none|no_verdict|no_confidence|
+    malformed_json|truncated.
 
-    Ordering rationale: a verdict-shaped enum failure (`no_verdict`) is
-    checked before a confidence-shaped one (`no_confidence`) because a row
-    with no verdict is unusable for every RQ, while a row with a verdict
-    but no confidence still carries real information (RQ2-RQ4 use it with
-    conf_verb null) - the more severe failure gets reported when both
-    would technically apply.
-
-    Returns:
-      dict with parse_ok, parse_failure_type, verdict, verbalized_conf.
-      verdict is populated whenever a valid one was found, even if
-      confidence separately failed - CLAUDE.md's schema treats verdict and
-      verbalized_conf as independently nullable columns, not all-or-nothing.
+    `no_verdict` is checked before `no_confidence`: a row with no verdict is
+    unusable everywhere, while a row with a verdict but no confidence still
+    carries information, so the more severe failure is the one reported.
+    The verdict is kept even when confidence fails - the two columns are
+    independently nullable.
     """
     stripped = raw_output.rstrip()
     if not stripped.endswith("}"):
-        # The structured-output schema is always a flat JSON object, so a
-        # well-formed completion always ends in "}" (module whitespace).
-        # Not ending in one is the signature of hitting max_tokens
-        # mid-generation, not a formatting mistake - classified separately
-        # from malformed_json for exactly that reason.
+        # The schema is a flat JSON object, so a completion that doesn't end
+        # in "}" hit max_tokens mid-generation - a truncation, not a
+        # formatting mistake.
         return {"parse_ok": False, "parse_failure_type": "truncated", "verdict": None, "verbalized_conf": None}
 
     try:
@@ -77,35 +62,15 @@ def parse_verdict_and_confidence(raw_output: str) -> dict:
 
 
 def reasoning_length(raw_output: str) -> int | None:
-    """Character length of just the judge's free-text `"reasoning"` field -
-    RQ4's `judge_output_len` (Tier B, task 5.2). Deliberately NOT
-    `len(raw_output)`, which would include the near-constant ~40-char JSON
-    boilerplate (`{"reasoning": "`, `", "verdict": "A", "confidence": 0.9}`)
-    surrounding every call - harmless as a feature (LogReg/HistGBM are both
-    invariant to a roughly-constant additive shift on one feature) but a
-    real mismatch if this number is ever quoted in prose (`REPORT.md`
-    saying "the judge writes N% longer reasoning" should mean the
-    reasoning, not the JSON wrapper around it).
+    """Character length of the `"reasoning"` value alone (RQ4's
+    judge_output_len) - not len(raw_output), which would include the
+    ~40-char JSON wrapper around it.
 
-    Two paths, exact-first:
-      1. `raw_output` parses as JSON with a string `"reasoning"` value ->
-         `len()` of that already-unescaped string. Exact. Covers the
-         overwhelming majority of rows (parse_ok is ~99.99% on real data).
-      2. Parsing fails (malformed/truncated - the same rows
-         `parse_verdict_and_confidence` already marks not parse_ok) ->
-         falls back to plain substring search for the same
-         `"reasoning": "` / `"verdict": "` key literals
-         `split_cot_and_verdict_tokens` uses, taking the last literal `"`
-         between them as the value's end. An approximation (doesn't
-         account for escaped `\"`/`\n` inside the value, unlike path 1's
-         exact `json.loads`), accepted specifically because it only ever
-         runs on the near-unreachable ~0.01% of already-broken rows -
-         returning an approximate length there beats silently shrinking
-         Tier B's population by propagating None on every parse failure.
-
-    Returns:
-      int, or None only if neither path can locate a reasoning value at
-      all (e.g. truncated before "reasoning" itself was ever written).
+    Exact when raw_output parses as JSON. Otherwise falls back to a
+    substring search between the `"reasoning": "` and `"verdict": "` keys,
+    which ignores escaped characters - an approximation used only on the
+    rare malformed rows, so they don't drop out of Tier B entirely.
+    None only if no reasoning value can be located at all.
     """
     try:
         parsed = json.loads(raw_output)
@@ -136,15 +101,13 @@ def reasoning_length(raw_output: str) -> int | None:
 def split_cot_and_verdict_tokens(
     token_texts: list[str], full_text: str
 ) -> tuple[list[int], int | None]:
-    """Locates which generated tokens fall inside the JSON `"reasoning"`
-    string value (the CoT tokens) and which single token is the `"verdict"`
-    value, using plain substring search on the assembled text rather than
-    full JSON parsing - a truncated/malformed generation may not be valid
-    JSON at all, and this should degrade gracefully (falls back to "every
-    token is CoT, no identifiable verdict token") rather than raise.
+    """Which generated tokens fall inside the `"reasoning"` value (the CoT
+    tokens), and which single token is the `"verdict"` value.
 
-    token_texts: each token's own decoded text piece, in generation order -
-    concatenating them all must reconstruct full_text exactly.
+    Uses substring search on the assembled text rather than JSON parsing,
+    so a truncated or malformed generation degrades to "every token is
+    CoT, no verdict token" instead of raising. `token_texts` must
+    concatenate to `full_text` exactly.
     """
     reasoning_key = '"reasoning": "'
     verdict_key = '"verdict": "'
@@ -178,10 +141,7 @@ def split_cot_and_verdict_tokens(
 
 
 def load_logprobs_record(path: Path) -> dict:
-    """Loads one call's saved logprobs file (judge.py's write_logprobs()).
-    Thin I/O wrapper, kept separate from compute_logprob_signals() so that
-    function stays pure and easy to test against hand-built data.
-    """
+    """One call's saved logprobs file (judge.py's write_logprobs())."""
     with gzip.open(path, "rt", encoding="utf-8") as f:
         return json.loads(f.readline())
 
@@ -192,27 +152,16 @@ def compute_logprob_signals(
     token_texts: list[str],
     token_logprobs: list[dict],
 ) -> dict:
-    """Everything derivable from one call's full per-token logprobs (D4,
-    amended 4 Sep 2026): the CoT aggregate statistics, `verdict_token_logprob`,
-    and `p_a`. Needs the full logprobs, not just raw_output text - this is
-    why these fields live here and not in parse_verdict_and_confidence().
+    """The CoT aggregates, `verdict_token_logprob`, and `p_a` for one call.
 
-    Args (all as loaded from `load_logprobs_record()`, i.e. straight out of
-    JSON - NOT vLLM's live objects):
-      token_ids: the actually-generated token id at each position (ints).
-      token_texts: that same sequence's decoded text, same order/length.
-      token_logprobs: one dict per position, {str(token_id): {"logprob":
-        float, "decoded_token": str}} - JSON object keys are always
-        strings, even though the ids themselves are ints, so lookups here
-        use str(token_ids[i]), never token_ids[i] directly.
+        p_a = P(A) / (P(A) + P(B)), at the verdict token position
 
-    Returns:
-      dict with verdict_token_logprob, p_a, cot_logprob_{mean,min,std,p10},
-      cot_entropy_mean, n_cot_tokens. p_a is None whenever "A"/"B" aren't
-      both present among the position's top-K candidates (e.g. an
-      extremely confident model whose runner-up fell outside the top 20) -
-      D6's sample_idx==0-only validity still applies at the call site,
-      this function doesn't know sample_idx and doesn't enforce it.
+    renormalized over just the two allowed answers. None when "A" and "B"
+    aren't both among that position's top-K candidates. p_a is only valid
+    for sample_idx == 0 (D6) - enforced by callers, not here.
+
+    Inputs are as loaded from JSON, so `token_logprobs` is keyed by
+    str(token_id), never the int id.
     """
     cot_indices, verdict_idx = split_cot_and_verdict_tokens(token_texts, raw_output)
 
@@ -245,16 +194,10 @@ def compute_logprob_signals(
 
 
 def load_category_lookup() -> dict[int, str]:
-    """question_id -> category (writing|roleplay|reasoning|math|coding|
-    extraction|stem|humanities), from the canonical 80-question MT-Bench
-    set. NOT available in lmsys/mt_bench_human_judgments itself - verified
-    empirically that neither its 'human' nor 'gpt4_pair' split carries a
-    category column, since category is a property of the QUESTION, not the
-    vote. philschmid/mt-bench is a clean HF mirror of the original benchmark
-    question set that does carry it; cross-checked question_id=81 ->
-    'writing' against the human-judgments dataset's own question_id=81 (a
-    Hawaii travel-blog prompt) to confirm the join key actually lines up
-    before trusting it.
+    """question_id -> MT-Bench category. The human-judgments dataset has no
+    category column (it's a property of the question, not the vote), so it
+    comes from philschmid/mt-bench, a mirror of the original 80-question
+    set whose question_ids line up with the judgments dataset's.
     """
     ds = load_dataset(_CATEGORY_DATASET, split="train")
     return {int(row["question_id"]): row["category"] for row in ds}
@@ -263,16 +206,9 @@ def load_category_lookup() -> dict[int, str]:
 def build_calls_dataframe(
     checkpoint_path: Path, runs_dir: str, category_lookup: dict[int, str]
 ) -> pd.DataFrame:
-    """One condition's raw checkpoint (runs/judge_{condition}.jsonl) ->
-    one row per call, with parse_verdict_and_confidence(), reasoning_length()
-    (-> `reasoning_len`, task 5.2's `judge_output_len` source column), and
-    compute_logprob_signals() merged in, category backfilled from
-    category_lookup (the raw checkpoint's own `category` is always None -
-    judge.py copies it straight from items_df, which never had it - see
-    load_category_lookup()'s docstring).
-
-    Pure row-by-row transformation, no grouping or aggregation - that's
-    items.parquet's job (src/signals.py), not this function's.
+    """One condition's checkpoint -> one row per call, with the parsed
+    verdict/confidence, reasoning_len, and logprob signals merged in and
+    `category` backfilled (judge.py's own category field is always None).
     """
     records = []
     with open(checkpoint_path, "r", encoding="utf-8") as f:

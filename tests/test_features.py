@@ -1,5 +1,5 @@
 """Tests for src/features.py: tier column sets, no-leakage, population
-filtering. See TASKS.md task 5.2.
+filtering.
 
 Uses a hand-built synthetic items.parquet-shaped DataFrame throughout,
 not the real (gitignored) results/items.parquet - tests must be
@@ -29,7 +29,7 @@ def _fake_items(n: int = 3, **overrides) -> pd.DataFrame:
     """One synthetic items.parquet row per index 0..n-1, every column the
     real table carries (CLAUDE.md §3's schema) with deterministic, always-
     defined values - including every Tier A/B/C column and the four
-    leakage columns task 5.2's DoD explicitly checks are excluded.
+    leakage columns that must never appear in a tier.
 
     `overrides`: {column_name: list-of-n-values} to replace specific
     columns for one test (e.g. injecting a None to test filtering).
@@ -177,7 +177,7 @@ def test_load_rq4_population_drops_rows_with_undefined_len_ratio_or_longer_is_ch
 
 def test_load_rq4_population_then_every_tier_is_still_nan_free(tmp_path):
     # End-to-end: the filtering in load_rq4_population() is specifically
-    # what makes task 5.2's "no NaNs" DoD hold - confirm the composition
+    # what makes the tiers NaN-free - confirm the composition
     # of the two pieces, not just each in isolation.
     items = pd.concat(
         [

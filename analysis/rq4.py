@@ -1,228 +1,22 @@
-"""RQ4 tasks 5.5 (tier ablation), 5.6 (H4, the continuous disagreement
-interaction), 5.7 (transfer test 1: train on clean, test on verbose),
-5.8 (transfer test 2: LeaveOneGroupOut over category), 5.9 (meta-model
-calibration: reliability diagram + coefficients), and 5.9c (frequentist
-vs Bayesian head-to-head) - same RQ, same file, mirroring how
-analysis/rq3.py holds both of RQ3's sub-tasks (4.3, 4.4) rather than
-splitting per-task. See TASKS.md tasks 5.5-5.9c, PLAN.md §2.2's reframe
-("which feature family carries the signal"), §2.3 ("the label
-problem"), and §2.4 ("the transfer test").
+"""RQ4: can a cheap meta-model beat the best single signal at predicting
+judge error? (PLAN.md §2) - plus the Bayesian arm's RQ5 verbose-shift check.
 
 `python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration,bayesian_comparison,verbose_shift}`
-- each task is its own CLI invocation, not run together, since the
-ablation alone is already several hundred model fits; running all three
-on every invocation would silently multiply that cost for no reason most
-of the time.
 
---- Task 5.9c (frequentist vs Bayesian head-to-head) -----------------
+Each task is its own invocation; several run hundreds of model fits.
 
-Population/tier: load_rq4_population() (N=1819), Tier A - matching
-5.9b's own choice, NOT 5.9's Tier C. The comparison needs both arms on
-the SAME feature set or it conflates "Bayesian vs frequentist" with
-"different features" (same apples-to-apples discipline as 5.7's D21
-feature-parity fix) - 5.9's Tier C choice answered a different question
-(which feature family carries signal), not this one.
+  ablation             5.5  tier A -> B -> C on human_agreed items (N=556),
+                            with permutation nulls and paired tier steps
+  h4                   5.6  correct ~ oof_score * d_human, cluster bootstrap
+  transfer             5.7  train on clean, evaluate frozen on verbose
+  category             5.8  LeaveOneGroupOut over the 8 categories
+  calibration          5.9  meta-model reliability + Tier C coefficients
+  bayesian_comparison  5.9c LogReg vs Bayesian hierarchical model, Tier A
+  verbose_shift        5.9f Bayesian epistemic/aleatoric, clean vs verbose
 
-AUROC: D8's own convention for BOTH arms - mean + across-repeat spread
-(min/max across the 10 repeats' own AUROCs), never a within-split CI.
-
-ECE/Brier: one P(correct) per item, averaged OOF across the 10 repeats
-(frequentist: run_predictor's own oof_pred, averaged; Bayesian:
-BayesianRepeatResult.oof_pred, averaged the same way) - reusing D8's
-established "average across repeats before scoring a per-item metric"
-recipe, not a new one.
-
-NLL/coverage_90 (Bayesian-only, D22 - "the last two exist only for the
-Bayesian arm, since the frequentist model has no native posterior"):
-  - Per-item posterior predictive draws are POOLED across all 10
-    repeats (np.concatenate, not averaged) - each repeat is an
-    independent full refit on a different fold partition, so pooling
-    combines posterior uncertainty AND partition variability into one
-    richer per-item predictive sample, rather than discarding 9 of the
-    10 repeats' worth of draws.
-  - NLL: the proper posterior-predictive log-likelihood per item -
-    average the BERNOULLI LIKELIHOOD across pooled draws FIRST, then
-    take -log. Never plug the mean probability into a point-NLL formula
-    - that would just be Brier with extra steps and throw away exactly
-    what makes this metric "Bayesian" (the draws' own spread).
-  - coverage_90: D22 doesn't specify how "credible-interval coverage"
-    applies to a BINARY outcome - a single 0/1 draw can't meaningfully
-    "fall inside" a probability interval the way a continuous value
-    can. Resolved (21 Sep 2026 discussion) via BIN-AGGREGATE coverage,
-    reusing ece()'s own quantile binning (get_bin_edges): per bin, does
-    the bin's EMPIRICAL accuracy (many real 0/1 outcomes aggregated
-    into one meaningful continuous quantity) fall inside that bin's OWN
-    pooled 90% credible interval (5th/95th percentile of every draw of
-    every item in the bin)? coverage_90 = fraction of bins where it
-    does - the same "turn per-item binary noise into a checkable
-    per-bin quantity" move ECE itself already makes.
-
-Writes results/rq4_bayesian_comparison_{model_slug}.csv (D26) +
-results/figures/reliability_rq4_bayesian_meta_model_{model_slug}.png +
-results/figures/rq4_bayesian_convergence_{model_slug}.png (the real
-50-fold-fit R-hat picture 5.9b's own results were missing).
-
---- Task 5.5 (tier ablation) ---
-
-Population: features.py::load_rq4_population() (N=1819, the shared
-base every RQ4 tier uses), further restricted to `human_agreed == True`
-(D16) - N=556, 79/80 question_id groups still represented. This is a
-MUCH bigger cut than it might look (1819 -> 556, 69% of the population
-dropped) and it is NOT population-neutral: confirmed empirically
-(18 Sep 2026 discussion) that judge accuracy is measurably higher on
-this restricted population (75.8% -> 78.4%) than on the full RQ4 base -
-human-agreed items are, on average, easier ones.
-
-THIS IS WHY THE BASELINE IS RECOMPUTED HERE, NOT REUSED FROM
-results/rq2_table_{model_slug}.csv: RQ2's stored AUROC numbers were
-computed on RQ1's own population (N=1836, clean/P1, human_label present -
-NO human_agreed restriction). Comparing a tier-ablation score computed
-on the 556-item restricted population directly against a baseline
-computed on the 1836-item unrestricted one would be comparing across two
-different populations with two different difficulty levels - exactly
-the kind of silent population mismatch CLAUDE.md invariant 14 warns
-about for a different filter, and just as real here.
-
-Writes results/rq4_ablation_{model_slug}.csv (one row per (tier, model)
-pair) and results/figures/rq4_ablation_{model_slug}.png
-(src/plots.py::plot_rq4_ablation - grouped bar chart, baseline as a
-reference line + shaded CI band).
-
---- Task 5.6 (H4, continuous form, D9) ---
-
-Population: clean/P1, human_label not null, n_human_votes >= 2 - D9's
-own population, NOT task 5.5's human_agreed-restricted one and NOT
-features.py::load_rq4_population()'s len_ratio-filtered one either. H4
-is specifically about whether predictability trades off CONTINUOUSLY
-against human consensus strength (d_human), so it deliberately keeps
-every contested item 5.5 excluded - that's the whole point of using
-every item with >=2 votes rather than only the agreed ones. Confirmed
-empirically: N=595, 79/80 question_id groups (larger than D9's own
-rough ~350-item estimate, made before real data existed).
-
-"The predictor" (PLAN.md §2.3) is Tier A + logreg specifically, not a
-free choice among all 6 tier/model combinations - documented in
-compute_h4_oof_score()'s own docstring: task 5.5 found no significant
-difference between any tier or model (every paired-progression CI
-crossed zero), so Tier A is representative, not arbitrary, and it
-avoids a second population restriction (Tier B/C need
-len_ratio/longer_is_chosen, undefined for 17 items - task 5.2 - which
-would shrink H4's already-small ~600-item population for no reason tied
-to H4 itself). logreg over histgbm because H4's own interaction model
-is itself a logistic regression - keeping "the predictor" and "the
-interaction test" in one coherent model family.
-
-Method (PLAN.md §2.3, D15 - mandatory, not a default choice):
-  1. Out-of-fold P(correct) from the fixed 10x5 repeated CV (D8),
-     averaged across repeats to one score per item - IN-SAMPLE
-     predictions would bias the interaction before the CI method even
-     matters.
-  2. Fit `correct ~ oof_score * d_human` - a 3-feature logistic
-     regression (oof_score, d_human, their product), reading off the
-     product term's own coefficient.
-  3. Cluster-bootstrap over question_id, B=2000, REFITTING each
-     resample, percentile CI on the interaction coefficient - never a
-     statsmodels/sklearn default standard error (those assume i.i.d.
-     rows; rows cluster inside ~80 questions, invariant 2).
-
-DoD: the interaction coefficient with its cluster-bootstrap CI, and the
-aleatoric/epistemic reading in one sentence - no figure required.
-
---- Task 5.9 (meta-model calibration: reliability + coefficients) -----
-
-Population: features.py::load_rq4_population() (N=1819) - the same RQ4
-base 5.3-5.5 use, NOT H4's ≥2-votes population or 5.5's human_agreed-
-restricted one: this task is about the CORE predictor's own calibration
-and feature weights, not a sub-question scoped to a smaller population.
-
-Model: Tier C + logreg, not Tier A (task 5.6's choice) or a free pick
-among all 6 tier/model combinations. Tier C specifically because this
-task's whole point - the DoD's own words, "the coefficients are the
-result, more than the AUROC is" - is best answered by a model that
-actually CONTAINS all three feature families at once; Tier A alone
-couldn't show whether Tier B/C's surface/CoT features carry any weight.
-logreg (not histgbm) because raw coefficients are only directly
-interpretable for the linear model - HistGBM has no comparable
-per-feature weight.
-
-Reliability diagram: out-of-fold P(correct) from the standard 10x5
-repeated CV (D8), averaged across repeats - the SAME recipe
-compute_h4_oof_score() already established for H4, pointed at Tier C
-instead of Tier A - never in-sample predictions, which would look
-artificially well-calibrated. Plotted as P(judge is wrong) =
-1 - mean_oof_P(correct) against the actual wrong/right outcome, via
-src/plots.py's existing plot_reliability_diagram() (RQ1, task 2.6) -
-reused directly rather than a second implementation.
-
-Coefficients: LogisticRegression(C=1.0) fit ONCE on the FULL population
-(not averaged across CV folds - a coefficient is a property of one fit
-on the data, not a per-repeat quantity the way an AUROC is). CI via a
-cluster-bootstrap over question_id (invariant 2, D15's same standard-
-error discipline as H4) that resamples ONCE per replicate and refits
-the WHOLE coefficient vector together (bootstrap_coefficient_cis) -
-not src/boot.py's cluster_bootstrap() called once per feature, which
-would (a) refit ~37x more than necessary per replicate for no benefit,
-since one refit already yields every feature's replicate value at once,
-and (b) incorrectly treat each feature's bootstrap draw as independent
-when they share the same resampled rows.
-
-Writes results/rq4_coefficients_{model_slug}.csv and
-results/figures/rq4_coefficients_{model_slug}.png (D26/DoD) +
-results/figures/reliability_rq4_meta_model_{model_slug}.png.
-
---- Task 5.9f (verbose-shift validation, D21 amended) -----------------
-
-Population: analysis/rq3.py's own load_rq3b_items() (N=1836), the SAME
-paired clean/verbose population task 5.7's transfer test already uses -
-not re-derived a third time.
-
-Feature set: TRANSFER_SAFE_COLUMNS (Tier A minus conf_sc/conf_ens/
-ens_entropy_*), the SAME D21 feature-parity fix task 5.7 already
-established, now applied to the Bayesian model too, exactly as D21
-itself requires ("for every model compared... not a Bayesian-specific
-carve-out").
-
-Fit ONCE on all of clean (no CV split) - mirrors 5.7's own "one
-offline-trained model" transfer-test design, not the 10x5 repeated-CV
-protocol tasks 5.9b/5.9c/5.9d use. This is deliberate: 5.9f is asking
-whether ONE deployed model's own uncertainty estimate correctly
-recognizes distribution shift, not characterizing training variance.
-
-⚠️ Evaluation uses src/bayesian.py::predict_in_sample(), NEVER
-predict_held_out(). See DECISIONS.md's D21 amendment (22 Sep 2026) for
-the full reasoning - in short: clean and verbose are paired on the
-EXACT SAME 80 questions (confirmed empirically), so verbose's rows
-already have a real fitted alpha_q; predict_held_out()'s marginalization
-would discard that real information AND confound the "does epistemic
-rise under shift" test with an unrelated marginalization-noise
-artifact. predict_in_sample() uses the training fold's own
-question_id_to_index mapping (build_group_index()'s third return value)
-for BOTH the clean (in-sample) and verbose (shifted) evaluations, so
-the only thing that differs between them is the feature values
-themselves - exactly the variable this test is about.
-
-The preregistered prediction (professor feedback "consequences",
-D21/D23): epistemic uncertainty rises under this distribution shift
-while aleatoric stays flat. Tested via a PAIRED cluster-bootstrap
-(invariant 3 - same items, two conditions) on mean(verbose) -
-mean(clean), separately for aleatoric and epistemic - "rose" means the
-epistemic gap's CI is entirely above 0; "stayed flat" means the
-aleatoric gap's CI includes 0.
-
-Lives in THIS file (rq4.py), not rq5.py, because it reuses 5.7's own
-transfer-test machinery (TRANSFER_SAFE_COLUMNS, build_transfer_xy) -
-same principle as compute_bayesian_arm() living here and being
-imported BY rq5.py's own 5.9d, rather than duplicated there. Output
-filenames still use the "rq5_" prefix, matching where this task's own
-DoD/REPORT.md section actually sits (TASKS.md 5.9f, 5.11's own "RQ5
-section: ... the verbose-shift check (5.9f)") - code location and
-result-file naming answer two different questions (which machinery does
-this reuse vs. which RQ does this result belong to) and are allowed to
-disagree.
-
-Writes results/rq5_verbose_shift_{model_slug}.csv (D26, one wide row:
-both conditions' means, both gaps with CIs, both verdict booleans) +
-results/figures/rq5_verbose_shift_{model_slug}.png.
+Populations differ by task on purpose - each function's docstring says
+which and why. The "rq5_" output name of verbose_shift reflects the RQ it
+answers; it lives here because it reuses 5.7's transfer machinery.
 """
 
 import argparse
@@ -232,6 +26,7 @@ import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import LeaveOneGroupOut
+from sklearn.preprocessing import StandardScaler
 
 from analysis.rq1 import SIGNALS
 from analysis.rq3 import load_rq3b_items
@@ -278,40 +73,25 @@ from src.predictor import (
 )
 
 
+# --- Task 5.5: tier ablation ----------------------------------------------
+
+
 def load_ablation_population(items_parquet: str) -> pd.DataFrame:
-    """load_rq4_population()'s output, further restricted to
-    human_agreed == True (D16: human_unanimous AND n_human_votes >= 2) -
-    task 5.5's own population, per its DoD. See this module's own
-    docstring for why this is a substantial, non-neutral cut (N=1819 ->
-    N=556) rather than a minor refinement.
+    """The RQ4 base restricted to human_agreed items (D16): N=1,819 -> 556.
+    Not a neutral cut - agreed items are easier (accuracy 75.8% -> 78.4%) -
+    so every comparison in this task is computed on this population.
     """
     population = load_rq4_population(items_parquet)
     return population[population["human_agreed"]]
 
 
 def compute_baseline_auroc(population: pd.DataFrame, seed: int) -> dict:
-    """The best single confidence signal's AUROC(uncertainty -> error) on
-    THIS task's own population (not RQ2's N=1836 population - see module
-    docstring). Recomputed here rather than read from
-    results/rq2_table_{model_slug}.csv, specifically so the ablation's
-    "did tier X beat the baseline" comparison is apples-to-apples on one
-    population, the same principle that already governs why all three
-    tiers share one population (features.py's own module docstring).
-
-    Reuses RQ2's exact recipe (analysis/rq2.py::compute_signal_rq2_metrics's
-    own `_auroc` closure): uncertainty = 1 - signal, auroc_error(uncertainty,
-    correct), cluster-bootstrap CI grouped on question_id (invariant 2).
-    Loop over analysis.rq1.SIGNALS (conf_verb/conf_lp/conf_sc/conf_bpe -
-    NOT conf_ens, which is a separate signal outside RQ1/RQ2/this
-    baseline's own scope), take whichever has the highest point AUROC.
-
-    Args:
-        population: load_ablation_population()'s output.
-        seed: config.seed.
-
-    Returns:
-        dict with signal (the winning signal's name), auroc, auroc_ci_low,
-        auroc_ci_high.
+    """The best single signal's AUROC(uncertainty -> error) on THIS
+    population, recomputed rather than read from RQ2's table (which used
+    the 1,836-item population) so baseline and tiers share their items.
+    RQ2's recipe: uncertainty = 1 - signal, cluster-bootstrap CI. The winner
+    is chosen on the point estimate alone; its CI is reported, not used to
+    pick.
     """
     def _auroc(df: pd.DataFrame) -> float:
         uncertainty = 1 - df[signal].to_numpy(dtype=float)
@@ -320,11 +100,6 @@ def compute_baseline_auroc(population: pd.DataFrame, seed: int) -> dict:
     winning_signal = {"signal": None, "auroc": float("-inf"), "auroc_ci_low": None, "auroc_ci_high": None}
     for signal in SIGNALS:
         point, ci_low, ci_high = cluster_bootstrap(population, _auroc, "question_id", seed=seed)
-        # Selection is on the point estimate ALONE - the CI is reported
-        # for whichever signal wins, never used to decide who wins (a
-        # signal with a genuinely higher point estimate but a wider/
-        # noisier CI must still win; comparing CI bounds here could
-        # silently reject the actual best signal).
         if point > winning_signal["auroc"]:
             winning_signal["signal"] = signal
             winning_signal["auroc"] = point
@@ -335,23 +110,8 @@ def compute_baseline_auroc(population: pd.DataFrame, seed: int) -> dict:
 
 
 def compute_tier_model_result(population: pd.DataFrame, tier_name: str, model_name: str, seed: int) -> dict:
-    """One (tier, model) cell of the ablation table: runs the full D8
-    repeated-CV protocol (predictor.py::run_predictor, 10 repeats) and
-    summarizes it down to one point estimate + one spread, matching the
-    SAME across-repeat-spread convention tasks 5.3/5.4 already
-    established (min/max across the 10 repeats' own whole-population
-    AUROCs - NOT a bootstrap CI; D8's own explicit instruction is that
-    this spread IS the headline uncertainty here, not a stand-in for one).
-
-    Args:
-        population: load_ablation_population()'s output.
-        tier_name: "A", "B", or "C" (TIER_BUILDERS's keys).
-        model_name: "logreg" or "histgbm" (MODEL_FACTORIES's keys).
-        seed: config.seed.
-
-    Returns:
-        dict with tier, model, auroc_mean, auroc_low, auroc_high,
-        n_repeats.
+    """One (tier, model) cell: the D8 protocol's mean AUROC and its
+    across-repeat min/max - D8's headline uncertainty, not a bootstrap CI.
     """
     results = run_predictor(population, TIER_BUILDERS[tier_name], model_name, seed)
     aurocs = [r.auroc for r in results]
@@ -368,30 +128,11 @@ def compute_tier_model_result(population: pd.DataFrame, tier_name: str, model_na
 def compute_permutation_null_summary(
     population: pd.DataFrame, tier_name: str, model_name: str, seed: int, n: int = 50
 ) -> dict:
-    """Invariant 12 for one (tier, model) cell - reuses
-    predictor.py::permutation_null() (task 5.4) directly, but pointed at
-    THIS task's own 556-item human_agreed population, not the earlier
-    1819-item full-population smoke test's - a different, smaller
-    population needs its own null, not a borrowed one.
+    """Invariant 12 for one cell, on this population. n=50 rather than
+    200: every observed AUROC here sits near 0.8 against nulls near 0.5-0.57,
+    so finer percentile resolution can't change the reading.
 
-    n=50, not task 5.4's default 200: every one of these six AUROCs sits
-    around 0.80-0.82, far from a 0.5 null (confirmed on the first check,
-    Tier A/logreg: null mean 0.4928 at n=200) - this isn't a borderline
-    case where finer percentile resolution would change the reading, so
-    a smaller n is a deliberate, documented cost-saving here, not a
-    silent weakening of the check.
-
-    Args:
-        population: load_ablation_population()'s output.
-        tier_name, model_name, seed: same as compute_tier_model_result().
-        n: permutation count (50, reduced from task 5.4's 200 - see above).
-
-    Returns:
-        dict with tier, model, observed_auroc, null_mean, null_std,
-        percentile (observed's percentile of the null distribution), and
-        null_aurocs (the raw n-length array itself, for
-        plot_rq4_permutation_nulls() - NOT written to the summary CSV,
-        see main()).
+    `null_aurocs` (the raw array) is returned for the figure, not the CSV.
     """
     X, y, groups = build_xyg(population, TIER_BUILDERS[tier_name])
     observed = compute_tier_model_result(population, tier_name, model_name, seed)["auroc_mean"]
@@ -408,18 +149,9 @@ def compute_permutation_null_summary(
 
 
 def compute_tier_oof_uncertainty(population: pd.DataFrame, tier_name: str, model_name: str, seed: int) -> np.ndarray:
-    """Averages a (tier, model)'s out-of-fold P(correct) predictions
-    across its 10 D8 repeats into one value per item - the SAME recipe
-    task 5.6 (H4) already plans to use to turn a repeated-CV protocol
-    into one score per item. Converted to "uncertainty" scale
-    (1 - mean P(correct)) so it's directly comparable to the raw
-    confidence signals through the same auroc_error() convention every
-    other AUROC in this project already uses.
-
-    Positionally aligned to `population`'s own row order throughout -
-    encode_features()/run_predictor() never reorder rows, so index i
-    here is item i of `population`, matching RepeatResult.oof_pred's own
-    documented contract (predictor.py).
+    """1 - (out-of-fold P(correct) averaged over the 10 repeats), one value
+    per item, positionally aligned with `population` - on the same
+    uncertainty scale as a raw signal's 1 - conf.
     """
     results = run_predictor(population, TIER_BUILDERS[tier_name], model_name, seed)
     mean_oof_pred = np.mean([r.oof_pred for r in results], axis=0)
@@ -427,13 +159,8 @@ def compute_tier_oof_uncertainty(population: pd.DataFrame, tier_name: str, model
 
 
 def _predictions_df(population: pd.DataFrame, uncertainty: np.ndarray) -> pd.DataFrame:
-    """question_id/correct/uncertainty, positionally aligned to
-    `population` - the shared shape paired_cluster_bootstrap's stat_fn
-    needs on both sides of a comparison. Using the SAME column name
-    ("uncertainty") for a raw signal (the baseline) and a model's
-    1-mean(P(correct)) (a tier) is what lets one stat_fn serve every
-    pairing - RQ1's own compute_verdict_gap() renames columns to a
-    shared name for exactly this reason.
+    """question_id / correct / uncertainty - one shared column name so one
+    stat_fn scores any baseline or tier in a paired comparison.
     """
     return pd.DataFrame(
         {
@@ -449,30 +176,12 @@ def _auroc_from_uncertainty(df: pd.DataFrame) -> float:
 
 
 def compare_tier_progression(population: pd.DataFrame, baseline_signal: str, seed: int) -> pd.DataFrame:
-    """Paired cluster-bootstrap comparison (invariant 2/3) of each step
-    in the tier progression - baseline -> A, A -> B, B -> C - per model.
-    Answers "is this step's apparent change real" directly, rather than
-    eyeballing whether two bars' spread whiskers overlap on the ablation
-    chart. Reuses paired_cluster_bootstrap (task 2.4) - the SAME tool
-    already used for RQ1's judge_verdict-vs-verdict_bidir gap and RQ3b's
-    clean-vs-verbose deltas, not a new technique for this comparison.
+    """Paired cluster-bootstrap CI on each step's AUROC change (baseline ->
+    A, A -> B, B -> C), per model - the same items scored two ways, so the
+    test is whether a step is real, not whether two bars' whiskers overlap.
 
-    Every comparison is on the SAME 556 items (same question_id universe
-    on both sides of every pairing - paired_cluster_bootstrap's own
-    requirement), just scored by a different tier/signal's uncertainty -
-    exactly the "same items, two conditions" shape that function exists
-    for.
-
-    Args:
-        population: load_ablation_population()'s output.
-        baseline_signal: the winning signal's name from
-            compute_baseline_auroc() (e.g. "conf_bpe").
-        seed: config.seed.
-
-    Returns:
-        DataFrame, one row per (model, comparison) - auroc_diff (hi's
-        AUROC minus lo's), ci_low, ci_high. A CI excluding 0 means that
-        step's change is real, not spread-bar overlap noise.
+    Returns one row per (model, comparison): auroc_diff (higher stage minus
+    lower), ci_low, ci_high.
     """
     baseline_uncertainty = 1 - population[baseline_signal].to_numpy(dtype=float)
 
@@ -501,13 +210,13 @@ def compare_tier_progression(population: pd.DataFrame, baseline_signal: str, see
     return pd.DataFrame.from_records(rows)
 
 
+# --- Task 5.6: H4 --------------------------------------------------------
+
+
 def load_h4_population(items_parquet: str) -> pd.DataFrame:
-    """D9's own population for H4: clean/P1, human_label not null,
-    n_human_votes >= 2. Deliberately NOT load_ablation_population()'s
-    human_agreed-restricted population, and NOT
-    features.py::load_rq4_population()'s len_ratio-filtered one either -
-    see this module's own docstring for why H4 needs every contested
-    item, not just the agreed ones.
+    """D9's population: clean/P1, human_label present, n_human_votes >= 2
+    (N=595). It keeps the contested items the ablation drops - H4 is about
+    how predictability varies with consensus, so it needs them.
     """
     items = pd.read_parquet(items_parquet)
     items = items[(items["condition"] == "clean") & (items["prompt_variant"] == "P1")]
@@ -516,31 +225,23 @@ def load_h4_population(items_parquet: str) -> pd.DataFrame:
 
 
 def compute_h4_oof_score(population: pd.DataFrame, seed: int) -> np.ndarray:
-    """Tier A + logreg's averaged out-of-fold P(correct) across the 10
-    D8 repeats - "the predictor's output" H4 tests the interaction
-    against (PLAN.md §2.3). See this module's own docstring for why
-    Tier A + logreg specifically, not a free choice among all six tier/
-    model combinations.
+    """"The predictor" for H4: Tier A + logreg, out-of-fold P(correct)
+    averaged over the 10 repeats. Tier A because 5.5 found no tier or model
+    better than another and B/C would cut 17 more items; logreg because the
+    interaction test is itself a logistic regression.
     """
     results = run_predictor(population, build_tier_a, "logreg", seed)
     return np.mean([r.oof_pred for r in results], axis=0)
 
 
 def _h4_design_matrix(oof_score: np.ndarray, d_human: np.ndarray) -> np.ndarray:
-    """[oof_score, d_human, oof_score*d_human] - the shared 3-column
-    design both fit_interaction_coefficient() (per bootstrap replicate)
-    and fit_h4_interaction_model() (once, for the figure) build, kept in
-    one place so the two fits can never silently drift apart.
-    """
+    """[oof_score, d_human, oof_score * d_human], shared by both H4 fits."""
     return np.column_stack([oof_score, d_human, oof_score * d_human])
 
 
 def build_h4_predictions_df(population: pd.DataFrame, seed: int) -> pd.DataFrame:
-    """question_id/correct/d_human/oof_score, built once - shared by
-    compute_h4_interaction() (the bootstrap CI) and
-    compute_h4_interaction_curves() (the optional figure), so the
-    expensive 10x5-fold OOF computation (compute_h4_oof_score) only
-    ever runs once per main_h4() invocation, not twice.
+    """question_id / correct / d_human / oof_score, built once per run so
+    the 10x5 CV isn't repeated for the figure.
     """
     oof_score = compute_h4_oof_score(population, seed)
     return pd.DataFrame(
@@ -554,14 +255,10 @@ def build_h4_predictions_df(population: pd.DataFrame, seed: int) -> pd.DataFrame
 
 
 def fit_interaction_coefficient(df: pd.DataFrame) -> float:
-    """correct ~ oof_score * d_human (D9/PLAN.md §2.3): a 3-feature
-    logistic regression - oof_score, d_human, and their product - with
-    the product term's own coefficient read off as the H4 statistic.
-    LogisticRegression(C=1.0), matching predictor.py's own established
-    hyperparameter choice rather than a special-cased fit for this one
-    test. Called once per cluster-bootstrap replicate (D15 - refitting
-    each resample is mandatory, not just resampling a precomputed
-    coefficient), so this must stay a real fit, not a shortcut.
+    """The H4 statistic: the product term's coefficient in
+    correct ~ oof_score + d_human + oof_score * d_human
+    (LogisticRegression(C=1.0), predictor.py's fixed choice). Refit on every
+    bootstrap replicate (D15).
     """
     X = _h4_design_matrix(df["oof_score"].to_numpy(), df["d_human"].to_numpy())
     y = df["correct"].astype(int).to_numpy()
@@ -571,16 +268,9 @@ def fit_interaction_coefficient(df: pd.DataFrame) -> float:
 
 
 def compute_h4_interaction(predictions_df: pd.DataFrame, seed: int) -> dict:
-    """The bootstrap half of the H4 pipeline: cluster-bootstrap CI on
-    the interaction coefficient (D15's mandated method - see this
-    module's own docstring for the three-step recipe).
-
-    Args:
-        predictions_df: build_h4_predictions_df()'s output.
-        seed: config.seed.
-
-    Returns:
-        dict with n (population size), interaction_coef, ci_low, ci_high.
+    """Cluster-bootstrap CI (question_id, B=2000, refit per replicate) on
+    the interaction coefficient - D15's method; never a default standard
+    error, which assumes independent rows.
     """
     point, ci_low, ci_high = cluster_bootstrap(
         predictions_df, fit_interaction_coefficient, "question_id", n=2000, seed=seed
@@ -589,15 +279,7 @@ def compute_h4_interaction(predictions_df: pd.DataFrame, seed: int) -> dict:
 
 
 def fit_h4_interaction_model(predictions_df: pd.DataFrame) -> LogisticRegression:
-    """Fits correct ~ oof_score * d_human ONCE on the real (non-
-    bootstrapped) data - the same design fit_interaction_coefficient()
-    uses per bootstrap replicate, but returned whole here for
-    compute_h4_interaction_curves()'s predicted-probability curves
-    (task 5.6's optional figure, requested 19 Sep 2026 after the numeric
-    result). Presentation only - the coefficient's own CI always comes
-    from compute_h4_interaction()'s bootstrap, never from this fit's own
-    (uncorrected, i.i.d.-assuming) standard errors.
-    """
+    """The same fit once on the real data, for the figure's curves only."""
     X = _h4_design_matrix(predictions_df["oof_score"].to_numpy(), predictions_df["d_human"].to_numpy())
     y = predictions_df["correct"].astype(int).to_numpy()
     model = LogisticRegression(C=1.0)
@@ -606,40 +288,11 @@ def fit_h4_interaction_model(predictions_df: pd.DataFrame) -> LogisticRegression
 
 
 def compute_h4_interaction_curves(predictions_df: pd.DataFrame, n_grid: int = 100) -> dict:
-    """Predicted P(correct) vs. oof_score curves at each DISTINCT
-    d_human level actually present in the data - NOT a min/median/max
-    summary, which collapses under this population's real skew (564/595
-    items sit at d_human=0.5, so the median trivially equals the max -
-    confirmed empirically, 19 Sep 2026). This dataset has exactly 3
-    distinct levels (~0.167, ~0.25, 0.5 - vote-count-driven discreteness,
-    not a design choice); using them directly shows the interaction
-    faithfully rather than forcing a 3-point summary onto data that has
-    no meaningfully continuous median.
-
-    ALSO returns the same curves on the log-odds (linear-predictor)
-    scale, not just probability - checked empirically (19 Sep 2026) that
-    the probability-space curves alone visually undersell the fitted
-    interaction: the model's log-odds slope w.r.t. oof_score genuinely
-    increases with d_human (that's what the positive interaction
-    coefficient means), but in probability space that gets compressed by
-    sigmoid saturation, specifically in the high-oof_score region where
-    most of this project's real data actually sits (most judge calls are
-    high-confidence) - higher-d_human curves sit closer to the ceiling
-    there, where the sigmoid is flattest, visually muting a slope
-    difference that's actually large and clear on the log-odds scale
-    (where the model is literally linear and the interaction IS the
-    slope difference, undistorted).
-
-    Args:
-        predictions_df: build_h4_predictions_df()'s output.
-        n_grid: number of oof_score grid points per curve (100).
-
-    Returns:
-        dict with oof_score (the real, per-item values, for a rug plot),
-        oof_score_grid, d_human_values (the distinct levels, ascending),
-        predicted_curves (list of P(correct) arrays, one per
-        d_human_values entry, same order), log_odds_curves (the same
-        curves on the linear-predictor scale).
+    """Predicted P(correct) vs oof_score at each distinct d_human level in
+    the data (3 of them; 564/595 items sit at 0.5, so min/median/max would
+    collapse), in probability and log-odds. The log-odds curves show the
+    interaction undistorted; in probability space sigmoid saturation hides
+    it where most data sits (high oof_score).
     """
     model = fit_h4_interaction_model(predictions_df)
     d_human_values = sorted(predictions_df["d_human"].round(4).unique())
@@ -680,6 +333,10 @@ def main_h4(config_path: str) -> None:
     else:
         print("CI includes 0: no detectable interaction at this sample size - H4 neither supported nor refuted.")
 
+    table_path = f"{config.paths.results_dir}/rq4_h4_interaction_{config.model_slug}.csv"
+    pd.DataFrame.from_records([result]).to_csv(table_path, index=False)
+    print(f"Wrote 1 row to {table_path}")
+
     curves = compute_h4_interaction_curves(predictions_df)
     plot_h4_interaction(
         oof_score=curves["oof_score"],
@@ -691,32 +348,12 @@ def main_h4(config_path: str) -> None:
     )
 
 
-# --- Task 5.7 (transfer test 1: train on clean, test on verbose) -------
+# --- Task 5.7: transfer clean -> verbose -------------------------------------
 #
-# "Does an abstention layer trained on well-behaved data still work when
-# the judge is under attack?" (PLAN.md §2.4). Population: analysis/rq3.py's
-# load_rq3b_items() - the SAME clean/P1 vs verbose/P1 paired population
-# RQ3b already established (N=1836), not re-derived a third time.
-#
-# Feature-parity fix (D21, mandatory - not a Bayesian-specific carve-out):
-# Tier A minus {conf_sc, conf_ens, ens_entropy_total, ens_entropy_aleatoric,
-# ens_entropy_epistemic} - verbose has none of these (D19: self-consistency
-# sampling and the P2/P3 ensemble are both clean/P1-only). What survives is
-# just conf_verb/conf_lp/conf_bpe.
-#
-# Two numbers, computed with the SAME reduced feature set so the
-# comparison isolates the TRANSFER effect, not the feature-drop effect:
-#   - in-domain baseline: repeated grouped CV (D8) on clean alone - "how
-#     good is this reduced-feature model within its own training
-#     distribution."
-#   - transfer: fit ONCE on all of clean (frozen, no CV - this is about
-#     one offline-trained model's real deployment behavior), evaluate on
-#     all of verbose. CI via cluster-bootstrap over verbose's own
-#     question_id (invariant 2) - resampling the TEST set only, since the
-#     model itself is fixed, not refit per resample.
-#
-# DoD: ΔAUROC (transfer - in-domain) reported, for both LogReg and
-# HistGBM (D21 - not one model only).
+# Does an abstention layer trained on clean data still work when the judge
+# is attacked? Population: RQ3b's paired clean/verbose items (N=1,836).
+# Features: Tier A minus the signals verbose doesn't have (D21) - leaving
+# conf_verb, conf_lp, conf_bpe - for every model compared.
 
 TRANSFER_SAFE_COLUMNS = [
     c
@@ -726,13 +363,7 @@ TRANSFER_SAFE_COLUMNS = [
 
 
 def build_transfer_xy(items: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
-    """TRANSFER_SAFE_COLUMNS's features (D21), encoded (encode_features()
-    is a no-op on these three - all already numeric - kept for
-    consistency/robustness, not because it currently does anything), the
-    `correct` target, and `question_id` as the grouping column - the
-    (X, y, groups) triple both compute_transfer_baseline() and
-    compute_transfer_auroc() need, for either clean or verbose items.
-    """
+    """(X, y, groups) on TRANSFER_SAFE_COLUMNS, for clean or verbose items."""
     X = encode_features(items[TRANSFER_SAFE_COLUMNS].copy())
     y = items["correct"].astype(int).to_numpy()
     groups = items["question_id"].to_numpy()
@@ -740,14 +371,9 @@ def build_transfer_xy(items: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np
 
 
 def compute_transfer_baseline(clean_items: pd.DataFrame, model_name: str, seed: int) -> dict:
-    """In-domain baseline: repeated grouped CV (D8) on clean_items ALONE,
-    using the SAME reduced (transfer-safe) feature set the transfer test
-    itself uses. Holding the feature set fixed is what isolates the
-    transfer effect: D21's parity fix already costs some AUROC even
-    within clean (if conf_sc/conf_ens carried real signal), and without
-    this baseline using the identical reduced set, a ΔAUROC against the
-    full Tier A's own clean performance would conflate "moving to
-    verbose hurt" with "dropping two columns hurt."
+    """In-domain baseline: repeated grouped CV on clean alone, with the same
+    reduced features - so the transfer delta measures the move to verbose,
+    not the dropped features.
     """
     X, y, groups = build_transfer_xy(clean_items)
     results = repeated_stratified_group_kfold(X, y, groups, MODEL_FACTORIES[model_name], seed=seed)
@@ -756,15 +382,9 @@ def compute_transfer_baseline(clean_items: pd.DataFrame, model_name: str, seed: 
 
 
 def compute_transfer_auroc(clean_items: pd.DataFrame, verbose_items: pd.DataFrame, model_name: str, seed: int) -> dict:
-    """The real transfer number: fit ONCE on all of clean_items, evaluate
-    the frozen model on verbose_items. Deliberately not a CV protocol -
-    D21's question is about one offline-trained model's behavior under
-    attack, not about re-characterizing training variance.
-
-    CI via cluster-bootstrap over verbose_items' question_id (invariant
-    2) - the model is fixed/frozen going in, so each bootstrap replicate
-    only resamples which verbose items get evaluated, never refits the
-    model itself.
+    """Fit once on all of clean, evaluate the frozen model on verbose - one
+    offline-trained model's deployment behavior, not training variance.
+    The CI resamples verbose's questions only, since the model is fixed.
     """
     X_train, y_train, _ = build_transfer_xy(clean_items)
     X_test, y_test, groups_test = build_transfer_xy(verbose_items)
@@ -802,7 +422,7 @@ def main_transfer(config_path: str) -> None:
             f"{model_name}: transfer (clean->verbose) AUROC={transfer['auroc']:.4f} "
             f"[{transfer['ci_low']:.4f}, {transfer['ci_high']:.4f}] (cluster-bootstrap over verbose)"
         )
-        print(f"{model_name}: ΔAUROC (transfer - in-domain) = {delta:.4f}")
+        print(f"{model_name}: delta AUROC (transfer - in-domain) = {delta:.4f}")
 
         rows.append(
             {
@@ -818,7 +438,7 @@ def main_transfer(config_path: str) -> None:
         )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq4_transfer_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq4_transfer_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
@@ -834,32 +454,16 @@ def main_transfer(config_path: str) -> None:
     )
 
 
-# --- Task 5.8 (transfer test 2: LeaveOneGroupOut over category) --------
-#
-# Full Tier A (no exclusions - unlike 5.7,
-# this never leaves `clean`, so conf_sc/conf_ens stay valid on both
-# sides of every split). `category` is the GROUPING variable for the
-# split (LeaveOneGroupOut), never an input feature.
+# --- Task 5.8: LeaveOneGroupOut over category ------------------------------
 
 
 def compute_category_held_out_auroc(population: pd.DataFrame, model_name: str, seed: int) -> pd.DataFrame:
-    """LeaveOneGroupOut over `category` (8 MT-Bench categories, D-none -
-    this is a new grouping axis, not question_id): for each category,
-    fit `model_name` on the other 7 categories' rows, evaluate on the
-    held-out category alone. No shuffle/random_state/repeats - unlike
-    StratifiedGroupKFold, LeaveOneGroupOut is fully deterministic (one
-    fixed split per unique group value), so there's nothing to average
-    over the way D8's 10-seed protocol does.
+    """For each of the 8 categories: fit on the other 7, evaluate on the
+    held-out one. Full Tier A (this never leaves clean). `category` is the
+    grouping variable here, never a feature. LeaveOneGroupOut is
+    deterministic, so there are no repeats to average.
 
-    Args:
-        population: features.py::load_rq4_population()'s output.
-        model_name: "logreg" or "histgbm" (MODEL_FACTORIES's keys).
-        seed: config.seed - passed to the model factory (make_histgbm
-            uses it; make_logreg ignores it, see predictor.py).
-
-    Returns:
-        DataFrame, one row per category: category, model, n (held-out
-        row count), auroc.
+    Returns one row per category: category, model, n, auroc.
     """
     X = encode_features(build_tier_a(population))
     y = population["correct"].astype(int).to_numpy()
@@ -877,12 +481,8 @@ def compute_category_held_out_auroc(population: pd.DataFrame, model_name: str, s
 
 
 def main_category(config_path: str) -> None:
-    """load_rq4_population() -> compute_category_held_out_auroc()
-    for each model in MODEL_FACTORIES -> concat into one table -> print
-    each row + the min/max AUROC spread across categories (the DoD's
-    "generalizes, or learns 'coding is hard'" reading - a tight spread
-    says generalizes, one category cratering says shortcut) -> write
-    results/rq4_category_transfer_{model_slug}.csv.
+    """A tight AUROC spread across categories means the predictor
+    generalizes; one category collapsing means it learned a shortcut.
     """
     config = Config.from_yaml(config_path)
     population = load_rq4_population(config.paths.items_parquet)
@@ -899,7 +499,7 @@ def main_category(config_path: str) -> None:
         )
 
     table = pd.concat(tables, ignore_index=True)
-    table_path = f"results/rq4_category_transfer_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq4_category_transfer_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
@@ -933,7 +533,7 @@ def main_ablation(config_path: str) -> None:
             )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq4_ablation_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq4_ablation_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
@@ -950,8 +550,7 @@ def main_ablation(config_path: str) -> None:
         model_slug=config.model_slug,
     )
 
-    # Step 1 (invariant 12): does every cell beat chance on THIS
-    # population specifically, not just the earlier full-population check.
+    # Does every cell beat chance on this population specifically? (invariant 12)
     print()
     print("Permutation null (n=50 per cell - see compute_permutation_null_summary's own docstring):")
     null_rows = []
@@ -965,13 +564,10 @@ def main_ablation(config_path: str) -> None:
                 f"percentile={null_summary['percentile']:.1%}"
             )
 
-    # null_aurocs (the raw per-permutation array) is plot-only - excluded
-    # from the CSV, which stays one summary row per cell, not one column
-    # per permutation.
     null_table = pd.DataFrame.from_records(
         [{k: v for k, v in row.items() if k != "null_aurocs"} for row in null_rows]
     )
-    null_table_path = f"results/rq4_ablation_null_{config.model_slug}.csv"
+    null_table_path = f"{config.paths.results_dir}/rq4_ablation_null_{config.model_slug}.csv"
     null_table.to_csv(null_table_path, index=False)
     print(f"Wrote {len(null_table)} rows to {null_table_path}")
 
@@ -983,17 +579,16 @@ def main_ablation(config_path: str) -> None:
         model_slug=config.model_slug,
     )
 
-    # Step 2: is the apparent baseline->A->B->C progression real, or
-    # spread-bar overlap noise?
+    # Is the apparent baseline -> A -> B -> C progression real?
     print()
     print("Paired tier-progression comparison (does each step's apparent change survive a paired CI):")
     progression = compare_tier_progression(population, baseline["signal"], config.seed)
-    progression_path = f"results/rq4_ablation_progression_{config.model_slug}.csv"
+    progression_path = f"{config.paths.results_dir}/rq4_ablation_progression_{config.model_slug}.csv"
     progression.to_csv(progression_path, index=False)
     for _, row in progression.iterrows():
         print(
             f"  {row['model']}, {row['comparison']}: "
-            f"Δauroc={row['auroc_diff']:.4f} [{row['ci_low']:.4f}, {row['ci_high']:.4f}]"
+            f"delta_auroc={row['auroc_diff']:.4f} [{row['ci_low']:.4f}, {row['ci_high']:.4f}]"
         )
     print(f"Wrote {len(progression)} rows to {progression_path}")
 
@@ -1006,37 +601,27 @@ def main_ablation(config_path: str) -> None:
     )
 
 
-# --- Task 5.9 (meta-model calibration: reliability + coefficients) ----
+# --- Task 5.9: meta-model calibration and coefficients -----------------------
 #
-# See this module's own docstring for the full population/model/CI
-# rationale.
+# RQ4 base population (N=1,819), Tier C + logreg: the only tier holding all
+# three feature families, and the only model with directly readable
+# coefficients.
 
 
 def compute_meta_oof_score(population: pd.DataFrame, seed: int) -> np.ndarray:
-    """Tier C + logreg's averaged out-of-fold P(correct) across the 10
-    D8 repeats - the reliability diagram's input. Same recipe as
-    compute_h4_oof_score(), pointed at Tier C instead of Tier A: this
-    task wants the calibration of the actual full-feature predictor,
-    not H4's specifically-Tier-A interaction predictor.
+    """Tier C + logreg out-of-fold P(correct), averaged over the 10 repeats
+    - never in-sample predictions, which would look artificially calibrated.
     """
     results = run_predictor(population, build_tier_c, "logreg", seed)
     return np.mean([r.oof_pred for r in results], axis=0)
 
 
 def compute_meta_calibration(population: pd.DataFrame, seed: int, n_bins: int) -> dict:
-    """P(judge is wrong) = 1 - mean_oof_P(correct), and its ECE against
-    the actual wrong/right outcome (CLAUDE.md invariant 4 - ece() picks
-    its own binning strategy). Also reports the OOF AUROC alongside it
-    (invariant 6 - ECE never ships alone).
+    """P(judge wrong) = 1 - mean OOF P(correct): its ECE against the real
+    outcome, plus the OOF AUROC (invariant 6).
 
-    Args:
-        population: load_rq4_population()'s output.
-        seed: config.seed.
-        n_bins: config.n_bins.
-
-    Returns:
-        dict with p_wrong, is_wrong (both arrays, positionally aligned
-        to `population`), ece, n_effective_bins, auroc.
+    Returns p_wrong, is_wrong (aligned with `population`), ece,
+    n_effective_bins, auroc.
     """
     mean_oof_correct = compute_meta_oof_score(population, seed)
     correct = population["correct"].astype(int).to_numpy()
@@ -1056,11 +641,8 @@ def compute_meta_calibration(population: pd.DataFrame, seed: int, n_bins: int) -
 
 
 def _feature_family(feature_name: str) -> str:
-    """Tier-family label ("A"/"B"/"C") for one Tier C ENCODED feature
-    name - plot_rq4_coefficients()'s color grouping. Category's one-hot
-    dummies (pd.get_dummies's "category_<value>" naming, predictor.py::
-    encode_features()) fall through to Tier B, matching `category`'s own
-    (unencoded) tier membership rather than becoming a fourth family.
+    """"A"/"B"/"C" for an encoded Tier C feature; category's one-hot
+    columns count as Tier B, like `category` itself.
     """
     if feature_name in TIER_A_COLUMNS:
         return "A"
@@ -1070,14 +652,10 @@ def _feature_family(feature_name: str) -> str:
 
 
 def fit_full_logreg_coefficients(population: pd.DataFrame) -> tuple[LogisticRegression, list[str]]:
-    """Fits make_logreg() ONCE on Tier C over the FULL population (no CV
-    split) - coefficients describe one model's read of the whole
-    dataset, not a per-fold quantity the way an AUROC is. Returns the
-    fitted classifier step (coef_ is on the STANDARDIZED scale, so
-    magnitudes are directly comparable across features - StandardScaler
-    lives inside make_logreg()'s own Pipeline) and the encoded feature
-    names in the SAME column order as coef_, so callers never re-derive
-    that alignment themselves.
+    """make_logreg() fit once on Tier C over the full population - a
+    coefficient describes one fit, not a per-fold quantity. coef_ is on the
+    standardized scale, so magnitudes compare across features. Returns the
+    classifier and the encoded feature names in coef_ order.
     """
     X = encode_features(build_tier_c(population))
     y = population["correct"].astype(int).to_numpy()
@@ -1089,33 +667,15 @@ def fit_full_logreg_coefficients(population: pd.DataFrame) -> tuple[LogisticRegr
 def bootstrap_coefficient_cis(
     population: pd.DataFrame, feature_names: list[str], n: int = 2000, ci: float = 0.95, seed: int = 0
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Cluster-bootstrap CI (question_id, invariant 2) on EVERY Tier C
-    coefficient AT ONCE - see this module's own docstring for why this
-    is its own loop rather than n calls to src/boot.py::cluster_bootstrap
-    (one refit per replicate yields every feature's draw together, and
-    keeps each replicate's features correlated the way the real fit's
-    features are, instead of bootstrapping each one independently).
+    """Cluster-bootstrap CIs (question_id) on every coefficient at once:
+    each replicate resamples questions once and refits the whole vector,
+    rather than calling cluster_bootstrap() per feature - one refit yields
+    every coefficient, and keeps them from the same resample.
 
-    One replicate: resample question_id values with replacement (same
-    mechanics as cluster_bootstrap's own docstring), refit make_logreg()
-    on Tier C over the resampled rows, record the whole coefficient
-    vector. `.reindex(columns=feature_names, fill_value=0)` guards
-    against the rare resample where some category dummy's rows didn't
-    get drawn at all - encode_features() would then simply omit that
-    column, so it's added back as an all-zero column rather than
-    silently misaligning every later column against feature_names.
+    `.reindex(..., fill_value=0)` restores any category dummy that a
+    resample happens not to contain, so columns stay aligned.
 
-    Args:
-        population: load_rq4_population()'s output.
-        feature_names: fit_full_logreg_coefficients()'s own column order
-            - what boot_coefs' columns must align to.
-        n: bootstrap replicates (2000, D15's own convention).
-        ci: confidence level.
-        seed: required and explicit (CLAUDE.md sec 5).
-
-    Returns:
-        (ci_low, ci_high) - one value per feature_names entry, same
-        order.
+    Returns (ci_low, ci_high), in feature_names order.
     """
     rng = np.random.default_rng(seed)
     groups = population["question_id"].unique()
@@ -1143,16 +703,8 @@ def bootstrap_coefficient_cis(
 
 
 def compute_meta_coefficients(population: pd.DataFrame, seed: int, n_boot: int = 2000) -> pd.DataFrame:
-    """The full task 5.9 coefficient table: point estimate from ONE fit
-    on the real data (fit_full_logreg_coefficients), CI from
-    bootstrap_coefficient_cis - matching cluster_bootstrap()'s own
-    convention that the point estimate is the real fit, never the mean
-    of the bootstrap replicates (the replicates characterize spread,
-    they don't re-estimate the center).
-
-    Returns:
-        DataFrame: feature, family (A/B/C), coef, ci_low, ci_high - one
-        row per Tier C encoded feature.
+    """feature, family, coef (from the real fit), ci_low, ci_high - one row
+    per encoded Tier C feature.
     """
     clf, feature_names = fit_full_logreg_coefficients(population)
     ci_low, ci_high = bootstrap_coefficient_cis(population, feature_names, n=n_boot, seed=seed)
@@ -1191,7 +743,7 @@ def main_calibration(config_path: str) -> None:
     print()
     print("Fitting Tier C + logreg coefficients on the full population, cluster-bootstrap CI (B=2000)...")
     coef_table = compute_meta_coefficients(population, config.seed)
-    coef_path = f"results/rq4_coefficients_{config.model_slug}.csv"
+    coef_path = f"{config.paths.results_dir}/rq4_coefficients_{config.model_slug}.csv"
     coef_table.to_csv(coef_path, index=False)
     print(f"Wrote {len(coef_table)} rows to {coef_path}")
 
@@ -1202,12 +754,8 @@ def main_calibration(config_path: str) -> None:
         family_significant = int(((family_rows["ci_low"] > 0) | (family_rows["ci_high"] < 0)).sum())
         print(f"  Tier {family}: {family_significant}/{len(family_rows)} coefficients have a CI excluding 0")
 
-    # Headline figure: significant coefficients only (plot_rq4_coefficients
-    # itself does the CI-excludes-0 filtering, so "significant" has one
-    # definition shared by both figures) - the full 37-row table is
-    # unusably tall for a slide/PDF at the annotated forest-plot spacing
-    # (20 Sep 2026 discussion). Full breakdown: the CSV above, plus a
-    # dense (unannotated) appendix figure with the same row ordering.
+    # Headline figure shows the significant coefficients only; the full table
+    # is the CSV plus a dense appendix figure.
     plot_rq4_coefficients(
         features=coef_table["feature"].tolist(),
         coef=coef_table["coef"].to_numpy(),
@@ -1226,19 +774,15 @@ def main_calibration(config_path: str) -> None:
     )
 
 
-# --- Task 5.9c (frequentist vs Bayesian head-to-head) -------------------
+# --- Task 5.9c: frequentist vs Bayesian head-to-head -------------------------
 #
-# See this module's own docstring for the full population/tier/metric
-# rationale (especially the NLL and bin-aggregate coverage_90 methods,
-# neither of which D22 fully specifies).
+# RQ4 base population, Tier A for BOTH arms - comparing the two models on
+# different features would conflate method with features.
 
 
 def compute_frequentist_arm(population: pd.DataFrame, seed: int) -> dict:
-    """Tier A + logreg's D8 repeated-CV result - the frequentist side of
-    5.9c's head-to-head. Calls run_predictor() directly rather than
-    reusing compute_h4_oof_score() (which only exposes the averaged OOF
-    array) since this needs BOTH the per-repeat AUROCs (for the D8
-    mean/spread) and the averaged OOF prediction (for ECE/Brier).
+    """Tier A + logreg: the per-repeat AUROCs (D8 spread) and the OOF
+    P(correct) averaged over repeats (for ECE/Brier).
     """
     results = run_predictor(population, build_tier_a, "logreg", seed)
     return {
@@ -1250,11 +794,13 @@ def compute_frequentist_arm(population: pd.DataFrame, seed: int) -> dict:
 def compute_bayesian_arm(
     population: pd.DataFrame, seed: int, num_warmup: int = 500, num_samples: int = 1000, num_chains: int = 2
 ) -> dict:
-    """Tier A Bayesian hierarchical model's D8 repeated-CV result (5.9b)
-    on the SAME population/tier as compute_frequentist_arm() - the
-    Bayesian side of the head-to-head. Settings default to 5.9b's own
-    real, measured (not guessed) protocol - TASKS.md 5.9b: 7.0 minutes
-    for the full 50-fold-fit run at these exact numbers.
+    """Tier A Bayesian hierarchical model under the same protocol (about 7
+    minutes for the 50 fold-fits).
+
+    `pooled_draws` concatenates every repeat's posterior draws rather than
+    averaging them: each repeat is an independent refit on a different
+    partition, so pooling keeps both posterior and partition variability.
+    float32 keeps the (20,000 x 1,819) array small.
     """
     X, y, groups = build_xyg(population, build_tier_a)
     results = repeated_stratified_group_kfold_bayesian(
@@ -1263,66 +809,39 @@ def compute_bayesian_arm(
     return {
         "aurocs": np.array([r.auroc for r in results]),
         "mean_oof_correct": np.mean([r.oof_pred for r in results], axis=0),
-        # Pooled across all 10 repeats by concatenation, NOT averaging -
-        # see this module's own docstring for why: each repeat is an
-        # independent full refit on a different fold partition, so
-        # pooling combines posterior uncertainty AND partition
-        # variability into one richer per-item predictive sample.
-        # float32 - a real memory consideration at this scale (10
-        # repeats x 2000 draws x 1819 items), not just a style choice.
         "pooled_draws": np.concatenate([r.oof_draws for r in results], axis=0).astype(np.float32),
         "fold_diagnostics": [fold_diag for r in results for fold_diag in r.fold_diagnostics],
     }
 
 
 def compute_bayesian_nll(pooled_draws: np.ndarray, is_wrong: np.ndarray) -> float:
-    """Proper posterior-predictive NLL, per item: average the BERNOULLI
-    LIKELIHOOD across pooled draws FIRST, then -log - never plug the
-    mean probability into a point-NLL formula, which would discard the
-    draws' own spread and just be Brier with extra steps (see this
-    module's own docstring).
+    """Posterior-predictive NLL per item, averaged:
+
+        NLL_i = -log( mean_d  p_d^y_i * (1 - p_d)^(1 - y_i) )
+
+    The Bernoulli likelihood is averaged over draws BEFORE the log. Plugging
+    the mean probability into a point NLL would discard the draws' spread -
+    Brier with extra steps. Clipped at 1e-12 so one confidently wrong item
+    can't make the mean infinite.
 
     Args:
-        pooled_draws: (n_pooled_draws, n_rows) - P(wrong) per draw per
-            item, compute_bayesian_arm()'s own pooled_draws framed as
-            "wrong" (1 - P(correct)).
-        is_wrong: (n_rows,) - 1 if the judge was wrong, 0 if correct.
-
-    Returns:
-        Mean NLL across items (lower is better).
+        pooled_draws: (n_draws, n_rows) P(wrong) per draw per item.
+        is_wrong: (n_rows,) 1 if the judge was wrong.
     """
     is_wrong_arr = is_wrong.astype(np.float32)
     likelihood_per_draw = is_wrong_arr[None, :] * pooled_draws + (1 - is_wrong_arr[None, :]) * (1 - pooled_draws)
     mean_likelihood_per_item = likelihood_per_draw.mean(axis=0)
-    # An item every pooled draw got confidently wrong about would give
-    # mean_likelihood_per_item exactly 0 - log(0) = -inf. Clipped, not
-    # silently producing inf/nan in a headline number.
     mean_likelihood_per_item = np.clip(mean_likelihood_per_item, 1e-12, 1.0)
     return float(-np.mean(np.log(mean_likelihood_per_item)))
 
 
 def compute_bayesian_coverage(pooled_draws: np.ndarray, p_wrong: np.ndarray, is_wrong: np.ndarray, n_bins: int) -> float:
-    """Bin-aggregate 90% credible-interval coverage (21 Sep 2026
-    discussion - see this module's own docstring for why per-item
-    coverage isn't well-defined for a binary outcome, and why this
-    bin-aggregate form is the resolution).
+    """Bin-aggregate 90% credible-interval coverage. A single 0/1 outcome
+    can't "fall inside" a probability interval, so items are binned by
+    p_wrong (ece()'s binning) and each bin asks whether its empirical wrong
+    rate lies within the 5th-95th percentile of its pooled draws.
 
-    Bins by p_wrong - the SAME quantity ece()/plot_reliability_diagram()
-    already bin by elsewhere in this project, via get_bin_edges() so the
-    binning strategy (quantile vs. discrete-unique-value) is identical
-    to every other reliability check here, not a bespoke one.
-
-    Args:
-        pooled_draws: (n_pooled_draws, n_rows) - P(wrong) per draw per
-            item.
-        p_wrong: (n_rows,) - mean P(wrong) per item, the binning
-            variable.
-        is_wrong: (n_rows,) - 1 if the judge was wrong, 0 if correct.
-        n_bins: config.n_bins.
-
-    Returns:
-        Fraction of bins whose empirical wrong-rate falls inside that
-        bin's own pooled 90% credible interval.
+    Returns the fraction of bins covered.
     """
     edges = get_bin_edges(p_wrong, n_bins, "auto")
     bin_labels = np.digitize(p_wrong, edges)
@@ -1386,7 +905,7 @@ def main_bayesian_comparison(config_path: str) -> None:
             },
         ]
     )
-    table_path = f"results/rq4_bayesian_comparison_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq4_bayesian_comparison_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(table.to_string(index=False))
     print(f"Wrote {len(table)} rows to {table_path}")
@@ -1410,34 +929,28 @@ def main_bayesian_comparison(config_path: str) -> None:
     )
 
 
-# --- Task 5.9f (verbose-shift validation, D21 amended) ------------------
+# --- Task 5.9f: verbose-shift validation (RQ5, D21 amendment) ----------------
 #
-# See this module's own docstring for the full population/method
-# rationale - ESPECIALLY why predict_in_sample() is used here, never
-# predict_held_out() (DECISIONS.md's D21 amendment, 22 Sep 2026, has the
-# complete reasoning).
+# Preregistered prediction (D23): under the clean -> verbose shift, epistemic
+# rises while aleatoric stays flat. The model is fit ONCE on all of clean
+# with 5.7's transfer-safe features and evaluated with predict_in_sample()
+# on both conditions - clean and verbose share all 80 questions, so each
+# row keeps its real fitted intercept and only the features differ.
 
 
 def fit_verbose_shift_model(
     clean_items: pd.DataFrame, seed: int, num_warmup: int = 500, num_samples: int = 1000, num_chains: int = 2
-) -> tuple[object, dict[int, int]]:
-    """Fits the Bayesian model ONCE on ALL of clean (no CV split) -
-    mirrors 5.7's own compute_transfer_auroc() "fit once, frozen"
-    design, not the 10x5 repeated-CV protocol tasks 5.9b/5.9c/5.9d use.
-
-    Returns the fitted mcmc AND the training fold's own dense-index
-    mapping (question_id_to_index) - the second return value is not
-    optional bookkeeping here the way it was for 5.9b's CV wrapper: both
-    the clean (in-sample) and verbose (shifted) evaluations below need
-    THIS SAME mapping passed to predict_in_sample(), never a fresh
-    build_group_index() call on either evaluation set's own
-    question_ids (see predict_in_sample()'s own docstring for why that
-    would silently misalign every index).
+) -> tuple[object, dict[int, int], StandardScaler]:
+    """Fits the Bayesian model once on all of clean. Returns the fit, the
+    training question-index mapping, and the feature scaler - both
+    evaluations below must reuse this same mapping and scaler (re-fitting
+    the scaler on verbose would erase the very shift being tested).
     """
     X_train, y_train, train_groups = build_transfer_xy(clean_items)
     train_group_idx, n_groups, question_id_to_index = build_group_index(train_groups)
+    scaler = StandardScaler().fit(X_train)
     mcmc = fit_nuts(
-        X_train.to_numpy(),
+        scaler.transform(X_train),
         y_train,
         train_group_idx,
         n_groups,
@@ -1446,18 +959,15 @@ def fit_verbose_shift_model(
         num_samples=num_samples,
         num_chains=num_chains,
     )
-    return mcmc, question_id_to_index
+    return mcmc, question_id_to_index, scaler
 
 
-def compute_condition_entropy(mcmc: object, items: pd.DataFrame, question_id_to_index: dict[int, int]) -> pd.DataFrame:
-    """predict_in_sample() + posterior_predictive_entropy_decomposition()
-    for one condition's items (clean or verbose) against the SAME fitted
-    mcmc and the SAME (training/clean's own) question_id_to_index
-    mapping - the shared step both the clean and verbose sides of the
-    comparison below call identically.
-    """
+def compute_condition_entropy(
+    mcmc: object, items: pd.DataFrame, question_id_to_index: dict[int, int], scaler: StandardScaler
+) -> pd.DataFrame:
+    """Per-item aleatoric/epistemic for one condition, from the shared fit."""
     X, y, groups = build_transfer_xy(items)
-    draws = np.asarray(predict_in_sample(mcmc, X.to_numpy(), groups, question_id_to_index))
+    draws = np.asarray(predict_in_sample(mcmc, scaler.transform(X), groups, question_id_to_index))
     decomposition = posterior_predictive_entropy_decomposition(draws)
     return pd.DataFrame(
         {"question_id": groups, "aleatoric": decomposition["aleatoric"], "epistemic": decomposition["epistemic"]}
@@ -1467,10 +977,7 @@ def compute_condition_entropy(mcmc: object, items: pd.DataFrame, question_id_to_
 def compute_verbose_shift_gap(
     clean_entropy: pd.DataFrame, verbose_entropy: pd.DataFrame, column: str, seed: int
 ) -> dict:
-    """Paired cluster-bootstrap CI on mean(verbose[column]) -
-    mean(clean[column]) - invariant 3's paired-comparison logic, same
-    items (question_id) on both sides, never two independent samples.
-    """
+    """Paired cluster-bootstrap CI on mean(verbose) - mean(clean) (invariant 3)."""
     def _mean(df: pd.DataFrame) -> float:
         return float(df[column].mean())
 
@@ -1487,10 +994,10 @@ def main_verbose_shift(config_path: str) -> None:
     print(f"Feature set (D21 parity fix): {TRANSFER_SAFE_COLUMNS}")
 
     print("Fitting Bayesian model ONCE on all of clean (no CV, mirrors 5.7's transfer-test design)...")
-    mcmc, question_id_to_index = fit_verbose_shift_model(clean_items, config.seed)
+    mcmc, question_id_to_index, scaler = fit_verbose_shift_model(clean_items, config.seed)
 
-    clean_entropy = compute_condition_entropy(mcmc, clean_items, question_id_to_index)
-    verbose_entropy = compute_condition_entropy(mcmc, verbose_items, question_id_to_index)
+    clean_entropy = compute_condition_entropy(mcmc, clean_items, question_id_to_index, scaler)
+    verbose_entropy = compute_condition_entropy(mcmc, verbose_items, question_id_to_index, scaler)
 
     aleatoric_clean = float(clean_entropy["aleatoric"].mean())
     aleatoric_verbose = float(verbose_entropy["aleatoric"].mean())
@@ -1533,7 +1040,7 @@ def main_verbose_shift(config_path: str) -> None:
             }
         ]
     )
-    table_path = f"results/rq5_verbose_shift_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq5_verbose_shift_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 

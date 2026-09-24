@@ -1,17 +1,13 @@
-"""runs/kev_8b/kev.jsonl -> calls_kev_8b.parquet -> items_kev_8b.parquet
-(TASKS.md K3b, DECISIONS.md D27/RQ6).
+"""RQ6: runs/kev_8b/kev.jsonl -> calls_kev_8b.parquet -> items_kev_8b.parquet.
 
-Mirrors src/signals.py's role and pattern for the primary judge, at kev's
-much simpler grain: (item_id, condition) only, no prompt_variant axis, no
-sample_idx sampling (D27 - kev makes one deterministic forward pass per
-request). `confidence` is deliberately never computed here - confirmed an
-exact deterministic rescaling of probabilities[choice] (D27's 23 Sep
-amendment), excluded from analysis, not just unused.
+The kev-8b counterpart of parse.py + signals.py, at kev's simpler grain:
+(item_id, condition), no prompt_variant axis and no sampling - kev makes
+one deterministic forward pass per request (D27). kev's `confidence` field
+is never used: it is an exact rescaling of probabilities[choice] (D27).
 
-Reuses signals.py's own `_binary_entropy` and `_sanitize_records` rather
-than reimplementing them - both already handle real edge cases this
-module would otherwise have to rediscover (log(0), and pandas'
-NaN-not-None convention at the DataFrame -> dict boundary).
+items_kev_8b.parquet columns: item_id, question_id, category, condition,
+turn, the human-label columns, judge_verdict, verdict_bidir, conf_kev,
+conf_kev_bpe, flipped, correct, correct_bidir, input_tokens, any_skipped.
 """
 
 import argparse
@@ -24,14 +20,24 @@ from src.judge_kev import KevConfig
 from src.signals import _binary_entropy, _sanitize_records
 
 
+def _kev_response_fields(row: dict) -> tuple[str | None, dict, int | None]:
+    """(choice, probabilities, input_tokens) from one checkpoint row, in
+    either of the two layouts that exist: the analysed run stores the three
+    fields flat; the current call_kev() stores kev's whole response body
+    under `raw_response` (answers.verdict.{choice, probabilities},
+    usage.input_tokens).
+    """
+    raw = row.get("raw_response")
+    if isinstance(raw, dict):
+        verdict = raw.get("answers", {}).get("verdict", {})
+        return verdict.get("choice"), verdict.get("probabilities") or {}, raw.get("usage", {}).get("input_tokens")
+    return row.get("choice"), row.get("probabilities") or {}, row.get("input_tokens")
+
+
 def build_calls_kev(checkpoint_path: str | Path) -> pd.DataFrame:
-    """runs/kev_8b/kev.jsonl -> calls_kev_8b.parquet's DataFrame. Flattens
-    the raw `probabilities` dict into `prob_a`/`prob_b` columns (parquet-
-    friendly, and matches how the primary study stores `p_a` as a flat
-    column rather than a nested structure) - no other parsing needed,
-    kev's own response is already structured, unlike judge.py's raw_output
-    (CLAUDE.md invariant 7 has nothing to do here beyond "don't invent
-    signals judge_kev.py didn't actually collect").
+    """kev.jsonl -> one row per call, with the `probabilities` dict
+    flattened into `prob_a`/`prob_b`. kev's response is already structured,
+    so no text parsing is needed.
     """
     rows = []
     with open(checkpoint_path, "r", encoding="utf-8") as f:
@@ -40,7 +46,7 @@ def build_calls_kev(checkpoint_path: str | Path) -> pd.DataFrame:
             if not line:
                 continue
             row = json.loads(line)
-            probabilities = row.get("probabilities") or {}
+            choice, probabilities, input_tokens = _kev_response_fields(row)
             rows.append(
                 {
                     "item_id": row["item_id"],
@@ -56,22 +62,18 @@ def build_calls_kev(checkpoint_path: str | Path) -> pd.DataFrame:
                     "skipped": row.get("skipped", False),
                     "skip_reason": row.get("skip_reason"),
                     "ok": row.get("ok"),
-                    "choice": row.get("choice"),
+                    "choice": choice,
                     "prob_a": probabilities.get("A"),
                     "prob_b": probabilities.get("B"),
-                    "input_tokens": row.get("input_tokens"),
+                    "input_tokens": input_tokens,
                 }
             )
     return pd.DataFrame.from_records(rows)
 
 
 def _find_kev_call(rows: list[dict], order: str) -> dict | None:
-    """Locates one order's call among an item-condition's rows - the
-    kev-arm analog of signals.py::_find_call, minus sample_idx (D27 - no
-    sampling exists here). Returns None if that order's row doesn't exist,
-    was skipped (over the token ceiling), or failed (ok is not True) -
-    callers treat all three identically, same as D27's call_kev() docstring
-    already establishes for the harness layer.
+    """One order's call, or None if it is missing, skipped, or failed
+    (`ok` is not True) - all three are treated as no data.
     """
     for row in rows:
         if row["order"] == order and row.get("ok") is True:
@@ -80,13 +82,9 @@ def _find_kev_call(rows: list[dict], order: str) -> dict | None:
 
 
 def _p_model_a_wins_kev(rows: list[dict]) -> float | None:
-    """Order-corrected mean P(model_a wins), exactly mirroring
-    signals.py::_p_model_a_wins - NOT a naive average of prob_a across
-    AB/BA, which would silently blend two different physical questions
-    (apply_order() swaps which model is displayed as "A" under BA, so
-    prob_a(BA) means P(model_b wins) until flipped). This was flagged as a
-    real bug risk before it was built (DECISIONS.md D27) - fixed here by
-    construction, not left as a caller responsibility.
+    """Order-corrected P(model_a wins) = (prob_a(AB) + (1 - prob_a(BA))) / 2,
+    the same correction as signals.py::_p_model_a_wins: under BA the model
+    displayed as "A" is model_b, so prob_a(BA) must be flipped first.
     """
     call_ab = _find_kev_call(rows, "AB")
     call_ba = _find_kev_call(rows, "BA")
@@ -98,18 +96,13 @@ def _p_model_a_wins_kev(rows: list[dict]) -> float | None:
 
 
 def judge_verdict_kev(rows: list[dict]) -> str | None:
-    """Canonical verdict: the AB-order call's own choice, already in
-    canonical model_a/model_b-relative identity (AB is apply_order()'s
-    identity mapping). Mirrors D7's judge_verdict for the primary judge.
-    """
+    """D7 primary: the AB call's own choice (AB is the identity mapping)."""
     call = _find_kev_call(rows, "AB")
     return call["choice"] if call else None
 
 
 def verdict_bidir_kev(rows: list[dict]) -> str | None:
-    """Order-corrected verdict, in canonical model identity - "A" means
-    model_a won, "B" means model_b won (see _p_model_a_wins_kev).
-    """
+    """D7 secondary: argmax of the order-corrected P(model_a wins)."""
     p = _p_model_a_wins_kev(rows)
     if p is None:
         return None
@@ -117,10 +110,7 @@ def verdict_bidir_kev(rows: list[dict]) -> str | None:
 
 
 def _canonical_verdict_ba_kev(rows: list[dict]) -> str | None:
-    """The BA-order call's own choice, translated into canonical
-    model_a/model_b identity - mirrors signals.py::_canonical_verdict_ba.
-    Under BA, displayed-A = model_b, so a raw "A" choice means model_b won.
-    """
+    """The BA call's choice in canonical identity: a raw "A" means model_b won."""
     call = _find_kev_call(rows, "BA")
     if call is None:
         return None
@@ -128,12 +118,7 @@ def _canonical_verdict_ba_kev(rows: list[dict]) -> str | None:
 
 
 def flipped_kev(rows: list[dict]) -> bool | None:
-    """Canonical verdict differs between AB and BA order - the direct
-    analog of signals.py::flipped(), needed for the position-swap flip-
-    rate test (K4). Compares judge_verdict_kev (canonical AB) against the
-    BA call's own translated verdict, NOT against verdict_bidir_kev (which
-    is p-averaged, a different quantity than "what did BA alone say").
-    """
+    """True when the canonical AB and canonical BA verdicts disagree."""
     ab = judge_verdict_kev(rows)
     ba = _canonical_verdict_ba_kev(rows)
     if ab is None or ba is None:
@@ -142,10 +127,8 @@ def flipped_kev(rows: list[dict]) -> bool | None:
 
 
 def conf_kev(rows: list[dict]) -> float | None:
-    """kev's raw class-probability signal: P(whichever verdict the
-    canonical AB-order call actually gave), symmetric in [0.5, 1] - the
-    direct analog of conf_lp (D27). `confidence` is deliberately never
-    used (confirmed redundant, D27's 23 Sep amendment).
+    """kev's probability on whichever answer the AB call gave, in [0.5, 1]
+    - the analog of conf_lp (D27).
     """
     call = _find_kev_call(rows, "AB")
     if call is None:
@@ -154,12 +137,7 @@ def conf_kev(rows: list[dict]) -> float | None:
 
 
 def conf_kev_bpe(rows: list[dict]) -> float | None:
-    """1 - H(p_model_a_wins), on the same raw-nats scale as the primary
-    study's conf_bpe (signals.py) - the direct analog, reusing the exact
-    same order-correction (_p_model_a_wins_kev) and entropy formula
-    (signals.py::_binary_entropy) rather than independently re-deriving
-    either.
-    """
+    """1 - H(order-corrected P(model_a wins)), in nats - the analog of conf_bpe."""
     p = _p_model_a_wins_kev(rows)
     if p is None:
         return None
@@ -177,18 +155,13 @@ def compute_item_signals_kev(rows: list[dict]) -> dict:
 
 
 def build_items_kev_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame) -> pd.DataFrame:
-    """calls_kev_8b.parquet -> items_kev_8b.parquet. One row per
-    (item_id, condition) - no prompt_variant axis (D27). Mirrors
-    signals.py::build_items_dataframe's join/NaN-handling pattern exactly.
+    """calls_kev_8b.parquet -> items_kev_8b.parquet, one row per
+    (item_id, condition), human labels joined on item_id.
 
-    `input_tokens` on the item row is the AB-order call's own value when
-    available (AB/BA render identical total content - same two responses,
-    just swapped labels - so their token counts are equal; this is not an
-    approximation). For a fully-skipped item (both orders skipped, the
-    only pattern ever observed - see K2/D27), no `input_tokens` exists, so
-    `state_tokens` is used instead - always safe as a coverage-regime
-    indicator here, since a skipped item exceeded the cap by definition
-    either way.
+    `input_tokens` is the AB call's server-reported count (AB and BA render
+    the same content, so their counts are equal). A fully skipped item has
+    none, so its `state_tokens` is used instead - it exceeded the cap either
+    way, which is all the coverage-regime split needs.
     """
     labels_by_item = items_labels.set_index("item_id")
 

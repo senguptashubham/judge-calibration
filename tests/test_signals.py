@@ -1,4 +1,4 @@
-"""Tests for src/signals.py. See TASKS.md task 1.7.
+"""Tests for src/signals.py.
 
 All hand-computed where the formula is non-trivial - particularly the
 order-corrected mean used by verdict_bidir/conf_bpe (D7), since a naive

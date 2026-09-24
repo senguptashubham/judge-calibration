@@ -1,11 +1,8 @@
 """Tests for src/autoj_signals.py: the raw-checkpoint -> calls -> items
-conversion (TASKS.md L4). Heaviest coverage on _p_model_a_wins_autoj - a
-hand-computed pure-position-bias case caught a real bug during development
-(a double-translation: this function's own inputs are already canonically
-translated by _self_consistency_proportion_a, unlike _p_model_a_wins()/
-_p_model_a_wins_kev()'s untranslated `p_a`/`prob_a`, so the combining
-formula is a plain average here, not the `(1 - x)`-flipped one those two
-use) - kept as a permanent regression test, not just a one-off check.
+conversion. Heaviest coverage on _p_model_a_wins_autoj, whose inputs are
+already canonically translated - so it combines them with a plain average,
+not signals.py's (1 - x)-flipped formula. The pure-position-bias case below
+is the regression test for that.
 """
 
 import json
@@ -22,6 +19,7 @@ from src.autoj_signals import (
     build_items_autoj_dataframe,
     conf_sc_autoj,
     conf_sc_bpe_autoj,
+    conf_sc_bpe_autoj_greedy,
     extract_autoj_verdict,
     flipped_autoj,
     judge_verdict_autoj,
@@ -165,7 +163,7 @@ def test_self_consistency_proportion_a_degenerates_to_single_call_when_no_sampli
 
 
 def test_p_model_a_wins_autoj_pure_position_bias_nets_to_indifference():
-    # The hand-computed case that caught the double-translation bug:
+    # The double-translation regression case:
     # "whichever response is displayed first wins", no real model
     # preference - AB's first-displayed is model_a (wins -> "A", p_ab=1.0);
     # BA's first-displayed is model_b (wins, so model_a loses -> canonical
@@ -220,7 +218,7 @@ def test_conf_sc_autoj_none_on_verbose_no_sampled_draws():
     assert conf_sc_autoj(rows, k_sc=4) is None
 
 
-# --- conf_sc_bpe_autoj (both conditions, D28's 24 Sep fix) ----------------
+# --- conf_sc_bpe_autoj (defined on both conditions) ------------------------
 
 
 def test_conf_sc_bpe_autoj_hand_computed():
@@ -236,13 +234,24 @@ def test_conf_sc_bpe_autoj_hand_computed():
 
 def test_conf_sc_bpe_autoj_still_defined_on_a_verbose_style_degenerate_pair():
     # Both orders reduced to a single greedy call each (verbose's real
-    # shape) - must NOT be None, per the 24 Sep fix (nulling this on
-    # verbose would leave the verbosity-attack test with no signal at all).
+    # shape) - must still be defined, or the verbosity test has no signal.
     rows = [_call("AB", 0, pred_label=0), _call("BA", 0, pred_label=1)]
     result = conf_sc_bpe_autoj(rows, k_sc=4)
     assert result is not None
     # Both orders favor model_a (p_ab=1.0, p_ba=1.0) -> p=1.0 -> zero entropy -> conf=1.0.
     assert result == pytest.approx(1.0)
+
+
+def test_conf_sc_bpe_autoj_greedy_ignores_sampled_draws():
+    # Same rows as the hand-computed case above: the pooled signal sees
+    # p=0.875, but the greedy-only one sees just AB=model_a, BA=model_a -> p=1.0.
+    rows = [
+        _call("AB", 0, pred_label=0), _call("AB", 1, pred_label=0), _call("AB", 2, pred_label=1),
+        _call("AB", 3, pred_label=0), _call("AB", 4, pred_label=2),
+        _call("BA", 0, pred_label=1),
+    ]
+    assert conf_sc_bpe_autoj_greedy(rows) == pytest.approx(1.0)
+    assert conf_sc_bpe_autoj_greedy(rows) != pytest.approx(conf_sc_bpe_autoj(rows, k_sc=4))
 
 
 # --- compute_item_signals_autoj / build_items_autoj_dataframe -------------

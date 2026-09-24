@@ -1,35 +1,20 @@
-"""RQ7 - does purpose-built judge training resist the same failure modes?
-(auto-j-13b). DECISIONS.md D28, PLAN.md SS8, TASKS.md's L1-L6/GATE L addendum.
+"""RQ7: does purpose-built judge training (auto-j-13b) resist the same
+failure modes? (D28, PLAN.md §8)
 
-Population/signal scope, settled in D28 and confirmed against real data
-(not assumed):
-  - Two signals: `conf_sc_autoj` (self-consistency, direct D6 port,
-    clean-only - never populated on verbose, no sampled draws exist there)
-    and `conf_sc_bpe_autoj` (order-swap bidirectional-entropy analog,
-    built from self-consistency proportions - computed on BOTH conditions,
-    D28's 24 Sep fix, mirroring D21's own conf_sc-excluded/conf_bpe-
-    included precedent for the primary judge).
-  - No coverage-regime split (unlike RQ6) - auto-j's disclosed context
-    covers the population without a ceiling issue. Population is instead
-    split by `turn` (1 vs 2) throughout - both turns are always reported
-    (D28's 23 Sep reversal), never silently merged or dropped.
-  - Unlike RQ6's kev-8b arm (whose two signals happened to share an
-    identical null pattern with judge_verdict, since kev's clean
-    population had zero skips), auto-j's own null patterns genuinely
-    differ per signal, even on `clean` (real Tie/parse-failure rates
-    there - confirmed: judge_verdict 2.05% null, conf_sc_bpe_autoj 1.84%
-    null on clean, NOT identical sets). Every function below filters its
-    OWN population to that specific signal's non-null rows immediately
-    before computing on it, never relying on one blanket filter shared
-    across signals the way rq6.py could.
-  - The verbosity-attack test uses `conf_sc_bpe_autoj` ALONE - conf_sc_autoj
-    is unconditionally null on `verbose` (no data exists there at all, not
-    a partial gap), so it cannot be part of a paired clean/verbose
-    comparison, mirroring D21's own conf_sc exclusion from RQ3b exactly.
+`python -m analysis.rq7 --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}`
 
-Mirrors analysis/rq1.py (calibration) and analysis/rq3.py (position-swap,
-verbosity attack) exactly wherever the recipe transfers unchanged; only
-the population/signal-set plumbing is new, same as rq6.py's own approach.
+- Signals: conf_sc_autoj (self-consistency; clean only, since verbose has
+  no sampled draws) and conf_sc_bpe_autoj (order-swap entropy from
+  self-consistency proportions). The verbosity attack uses
+  conf_sc_bpe_autoj_greedy - the same signal from the two greedy calls -
+  so clean and verbose are scored on the same construction.
+- Every test is split by turn (1 vs 2), both always reported.
+- auto-j's signals have different null patterns from each other and from
+  `correct` (ties and parse failures), so each test filters to its own
+  signal's non-null rows right before computing - never one shared filter.
+
+Reuses analysis/rq3.py's and rq6.py's recipes; only the population and
+signal plumbing is new.
 """
 
 import argparse
@@ -47,17 +32,13 @@ from src.plots import FIGURES_DIR, _draw_forest, plot_bayesian_convergence, plot
 from src.predictor import build_xyg
 
 AUTOJ_SIGNALS = ["conf_sc_autoj", "conf_sc_bpe_autoj"]
-VERBOSITY_SIGNALS = ["conf_sc_bpe_autoj"]  # conf_sc_autoj excluded - always null on verbose (D21 precedent)
+# Greedy-only on both sides: verbose never has sampled draws, so the pooled
+# conf_sc_bpe_autoj would compare a 6-call clean signal against a 2-call
+# verbose one. conf_sc_autoj is excluded outright (always null on verbose).
+VERBOSITY_SIGNALS = ["conf_sc_bpe_autoj_greedy"]
 
 
-# --- Plotting wrappers -------------------------------------------------
-#
-# Same reason rq6.py needed its own: plot_rq3a_confidence_gap()/
-# plot_rq3b_deltas() size their figure at 0.9*len(signals)+1.5 inches,
-# fine at the primary judge's 3-4 signals but too short at 1-2, clipping
-# the fixed title text. Reuses _draw_forest() (the shared, title-free
-# primitive) directly, same "widen the figure, don't touch a shared
-# primitive" principle already established.
+# --- Plotting (same reason as rq6.py: plots.py's RQ3 figures are sized for 3-4 signals)
 
 
 def _plot_rq7_confidence_gap(signals: list[str], gap: np.ndarray, ci_low: np.ndarray, ci_high: np.ndarray, model_slug: str) -> None:
@@ -95,39 +76,23 @@ def _plot_rq7_verbosity_deltas(
 
 
 def load_rq7_clean_items(items_parquet: str) -> pd.DataFrame:
-    """results/items_autoj_13b_gptq_4bits.parquet -> the clean/human-
-    labeled population RQ7's calibration check, position-swap attack, and
-    Bayesian recalibration use - mirrors load_rq1_items()/
-    load_rq6_clean_items() exactly. `turn` is already a native column
-    (auto-j has no prompt_variant axis, and unlike RQ6's synthesized
-    `regime`, no extra computation is needed - the checkpoint already
-    carries the item's real turn).
+    """Clean rows with a human label - the population for the calibration,
+    position-swap, and Bayesian tests (each then filters further).
     """
     items = pd.read_parquet(items_parquet)
     return items[(items["condition"] == "clean") & items["human_label"].notna()].copy()
 
 
 def load_rq7_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(clean_items, verbose_items), the paired population for RQ7's
-    verbosity-attack test - restricted to items where BOTH sides have a
-    valid `conf_sc_bpe_autoj` AND a valid `correct` (the only signal usable
-    for this test, see module docstring - `compute_signal_rq3b_metrics`
-    scores accuracy/ECE/AUROC against `correct_col="correct"` too, not
-    just the signal itself). Filters to the INTERSECTION, not an exact-
-    match assertion (mirrors load_rq6_paired_items() - auto-j's parse-
-    failure-driven exclusions are a known, expected gap, not a data-
-    integrity failure to fail loudly about).
+    """(clean_items, verbose_items) for the verbosity attack: items with a
+    human label where BOTH sides have the verbosity signal AND `correct`.
 
-    `conf_sc_bpe_autoj.notna()` does NOT imply `correct.notna()`, and this
-    was a real bug caught against real data, not assumed: `conf_sc_bpe_autoj`
-    only needs ANY one of AB's k_sc+1 draws to produce a valid canonical
-    letter, while `correct` needs SPECIFICALLY the greedy (sample_idx=0)
-    AB call to succeed (D7's own single-pass definition) - so an item can
-    have a populated signal from a later sampled draw while its greedy
-    call itself failed/tied, leaving `correct` null. Filtering on the
-    signal alone let `correct` be None on the `verbose` side reach
-    compute_signal_rq3b_metrics's `_ece`/`_accuracy`/`_auroc` stat_fns,
-    which don't guard against it - `ece()` silently returned NaN.
+    The signal being present does not imply `correct` is: conf_sc_bpe_autoj
+    needs only some call per order to give a usable verdict, while
+    `correct` needs the greedy AB call specifically. Filtering on the signal
+    alone once let `correct` be None and made ece() return NaN.
+    Filters to the intersection, since auto-j's skips and parse failures are
+    an expected, documented gap.
     """
     items = pd.read_parquet(items_parquet)
     items = items[items["human_label"].notna()]
@@ -135,7 +100,7 @@ def load_rq7_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFram
     verbose_all = items[items["condition"] == "verbose"]
 
     def _valid_ids(df: pd.DataFrame) -> set:
-        valid = df["conf_sc_bpe_autoj"].notna() & df["correct"].notna()
+        valid = df[VERBOSITY_SIGNALS].notna().all(axis=1) & df["correct"].notna()
         return set(df.loc[valid, "item_id"])
 
     paired_ids = _valid_ids(clean_all) & _valid_ids(verbose_all)
@@ -149,12 +114,9 @@ def load_rq7_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFram
 
 
 def compute_signal_calibration(items: pd.DataFrame, signal: str, n_bins: int, seed: int) -> dict:
-    """ECE, Brier, overconfidence gap, and AUROC for one auto-j signal, on
-    one already-turn-filtered population - mirrors
-    analysis/rq6.py::compute_signal_calibration's exact recipe. `items`
-    must already be filtered to `items[signal].notna()` by the caller -
-    this function does not filter, since different signals here need
-    different filters (module docstring), unlike rq6.py's kev arm.
+    """ECE, Brier, overconfidence gap, and AUROC for one signal, each with a
+    cluster-bootstrap CI - rq6.py's recipe. The caller must already have
+    filtered `items` to this signal's non-null rows.
     """
     def _ece(df: pd.DataFrame) -> float:
         value, _ = ece(df[signal].to_numpy(), df["correct"].to_numpy(), n_bins)
@@ -212,7 +174,7 @@ def main_calibration(config_path: str) -> None:
             )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq7_calibration_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq7_calibration_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
@@ -221,10 +183,8 @@ def main_calibration(config_path: str) -> None:
 
 
 def main_position_swap(config_path: str) -> None:
-    """RQ7's position-swap attack (mirrors analysis/rq3.py's RQ3a exactly:
-    flip rate + mean-confidence-gap on flipped vs unflipped items),
-    clean-only, split by turn. Reuses compute_flip_rate/
-    compute_confidence_gap unchanged.
+    """RQ3a's recipe per turn: flip rate and each signal's
+    flipped-vs-unflipped confidence gap, on clean items.
     """
     config = AutojConfig.from_yaml(config_path)
     clean_items = load_rq7_clean_items(config.paths.items_parquet)
@@ -265,7 +225,7 @@ def main_position_swap(config_path: str) -> None:
             )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq7_position_swap_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq7_position_swap_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
@@ -274,14 +234,12 @@ def main_position_swap(config_path: str) -> None:
 
 
 def main_verbosity(config_path: str) -> None:
-    """RQ7's verbosity attack (mirrors analysis/rq3.py's RQ3b exactly:
-    paired ECE/accuracy/AUROC deltas, clean -> verbose), split by turn.
-    `conf_sc_autoj` is excluded (D21 precedent, module docstring) - only
-    `conf_sc_bpe_autoj` runs here.
+    """RQ3b's recipe per turn: paired ECE/accuracy/AUROC deltas,
+    clean -> verbose, on VERBOSITY_SIGNALS.
     """
     config = AutojConfig.from_yaml(config_path)
     clean_items, verbose_items = load_rq7_paired_items(config.paths.items_parquet)
-    print(f"RQ7 verbosity-attack population: N={len(clean_items)} paired items (clean vs verbose, conf_sc_bpe_autoj present both sides)")
+    print(f"RQ7 verbosity-attack population: N={len(clean_items)} paired items (clean vs verbose, signal present both sides)")
 
     rows = []
     for turn in [1, 2]:
@@ -289,12 +247,11 @@ def main_verbosity(config_path: str) -> None:
         verbose_turn = verbose_items[verbose_items["turn"] == turn]
         print(f"  turn={turn}: N={len(clean_turn)}")
 
-        ece_deltas, auroc_deltas = [], []
+        signal_metrics = []
         for signal in VERBOSITY_SIGNALS:
             metrics = compute_signal_rq3b_metrics(clean_turn, verbose_turn, signal, "correct", config.n_bins, config.seed)
             rows.append({"turn": turn, "signal": signal, "n": len(clean_turn), **metrics})
-            ece_deltas.append(metrics)
-            auroc_deltas.append(metrics)
+            signal_metrics.append(metrics)
             print(
                 f"    {signal}: delta_ECE={metrics['delta_ece_verbose_minus_clean']:.4f} "
                 f"[{metrics['delta_ece_ci_low']:.4f}, {metrics['delta_ece_ci_high']:.4f}], "
@@ -304,17 +261,17 @@ def main_verbosity(config_path: str) -> None:
 
         _plot_rq7_verbosity_deltas(
             signals=VERBOSITY_SIGNALS,
-            delta_ece=np.array([m["delta_ece_verbose_minus_clean"] for m in ece_deltas]),
-            ece_ci_low=np.array([m["delta_ece_ci_low"] for m in ece_deltas]),
-            ece_ci_high=np.array([m["delta_ece_ci_high"] for m in ece_deltas]),
-            delta_auroc=np.array([m["delta_auroc_verbose_minus_clean"] for m in auroc_deltas]),
-            auroc_ci_low=np.array([m["delta_auroc_ci_low"] for m in auroc_deltas]),
-            auroc_ci_high=np.array([m["delta_auroc_ci_high"] for m in auroc_deltas]),
+            delta_ece=np.array([m["delta_ece_verbose_minus_clean"] for m in signal_metrics]),
+            ece_ci_low=np.array([m["delta_ece_ci_low"] for m in signal_metrics]),
+            ece_ci_high=np.array([m["delta_ece_ci_high"] for m in signal_metrics]),
+            delta_auroc=np.array([m["delta_auroc_verbose_minus_clean"] for m in signal_metrics]),
+            auroc_ci_low=np.array([m["delta_auroc_ci_low"] for m in signal_metrics]),
+            auroc_ci_high=np.array([m["delta_auroc_ci_high"] for m in signal_metrics]),
             model_slug=f"{config.model_slug}_turn{turn}",
         )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq7_verbosity_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq7_verbosity_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
@@ -323,23 +280,14 @@ def main_verbosity(config_path: str) -> None:
 
 
 def build_autoj_tier(population: pd.DataFrame) -> pd.DataFrame:
-    """auto-j's whole feature set - both signals, nothing else. Passed
-    straight through build_xyg()'s encode_features() call, a no-op on two
-    pure-float columns, same as rq6.py's build_kev_tier and the primary
-    study's own Tier A.
-    """
+    """The meta-model's features: auto-j's two signals, nothing else."""
     return population[AUTOJ_SIGNALS]
 
 
 def main_bayesian_recalibration(config_path: str) -> None:
-    """RQ7's D22 recalibration check: does a Bayesian hierarchical meta-
-    model over both auto-j signals together beat auto-j's own best single
-    raw signal at predicting auto-j's own errors? Full D8 protocol
-    (5-fold x 10-repeat NUTS), same rigor as the primary judge's and
-    kev-8b's own RQ4/RQ6 Bayesian arms. Clean-only population, split by
-    turn. Restricted to rows where BOTH signals are non-null (the meta-
-    model needs both columns simultaneously, unlike the single-signal
-    calibration check above).
+    """D22's check per turn: does a Bayesian meta-model over both signals
+    beat the best single signal? Full D8 protocol, clean items where both
+    signals are present.
     """
     config = AutojConfig.from_yaml(config_path)
     clean_items = load_rq7_clean_items(config.paths.items_parquet)
@@ -391,7 +339,7 @@ def main_bayesian_recalibration(config_path: str) -> None:
         )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq7_bayesian_recalibration_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq7_bayesian_recalibration_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 

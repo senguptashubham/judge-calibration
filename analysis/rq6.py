@@ -1,27 +1,22 @@
-"""RQ6 - stress-testing the industry's calibration counterclaim (kev-8b).
-DECISIONS.md D27, PLAN.md SS7, TASKS.md's K1-K5/GATE K addendum.
+"""RQ6: does kev-8b resist the failure modes found in the primary judge?
+(D27, PLAN.md §7)
 
-Population/signal scope, all settled in D27 and confirmed against real
-data (not assumed):
-  - Two signals only: `conf_kev` (probabilities[choice], direct analog of
-    conf_lp) and `conf_kev_bpe` (order-corrected bidirectional entropy,
-    direct analog of conf_bpe). `confidence` is never used anywhere in
-    this module - confirmed an exact deterministic rescaling of
-    conf_kev, not an independent signal (D27's 23 Sep amendment).
-  - Two coverage regimes: in-coverage (clean-side input_tokens <= 1024,
-    kev's own disclosed training range) and out-of-coverage (> 1024).
-    Regime is a property of the ITEM (its stable, unpadded clean length),
-    applied identically to both its clean and verbose rows - not each
-    condition's own inflated length, which would make the same item's
-    regime membership different depending on which condition you're
-    looking at and break the paired verbosity comparison.
-  - The verbosity-attack population is 1,852 items (1,904 minus the 52
-    kev-8b skipped for exceeding the 8,160-token serving ceiling on
-    `verbose`), not 1,904 - see K3b's closeout note.
+`python -m analysis.rq6 --config configs/run_kev.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}`
 
-Mirrors analysis/rq1.py (calibration) and analysis/rq3.py (position-swap,
-verbosity attack) exactly wherever the recipe transfers unchanged; only
-the population/signal-set plumbing is new.
+- Two signals: conf_kev (probabilities[choice], the analog of conf_lp) and
+  conf_kev_bpe (order-corrected bidirectional entropy, the analog of
+  conf_bpe). kev's `confidence` field is never used - it is an exact
+  rescaling of conf_kev (D27).
+- Every test is split by coverage regime: in-coverage when the item's
+  CLEAN input_tokens <= 1,024 (kev's training range), else out-of-coverage.
+  The regime is a property of the item, applied to both its conditions, so
+  the paired verbosity comparison keeps the same items in each regime.
+- The verbosity attack runs on 1,784 paired items: 52 verbose items were
+  skipped over kev's 8,160-token ceiling, and both sides need a verdict and
+  a human label.
+
+Reuses analysis/rq3.py's recipes unchanged; only the population and signal
+plumbing is new.
 """
 
 import argparse
@@ -38,16 +33,8 @@ from src.metrics import auroc_error, brier, ece, overconfidence_gap
 from src.plots import FIGURES_DIR, _draw_forest, plot_bayesian_convergence, plot_reliability_diagram
 from src.predictor import build_xyg
 
-# plot_rq3a_confidence_gap()/plot_rq3b_deltas() both size their figure as
-# 0.9 * len(signals) + 1.5 inches tall - fine at the primary judge's own
-# 3-4 signal count, but too short at kev's 2 (D27), clipping their own
-# fixed title text on save. _forest_plot() is shared with
-# plot_d_human_correlations elsewhere, so its formula isn't touched here -
-# same "widen the figure, don't touch a shared primitive" principle
-# already established in this project (REPORT.md/TASKS.md's earlier
-# title-clipping fixes). These two small RQ6-specific wrappers reuse
-# _draw_forest() (the genuinely shared, title-free drawing primitive)
-# directly, with enough height for their own titles at 2 labels.
+# plots.py's RQ3 forest figures size their height for 3-4 signals and clip
+# their title at 2, so RQ6 draws its own figures on the shared _draw_forest().
 
 
 def _plot_rq6_confidence_gap(signals: list[str], gap: np.ndarray, ci_low: np.ndarray, ci_high: np.ndarray, model_slug: str) -> None:
@@ -80,6 +67,7 @@ def _plot_rq6_verbosity_deltas(
     fig.savefig(FIGURES_DIR / filename, dpi=150)
     plt.close(fig)
 
+
 KEV_SIGNALS = ["conf_kev", "conf_kev_bpe"]
 IN_COVERAGE_THRESHOLD = 1024
 
@@ -90,11 +78,7 @@ def _load_all_kev_items(items_parquet: str) -> pd.DataFrame:
 
 def _regime_by_item(clean_items: pd.DataFrame) -> pd.Series:
     """item_id -> "in_coverage" | "out_of_coverage", from the CLEAN row's
-    own input_tokens (D27 - a stable property of the item's real,
-    unpadded content, not of whichever condition happens to be in front
-    of you). clean_items must already be the full clean population (every
-    item has a valid clean row - 0 clean-side skips, confirmed in K3b),
-    so this mapping is always fully defined for every item.
+    input_tokens. Every item has a clean row (no clean call was skipped).
     """
     return clean_items.set_index("item_id")["input_tokens"].apply(
         lambda t: "in_coverage" if t <= IN_COVERAGE_THRESHOLD else "out_of_coverage"
@@ -102,14 +86,8 @@ def _regime_by_item(clean_items: pd.DataFrame) -> pd.Series:
 
 
 def load_rq6_clean_items(items_parquet: str) -> pd.DataFrame:
-    """results/items_kev_8b.parquet -> the clean/human-labeled population
-    RQ6's calibration check and position-swap test use - mirrors
-    analysis/rq1.py::load_rq1_items()'s own clean-only, human-label-
-    present scope exactly (RQ1/RQ3a are both clean-only for the primary
-    judge; kev has no prompt_variant axis to also filter on).
-
-    Adds a `regime` column (in_coverage/out_of_coverage), derived from
-    this same clean population's own input_tokens - see _regime_by_item.
+    """Clean rows with a human label, plus a `regime` column - the
+    population for the calibration, position-swap, and Bayesian tests.
     """
     items = _load_all_kev_items(items_parquet)
     clean_items = items[(items["condition"] == "clean") & items["human_label"].notna()].copy()
@@ -119,16 +97,10 @@ def load_rq6_clean_items(items_parquet: str) -> pd.DataFrame:
 
 
 def load_rq6_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """results/items_kev_8b.parquet -> (clean_items, verbose_items), the
-    paired population RQ6's verbosity attack is allowed to touch.
-
-    Unlike analysis/rq3.py::load_rq3b_items() (which asserts the two
-    item_id sets are IDENTICAL and raises if not), this filters to the
-    INTERSECTION - kev-8b's own 52-item verbose exclusion (over the
-    8,160-token ceiling, D27) is a known, documented, expected gap, not a
-    data-integrity failure to fail loudly about. Both sides carry the
-    same `regime` column, from the clean-side mapping (see
-    load_rq6_clean_items's own docstring for why).
+    """(clean_items, verbose_items) for the verbosity attack: items with a
+    human label and a verdict on BOTH sides. Filters to the intersection
+    rather than asserting equal sets (unlike rq3.load_rq3b_items), since
+    kev's 52 skipped verbose items are an expected, documented gap.
     """
     items = _load_all_kev_items(items_parquet)
     items = items[items["human_label"].notna()]
@@ -150,18 +122,9 @@ def load_rq6_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFram
 
 
 def compute_signal_calibration(items: pd.DataFrame, signal: str, n_bins: int, seed: int) -> dict:
-    """ECE, Brier, and the signed overconfidence gap for one kev signal,
-    on one already-regime-filtered population - mirrors
-    analysis/rq1.py::compute_signal_metrics's exact recipe (ece/brier/
-    overconfidence_gap; MCE and the Brier decomposition's
-    reliability/resolution terms are RQ1-table-specific extras this
-    module doesn't need for RQ6's DoD). `conf_kev_bpe`'s raw-nats range
-    ([1-ln(2), 1] ~= [0.307, 1]) needs no rescaling before these - the
-    same reasoning already confirmed for conf_bpe (D27, checked against
-    the real formula before this was built, not assumed).
-
-    Every metric ships with a cluster-bootstrap CI over question_id
-    (invariant 2), same as every other calibration check in this project.
+    """ECE, Brier, overconfidence gap, and AUROC for one signal, each with a
+    cluster-bootstrap CI - RQ1's recipe. conf_kev_bpe's raw-nats range
+    [1 - ln 2, 1] needs no rescaling, the same as conf_bpe.
     """
     def _ece(df: pd.DataFrame) -> float:
         value, _ = ece(df[signal].to_numpy(), df["correct"].to_numpy(), n_bins)
@@ -216,18 +179,14 @@ def main_calibration(config_path: str) -> None:
             )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq6_calibration_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq6_calibration_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
 
 def main_position_swap(config_path: str) -> None:
-    """RQ6's position-swap attack (mirrors analysis/rq3.py's RQ3a exactly:
-    flip rate + mean-confidence-gap on flipped vs unflipped items),
-    clean-only, split by coverage regime. Reuses compute_flip_rate/
-    compute_confidence_gap unchanged - both are already generic over any
-    DataFrame carrying `flipped`/`question_id`/a named signal column,
-    which items_kev_8b.parquet does under the same column names.
+    """RQ3a's recipe per regime: flip rate and each signal's
+    flipped-vs-unflipped confidence gap, on clean items.
     """
     config = KevConfig.from_yaml(config_path)
     clean_items = load_rq6_clean_items(config.paths.items_parquet)
@@ -264,18 +223,14 @@ def main_position_swap(config_path: str) -> None:
         )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq6_position_swap_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq6_position_swap_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
 
 def main_verbosity(config_path: str) -> None:
-    """RQ6's verbosity attack (mirrors analysis/rq3.py's RQ3b exactly:
-    paired ECE/accuracy/AUROC deltas, clean -> verbose), split by
-    coverage regime. Population is load_rq6_paired_items()'s 1,784-item
-    intersection (D27's pairing requirement), not the full 1,904/1,836 -
-    an item missing on either side is dropped from BOTH sides for this
-    specific test, not just the side that's actually missing.
+    """RQ3b's recipe per regime: paired ECE/accuracy/AUROC deltas,
+    clean -> verbose, on the paired population.
     """
     config = KevConfig.from_yaml(config_path)
     clean_items, verbose_items = load_rq6_paired_items(config.paths.items_parquet)
@@ -287,14 +242,13 @@ def main_verbosity(config_path: str) -> None:
         verbose_regime = verbose_items[verbose_items["regime"] == regime]
         print(f"  {regime}: N={len(clean_regime)}")
 
-        ece_deltas, auroc_deltas = [], []
+        signal_metrics = []
         for signal in KEV_SIGNALS:
             metrics = compute_signal_rq3b_metrics(
                 clean_regime, verbose_regime, signal, "correct", config.n_bins, config.seed
             )
             rows.append({"regime": regime, "signal": signal, "n": len(clean_regime), **metrics})
-            ece_deltas.append(metrics)
-            auroc_deltas.append(metrics)
+            signal_metrics.append(metrics)
             print(
                 f"    {signal}: delta_ECE={metrics['delta_ece_verbose_minus_clean']:.4f} "
                 f"[{metrics['delta_ece_ci_low']:.4f}, {metrics['delta_ece_ci_high']:.4f}], "
@@ -304,39 +258,30 @@ def main_verbosity(config_path: str) -> None:
 
         _plot_rq6_verbosity_deltas(
             signals=KEV_SIGNALS,
-            delta_ece=np.array([m["delta_ece_verbose_minus_clean"] for m in ece_deltas]),
-            ece_ci_low=np.array([m["delta_ece_ci_low"] for m in ece_deltas]),
-            ece_ci_high=np.array([m["delta_ece_ci_high"] for m in ece_deltas]),
-            delta_auroc=np.array([m["delta_auroc_verbose_minus_clean"] for m in auroc_deltas]),
-            auroc_ci_low=np.array([m["delta_auroc_ci_low"] for m in auroc_deltas]),
-            auroc_ci_high=np.array([m["delta_auroc_ci_high"] for m in auroc_deltas]),
+            delta_ece=np.array([m["delta_ece_verbose_minus_clean"] for m in signal_metrics]),
+            ece_ci_low=np.array([m["delta_ece_ci_low"] for m in signal_metrics]),
+            ece_ci_high=np.array([m["delta_ece_ci_high"] for m in signal_metrics]),
+            delta_auroc=np.array([m["delta_auroc_verbose_minus_clean"] for m in signal_metrics]),
+            auroc_ci_low=np.array([m["delta_auroc_ci_low"] for m in signal_metrics]),
+            auroc_ci_high=np.array([m["delta_auroc_ci_high"] for m in signal_metrics]),
             model_slug=f"{config.model_slug}_{regime}",
         )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq6_verbosity_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq6_verbosity_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
 
 def build_kev_tier(population: pd.DataFrame) -> pd.DataFrame:
-    """kev's whole feature set - both signals, nothing else. `confidence`
-    is never a column here (D27 - confirmed redundant with conf_kev).
-    Passed straight through build_xyg()'s encode_features() call, which
-    is a no-op on two pure-float columns (no categorical/boolean columns
-    present), same as it already is on the primary study's own Tier A.
-    """
+    """The meta-model's features: kev's two signals, nothing else."""
     return population[KEV_SIGNALS]
 
 
 def main_bayesian_recalibration(config_path: str) -> None:
-    """RQ6's D22 recalibration check: does a Bayesian hierarchical
-    meta-model over BOTH kev signals together beat kev's own best single
-    raw signal at predicting kev's own errors? Full D8 protocol (5-fold x
-    10-repeat NUTS), per the owner's explicit confirmation - same rigor as
-    the primary judge's own RQ4 Bayesian arm, not a lighter version.
-    Clean-only population (mirrors 5.9b/5.9c's own scope), split by
-    coverage regime.
+    """D22's check per regime: does a Bayesian meta-model over both signals
+    beat the best single signal at predicting kev's own errors? Full D8
+    protocol (5-fold x 10 repeats, NUTS) on clean items.
     """
     config = KevConfig.from_yaml(config_path)
     clean_items = load_rq6_clean_items(config.paths.items_parquet)
@@ -384,7 +329,7 @@ def main_bayesian_recalibration(config_path: str) -> None:
         )
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq6_bayesian_recalibration_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq6_bayesian_recalibration_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 

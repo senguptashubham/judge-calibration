@@ -1,4 +1,4 @@
-"""Tests for src/config.py. See TASKS.md task 0.2."""
+"""Tests for src/config.py."""
 
 import pytest
 
@@ -9,7 +9,6 @@ def _paths() -> Paths:
     return Paths(
         results_dir="results",
         runs_dir="runs",
-        figures_dir="results/figures",
         calls_parquet="results/calls.parquet",
         items_parquet="results/items.parquet",
         items_labels_parquet="results/items_labels.parquet",

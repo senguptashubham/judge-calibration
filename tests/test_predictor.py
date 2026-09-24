@@ -1,6 +1,6 @@
 """Tests for src/predictor.py: the repeated StratifiedGroupKFold
 protocol (D8/CLAUDE.md invariant 1), feature encoding, and the
-permutation null (invariant 12). See TASKS.md tasks 5.3, 5.4.
+permutation null (invariant 12).
 """
 
 import numpy as np
@@ -16,6 +16,7 @@ from src.predictor import (
     permutation_null,
     repeated_stratified_group_kfold,
     run_predictor,
+    shuffle_within_groups,
 )
 
 
@@ -200,6 +201,16 @@ def test_permutation_null_uses_independent_permutations_not_one_repeated_shuffle
     # A shuffle-that-doesn't-shuffle bug would make every permutation
     # identical - confirm real variation exists across permutations.
     assert len(set(np.round(null, 6))) > 1
+
+
+def test_shuffle_within_groups_keeps_each_groups_labels_and_moves_them():
+    y = np.array([1, 1, 0, 0, 1, 0, 0, 0, 1, 1])
+    groups = np.array([0, 0, 0, 0, 1, 1, 1, 2, 2, 2])
+    shuffled = [shuffle_within_groups(y, groups, np.random.default_rng(s)) for s in range(20)]
+    for permuted in shuffled:
+        for g in np.unique(groups):
+            assert sorted(permuted[groups == g]) == sorted(y[groups == g])
+    assert any(not np.array_equal(p, y) for p in shuffled)
 
 
 def test_percentile_of_null_basic():

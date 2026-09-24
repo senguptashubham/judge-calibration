@@ -1,4 +1,4 @@
-"""cluster_bootstrap, paired_cluster_bootstrap. See TASKS.md task 2.4."""
+"""Cluster bootstrap and paired cluster bootstrap over question_id (invariants 2, 3)."""
 
 from typing import Callable
 
@@ -14,48 +14,27 @@ def cluster_bootstrap(
     ci: float = 0.95,
     seed: int = 0,
 ) -> tuple[float, float, float]:
-    """Cluster bootstrap CI for `stat_fn(df)`, resampling whole `group_col`
-    values (e.g. question_id) rather than individual rows (CLAUDE.md
-    invariant 2).
+    """Percentile-bootstrap CI for stat_fn(df), resampling whole `group_col`
+    values (question_id) rather than rows (invariant 2).
 
-    Why row-resampling is wrong here: rows sharing a `group_col` value are
-    correlated (same underlying question), not independent draws. A naive
-    row bootstrap treats them as independent anyway, which understates the
-    true sampling variance and produces CIs that are too narrow - findings
-    look significant when they're actually noise at the ~80-question level,
-    not the ~1000-row level. Resampling `group_col` values and taking every
-    row that belongs to each sampled value preserves that correlation
-    structure inside every replicate.
+    Why not rows: rows sharing a question are correlated, not independent
+    draws. Resampling rows treats them as independent, understates the
+    variance, and gives CIs that are too narrow - effective N is ~80
+    questions, not ~1000 rows.
 
-    One replicate:
-      1. Draw len(unique(df[group_col])) values from the unique group_col
-         values, WITH replacement, using `rng` (never bare np.random.* -
-         CLAUDE.md sec 5).
-      2. Build the resampled DataFrame: every row belonging to each sampled
-         group value, duplicated if that value was drawn more than once.
-      3. stat_fn(resampled_df) -> one replicate.
+    One replicate draws len(unique groups) group values with replacement,
+    takes every row of each drawn group (duplicated if drawn twice), and
+    evaluates stat_fn. The CI is the (1-ci)/2 and (1+ci)/2 percentiles of
+    `n` replicates. The point estimate is stat_fn on the real data, not the
+    replicates' mean - the replicates measure spread, not the center.
 
-    Repeat `n` times; the CI is the (1-ci)/2 and (1+ci)/2 percentiles of the
-    `n` replicates (percentile bootstrap - same convention as task 5.6's
-    RQ4 interaction CI). The reported point estimate is stat_fn(df) on the
-    REAL data, not the mean of the replicates - the replicates characterize
-    spread, they don't re-estimate the center.
-
-    Args:
-        df: one row per observation; must contain `group_col`.
-        stat_fn: takes a DataFrame (same columns as df), returns a float.
-        group_col: the clustering column - question_id throughout this
-            project.
-        n: number of bootstrap replicates.
-        ci: confidence level, e.g. 0.95 for a 95% CI.
-        seed: required and explicit (CLAUDE.md sec 5 - no bare np.random.*,
-            every stochastic function takes an explicit seed or rng).
-
-    Returns:
-        (point_estimate, ci_low, ci_high).
+    Returns (point_estimate, ci_low, ci_high).
     """
     if group_col not in df.columns:
         raise ValueError(f"{group_col!r} not found in DataFrame")
+
+    if not df.index.is_unique:
+        raise ValueError("df.index must be unique - rows are resampled by index label")
 
     if n <= 0:
         raise ValueError("n must be positive")
@@ -114,45 +93,27 @@ def paired_cluster_bootstrap(
     ci: float = 0.95,
     seed: int = 0,
 ) -> tuple[float, float, float]:
-    """Paired cluster bootstrap CI for `stat_fn(df_a) - stat_fn(df_b)`
-    (CLAUDE.md invariant 3 - condition comparisons like clean vs. verbose,
-    or AB vs. BA, are the SAME items measured twice, never two independent
-    samples).
+    """Paired cluster-bootstrap CI for stat_fn(df_a) - stat_fn(df_b)
+    (invariant 3: clean vs verbose, or two signals on the same items, are
+    the same items measured twice, never two independent samples).
 
-    The pairing requirement: each bootstrap replicate must resample
-    `group_col` values ONCE, then use that SAME set of sampled values to
-    build the resampled DataFrame on BOTH df_a and df_b before computing
-    their difference. Resampling df_a and df_b independently would silently
-    throw away the pairing and collapse this back into an (invalid) unpaired
-    two-sample comparison - this is the one detail that makes this function
-    different from calling cluster_bootstrap() twice and subtracting.
+    Each replicate resamples group values ONCE and uses that same draw for
+    both df_a and df_b before taking the difference. Resampling the two
+    independently would throw the pairing away - that is the whole
+    difference from calling cluster_bootstrap() twice and subtracting.
+    df_a and df_b must contain exactly the same group values.
 
-    df_a and df_b are expected to share the same universe of `group_col`
-    values (e.g. both are `(clean, P1)` and `(verbose, P1)` items on the
-    same question_ids) - a sampled group value that exists in one but not
-    the other means df_a/df_b weren't actually paired to begin with.
-
-    Args:
-        df_a: first condition's rows.
-        df_b: second condition's rows, paired with df_a on `group_col`.
-        stat_fn: takes a DataFrame, returns a float. Applied separately to
-            the resampled df_a and resampled df_b each replicate.
-        group_col: the clustering column - question_id throughout this
-            project.
-        n: number of bootstrap replicates.
-        ci: confidence level, e.g. 0.95 for a 95% CI.
-        seed: required and explicit - see cluster_bootstrap().
-
-    Returns:
-        (point_diff, ci_low, ci_high) for stat_fn(df_a) - stat_fn(df_b).
-        If the CI excludes 0, the difference is significant at this `ci`
-        level.
+    Returns (point_diff, ci_low, ci_high); a CI excluding 0 means the
+    difference is significant at this level.
     """
     if group_col not in df_a.columns:
         raise ValueError(f"{group_col!r} not found in df_a")
 
     if group_col not in df_b.columns:
         raise ValueError(f"{group_col!r} not found in df_b")
+
+    if not (df_a.index.is_unique and df_b.index.is_unique):
+        raise ValueError("df_a/df_b indexes must be unique - rows are resampled by index label")
 
     if n <= 0:
         raise ValueError("n must be positive")
@@ -175,16 +136,9 @@ def paired_cluster_bootstrap(
             f"Only in df_a: {only_a}; only in df_b: {only_b}"
         )
 
-    # sorted(), not list(set_a) - set iteration order is a CPython
-    # implementation detail, not a language guarantee. Sorting makes the
-    # draw order (and therefore, for a fixed seed, the exact replicates)
-    # deterministic by construction rather than by incidental hashing
-    # behavior - the same principle cluster_bootstrap() gets for free from
-    # df[group_col].unique()'s order-of-first-appearance. key=str rather
-    # than a bare sort: group_col values are Hashable in general (pandas'
-    # own typing for groupby().groups.keys()), not necessarily comparable -
-    # question_id is always int in this project, but str() sorting keeps
-    # this correct for any hashable group_col without narrowing the type.
+    # Sorted, so the draw order - and so each replicate, for a fixed seed -
+    # doesn't depend on set iteration order. key=str because group values
+    # need only be hashable, not comparable.
     groups = np.array(sorted(set_a, key=str))
 
     rng = np.random.default_rng(seed)

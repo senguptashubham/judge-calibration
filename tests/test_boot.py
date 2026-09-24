@@ -1,5 +1,5 @@
 """Tests for src/boot.py: clustered CIs must be strictly wider than naive
-row-resampled CIs on the same data. See TASKS.md task 2.4.
+row-resampled CIs on the same data.
 """
 
 import numpy as np
@@ -84,6 +84,17 @@ def test_cluster_bootstrap_raises_on_missing_group_col():
 
     with pytest.raises(ValueError):
         cluster_bootstrap(df, _MEAN_STAT, "question_id", n=10, seed=0)
+
+
+def test_cluster_bootstrap_raises_on_duplicate_index_labels():
+    # Rows are resampled by index label, so duplicate labels (e.g. from a
+    # concat without ignore_index) would silently pull extra rows per group.
+    df = pd.concat([_correlated_dataset(seed=1), _correlated_dataset(seed=2)])
+
+    with pytest.raises(ValueError, match="unique"):
+        cluster_bootstrap(df, _MEAN_STAT, "question_id", n=10, seed=0)
+    with pytest.raises(ValueError, match="unique"):
+        paired_cluster_bootstrap(df, df, _MEAN_STAT, "question_id", n=10, seed=0)
 
 
 def test_cluster_bootstrap_raises_on_invalid_n():

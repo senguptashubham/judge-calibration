@@ -1,9 +1,5 @@
-"""Property tests for src/perturb.py: verbose_pad preserves verdict-relevant
-content. (attribution() is cut, DECISIONS.md D18 - no attribution property
-test.) See TASKS.md task 4.1.
-
-vacuum_identical()/vacuum_empty() tests are task 1.8, not 4.1 - see
-TASKS.md task 1.8.
+"""Property tests for src/perturb.py: verbose_pad preserves the original
+content, and the vacuum helpers build the degenerate pairs they claim to.
 """
 
 from src.perturb import vacuum_empty, vacuum_identical, verbose_pad

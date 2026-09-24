@@ -1,11 +1,7 @@
 """Tests for src/kev_signals.py: the raw-checkpoint -> calls -> items
-conversion (TASKS.md K3b). Mirrors tests/test_signals.py's hand-computed
-style for the order-correction and entropy signals, since kev_signals.py
-deliberately reuses the exact same formulas (signals.py::_binary_entropy)
-and the exact same order-correction logic as conf_bpe/_p_model_a_wins -
-this was flagged as a real bug risk before being built (DECISIONS.md D27:
-naively averaging prob_a across AB/BA would blend two different physical
-questions), so it gets the most test coverage here.
+conversion. Heaviest coverage on the order correction in
+_p_model_a_wins_kev - naively averaging prob_a across AB/BA would blend two
+different questions (D27).
 """
 
 import json
@@ -60,6 +56,30 @@ def test_build_calls_kev_round_trips_a_jsonl_checkpoint(tmp_path):
     assert df.iloc[0]["prob_a"] == 0.7
     assert df.iloc[0]["prob_b"] == 0.3
     assert df.iloc[0]["choice"] == "A"
+
+
+def test_build_calls_kev_reads_the_nested_raw_response_layout_identically(tmp_path):
+    # The current call_kev() nests kev's response under raw_response; the
+    # analysed run stored the same three fields flat. Both must parse alike.
+    base = {
+        "item_id": "abc", "question_id": 1, "category": None, "model_a": "m1", "model_b": "m2",
+        "turn": 1, "condition": "clean", "order": "AB", "judge_model": "jaredpalmer/kev-8b",
+        "state_tokens": 400, "skipped": False, "ok": True,
+    }
+    flat = {**base, "choice": "A", "probabilities": {"A": 0.7, "B": 0.3}, "input_tokens": 420}
+    nested = {
+        **base,
+        "raw_response": {
+            "answers": {"verdict": {"choice": "A", "probabilities": {"A": 0.7, "B": 0.3}}},
+            "usage": {"input_tokens": 420},
+        },
+    }
+    (tmp_path / "flat.jsonl").write_text(json.dumps(flat) + "\n", encoding="utf-8")
+    (tmp_path / "nested.jsonl").write_text(json.dumps(nested) + "\n", encoding="utf-8")
+
+    pd.testing.assert_frame_equal(
+        build_calls_kev(tmp_path / "flat.jsonl"), build_calls_kev(tmp_path / "nested.jsonl")
+    )
 
 
 def test_build_calls_kev_handles_skipped_rows_with_no_probabilities(tmp_path):

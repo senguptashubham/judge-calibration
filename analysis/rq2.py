@@ -1,33 +1,18 @@
-"""RQ2: is any cheap uncertainty signal informative about error? See
-TASKS.md task 3.2.
+"""RQ2: is any cheap uncertainty signal informative about error?
 
-Plain script, not a notebook - same CLI pattern as analysis/rq1.py:
-`python -m analysis.rq2 --config configs/run.yaml`.
+`python -m analysis.rq2 --config configs/run.yaml`
 
-Reads results/items.parquet filtered to (clean, P1) via load_rq1_items()
-(analysis/rq1.py) - invariant 14's filter is identical for RQ2, so it's
-reused rather than re-implemented.
+Population: load_rq1_items() - (clean, P1), human_label present. Scored
+against judge_verdict/correct only (D7's deployed single-pass verdict); the
+verdict_bidir comparison is RQ1's job.
 
-Scope: unlike RQ1, this does NOT pair against verdict_bidir - RQ2 asks
-"is signal X informative about the judge's actual deployed error rate,"
-which is the single-pass judge_verdict/correct definition (D7). The
-verdict-definition comparison itself is RQ1's job (compute_verdict_gap).
+For each of conf_verb, conf_lp, conf_sc, conf_bpe: the risk-coverage curve,
+AURC, accuracy and κ at {90, 75, 50}% coverage (invariant 5), and
+AUROC(uncertainty -> error), each with a cluster-bootstrap CI (invariant 2).
+conf_ens's entropy decomposition is RQ5 (analysis/rq5.py).
 
-For each of the four ORIGINAL confidence signals - conf_verb, conf_lp,
-conf_sc, conf_bpe (conf_ens's entropy decomposition is RQ5, task 3.2b, a
-separate script reusing threshold_sweep()) - computes:
-  - the risk-coverage curve itself (for the figure)
-  - AURC
-  - accuracy@{90,75,50}% coverage
-  - kappa@{90,75,50}% coverage (invariant 5 - never accuracy without kappa)
-  - AUROC(uncertainty -> error)
-every scalar with a cluster-bootstrap CI (question_id, invariant 2).
-
-Writes results/rq2_table_{model_slug}.csv (one row per signal) and
-results/figures/risk_coverage_{model_slug}.png (src/plots.py's
-plot_risk_coverage - all four signals + the oracle, one axis - task 3.2's
-thesis figure). model_slug = Config.model_slug, so a second judge model
-never overwrites the first's output.
+Writes results/rq2_table_{model_slug}.csv and
+results/figures/risk_coverage_{model_slug}.png (all four signals + oracle).
 """
 
 import argparse
@@ -45,11 +30,9 @@ COVERAGE_TARGETS = [0.90, 0.75, 0.50]
 
 
 def _bootstrap_battery(items: pd.DataFrame, metric_fns: dict, seed: int) -> dict:
-    """Same pattern as analysis/rq1.py's own helper of the same name - runs
-    cluster_bootstrap once per (name, stat_fn) pair and flattens the result
-    into name/name_ci_low/name_ci_high keys. Kept as a local copy rather
-    than importing rq1's (private, underscore-prefixed) version - this
-    script shouldn't depend on rq1.py's internals surviving unchanged.
+    """cluster_bootstrap per (name, stat_fn), flattened into
+    name / name_ci_low / name_ci_high keys. A local copy of rq1.py's private
+    helper, so this script doesn't depend on rq1's internals.
     """
     result = {}
     for name, fn in metric_fns.items():
@@ -61,30 +44,14 @@ def _bootstrap_battery(items: pd.DataFrame, metric_fns: dict, seed: int) -> dict
 
 
 def _top_k_mask(confidences: np.ndarray, coverage: float) -> np.ndarray:
-    """Boolean mask for "the top `coverage` fraction of items by
-    confidence" - the most-confident-first rank cut used for the
-    accuracy@coverage / kappa@coverage point queries.
+    """Mask for the `coverage` fraction of most-confident items.
 
-    Deliberately NOT the same tie-safe value-threshold stepping
-    risk_coverage()/threshold_sweep() use for the plotted curve: those
-    walk unique signal VALUES so a tied group always enters together,
-    which is exactly right for drawing an unambiguous curve, but it means
-    the curve's own coverage levels are whatever the data's ties happen to
-    produce - they don't generally land on exactly 0.90/0.75/0.50. A rank
-    cut (argsort, most-confident k items) always hits the target coverage
-    exactly, at the cost of an arbitrary (but deterministic, stable-sort)
-    tiebreak for whichever items sit right at the cutoff boundary. That
-    tradeoff is the right one specifically for a single scalar query like
-    "accuracy at 90% coverage" - it's also cheap enough to call 2000x per
-    bootstrap replicate, unlike re-running the full threshold sweep for a
-    single point every time.
-
-    Args:
-        confidences: stated confidence per item, in [0, 1].
-        coverage: target fraction of items to keep, in (0, 1].
-
-    Returns:
-        Boolean mask, same length as confidences, True for the kept items.
+    A rank cut, unlike the tie-safe value thresholds risk_coverage() uses
+    for the plotted curve: those admit tied groups whole, so the curve's
+    coverage levels rarely land exactly on 0.90/0.75/0.50. A rank cut always
+    hits the target exactly, at the cost of a deterministic (stable-sort)
+    tie-break at the boundary - the right trade-off for a single scalar
+    query, and cheap enough to run 2000 times per bootstrap.
     """
     n = len(confidences)
     k = max(1, round(coverage * n))
@@ -97,21 +64,9 @@ def _top_k_mask(confidences: np.ndarray, coverage: float) -> np.ndarray:
 def compute_signal_rq2_metrics(
     items: pd.DataFrame, signal: str, correct_col: str, verdict_col: str, seed: int
 ) -> dict:
-    """RQ2's full scalar battery for one confidence signal: AURC,
-    AUROC(uncertainty -> error), and accuracy/kappa at each of
-    COVERAGE_TARGETS - every value with a cluster-bootstrap CI.
-
-    Args:
-        items: load_rq1_items()'s output (already filtered).
-        signal: one of SIGNALS - the confidence column name.
-        correct_col: "correct" (judge_verdict's correctness column - see
-            module docstring on why RQ2 doesn't also score correct_bidir).
-        verdict_col: "judge_verdict".
-        seed: config.seed.
-
-    Returns:
-        aurc/auroc, and accuracy_at_{pct}/kappa_at_{pct} for pct in
-        {90, 75, 50}, each with a _ci_low/_ci_high pair.
+    """AURC, AUROC(uncertainty -> error), and accuracy/κ at each of
+    COVERAGE_TARGETS for one signal, each with a cluster-bootstrap CI.
+    Uncertainty = 1 - signal throughout.
     """
     def _aurc(df: pd.DataFrame) -> float:
         uncertainty = 1 - df[signal].to_numpy(dtype=float)
@@ -168,7 +123,7 @@ def main(config_path: str) -> None:
     plot_risk_coverage(curves, oracle_curve, filename=f"risk_coverage_{config.model_slug}.png")
 
     table = pd.DataFrame.from_records(rows)
-    table_path = f"results/rq2_table_{config.model_slug}.csv"
+    table_path = f"{config.paths.results_dir}/rq2_table_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 

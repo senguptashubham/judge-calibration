@@ -1,34 +1,21 @@
-"""Judge prompt templates: P1 (existing, primary), P2 (correctness-first
-rubric), P3 (helpfulness-first rubric) - DECISIONS.md D19. Each versioned
-and hashed independently. FROZEN after Week 1 (CLAUDE.md invariant 10).
-See TASKS.md task 1.3.
+"""Judge prompt templates P1 (general MT-Bench rubric, primary), P2
+(correctness-first), P3 (helpfulness-first) - D19. FROZEN (invariant 10):
+editing any template text changes its hash and requires a full re-run.
 
-Output contract (all three variants share it): a single JSON object with
-exactly `reasoning` (free text), `verdict` ("A"|"B"), `confidence` (0-1),
-in that key order. JSON was chosen over a plain-text "Verdict: A" marker
-because of how guided/structured decoding actually behaves: a bare regex
-like `.*\\nVerdict: (A|B)` has a `.*` state with a self-loop that swallows
-every character - including the literal marker's own characters - so the
-grammar never *forces* the model to reach for the marker, it only
-constrains what happens once the model gets there. A JSON string value's
-closing `"` is not ambiguous the same way (unescaped `"` has no alternate
-reading as "more string content"), so the instant the model closes the
-`reasoning` string the grammar hard-forces everything after it - the
-`malformed_json` failure mode in CLAUDE.md's parse_failure_type taxonomy
-already anticipated this design. Neither format eliminates the model's own
-choice of *when* to stop reasoning and close the field - that residual
-risk is the `truncated` failure type, mitigated by bounding reasoning
-length in the prompt itself (see _TASK_INSTRUCTIONS) and measured directly
-by task 1.6's pilot parse-failure-rate gate.
+Output contract, shared by all three: one JSON object with exactly
+`reasoning`, `verdict` ("A"|"B"), `confidence` (0-1), in that order. JSON
+rather than a plain "Verdict: A" marker because of how guided decoding
+works: a regex like `.*\\nVerdict: (A|B)` has a `.*` that can swallow the
+marker itself, so the grammar never forces the model to reach it. A JSON
+string's closing quote is unambiguous, so once `reasoning` closes, the
+grammar forces the rest. What remains is the model's own choice of when to
+stop reasoning - the `truncated` failure type, kept rare by asking for
+2-4 sentences.
 
-Turn handling: `mt_bench_human_judgments` already stores each side's full
-conversation-so-far in `conversation_a`/`conversation_b` (2 messages for
-turn=1, 4 for turn=2 - confirmed empirically against the live dataset, not
-assumed) - so a turn=2 judgment needs the full transcript rendered, not
-just the isolated final exchange, or a follow-up like "rewrite your
-previous response" is unjudgeable in isolation. This is handled with a
-plain Python `if`, not a template-engine conditional, per CLAUDE.md sec 5's
-"boring, explicit code" preference.
+Turn handling: the dataset stores each side's conversation so far (2
+messages for turn=1, 4 for turn=2), and a follow-up like "rewrite your
+previous response" is unjudgeable alone, so turn=2 renders the whole
+transcript.
 """
 
 import hashlib
@@ -41,9 +28,8 @@ _INTRO = (
     "conversation for each assistant below, then "
 )
 
-# The one sentence that differs across variants (DECISIONS.md D19) - every
-# other word of the prompt is shared, so the ensemble (RQ5) isolates the
-# effect of the rubric framing itself, not incidental wording differences.
+# The one sentence that differs across variants (D19), so the ensemble
+# isolates the rubric's framing, not incidental wording.
 _RUBRIC_SENTENCES = {
     "P1": (
         "decide which assistant performed better overall, considering "
@@ -80,13 +66,8 @@ Respond with only that JSON object."""
 
 
 def _render_conversation(label: str, conversation: list[dict], turn: int) -> str:
-    """Renders one side's transcript up to and including `turn`.
-
-    `conversation` is `conversation_a`/`conversation_b` straight from
-    `load_votes()`'s underlying dataset: a list of {"role", "content"}
-    dicts, [user, assistant] for turn=1 and [user, assistant, user,
-    assistant] for turn=2. Indexing conversation[2]/[3] is guarded by the
-    turn check - a turn=1 conversation only ever has 2 messages.
+    """One side's transcript up to and including `turn`: [user, assistant]
+    for turn=1, [user, assistant, user, assistant] for turn=2.
     """
     lines = [f"[Conversation with Assistant {label}]"]
     lines.append(f"User: {conversation[0]['content']}")
@@ -100,10 +81,8 @@ def _render_conversation(label: str, conversation: list[dict], turn: int) -> str
 def apply_order(
     order: str, model_a_conversation: list[dict], model_b_conversation: list[dict]
 ) -> tuple[list[dict], list[dict]]:
-    """Maps (model_a, model_b) onto (displayed as Assistant A, displayed as
-    Assistant B) for a given order. order="AB" is the identity mapping;
-    "BA" swaps which physical model's conversation is labeled A vs B - this
-    is the position-bias probe (DECISIONS.md D5), orthogonal to condition.
+    """(model_a, model_b) -> (shown as Assistant A, shown as Assistant B).
+    "AB" is the identity; "BA" swaps them - the position-bias probe (D5).
     """
     if order == "AB":
         return model_a_conversation, model_b_conversation
@@ -119,12 +98,9 @@ def render_prompt(
     model_b_conversation: list[dict],
     turn: int,
 ) -> str:
-    """Renders the full judge prompt for one call.
-
-    `model_a_conversation`/`model_b_conversation` are the dataset's own
-    conversation_a/conversation_b (i.e. keyed to the item's actual
-    model_a/model_b identity) - `order` decides which one is displayed as
-    "Assistant A" in the rendered text, not the caller.
+    """The full judge prompt for one call. The conversations are the
+    dataset's conversation_a/conversation_b; `order` decides which is shown
+    as Assistant A.
     """
     if variant not in _PREAMBLES:
         raise ValueError(f"unknown prompt variant {variant!r} - must be one of {VARIANTS}")
@@ -138,11 +114,8 @@ def render_prompt(
 
 
 def prompt_hash(variant: str) -> str:
-    """Stable hash of a variant's fixed instructional text (preamble +
-    task instructions), independent of any item's content - two calls for
-    the same variant always match, and it only changes if the template
-    text itself is edited (CLAUDE.md invariant 10: that requires a new
-    version string and a full re-run, never a silent edit).
+    """Hash of a variant's fixed text (preamble + task instructions),
+    independent of item content - it changes only if the template does.
     """
     if variant not in _PREAMBLES:
         raise ValueError(f"unknown prompt variant {variant!r} - must be one of {VARIANTS}")

@@ -1,23 +1,13 @@
-"""HTTP client for kev-8b's `/v1/systemone` contract (DECISIONS.md D27) -
-the industry-counterexample comparison arm, not part of the primary judge
-harness.
+"""RQ6: HTTP client for kev-8b's `/v1/systemone` endpoint (D27).
 
-Deliberately separate from judge.py/config.py: kev-8b's real schedule has
-no prompt_variant axis and no self-consistency sampling (D27 - kev does one
-deterministic forward pass per request, no autoregressive generation, so
-resampling would just recover its own reported distribution, not an
-independent estimate). A separate, smaller `KevConfig` avoids forcing
-meaningless placeholder values through `src/config.py::Config`'s validation
-(`temperature_sc > 0`, `"P1" in prompt_variants`), which was built for a
-different harness's invariants and doesn't apply here at all.
+kev-8b makes one deterministic forward pass per request - no prompt
+variants, no sampling - so the schedule is (condition, order) only, and a
+separate KevConfig avoids forcing placeholder values through Config's
+validation, which is built for the primary judge.
 
-Requires `kev.serve` already running and reachable at `KevConfig.base_url` -
-this module only ever POSTs to that URL, it never loads the model itself.
-See DECISIONS.md D27 for the confirmed launch config
-(`KEV_DTYPE=bf16 KEV_MERGE=0 KEV_ATTN=sdpa`, via `setsid`) and the confirmed
-`max_state_tokens` ceiling (8,160 - beyond ~8,165 kev-8b becomes genuinely
-non-deterministic on a 24GB-class GPU, confirmed across two independent
-probe sessions, not a documentation guess).
+Needs `kev.serve` already running at KevConfig.base_url; this module only
+POSTs to it. D27 has the working launch configuration and the 8,160-token
+ceiling (above ~8,165 tokens kev-8b hits non-deterministic OOMs on an L4).
 """
 
 from __future__ import annotations
@@ -60,10 +50,7 @@ class KevConfig:
 
     @property
     def model_slug(self) -> str:
-        # Same derivation as src/config.py::Config.model_slug (D26) -
-        # duplicated rather than imported, since Config's own __post_init__
-        # validation doesn't apply to this harness and shouldn't be worked
-        # around with meaningless placeholder field values.
+        # Same derivation as Config.model_slug (D26).
         name = self.judge_model.split("/")[-1]
         return name.lower().replace("-", "_")
 
@@ -82,10 +69,7 @@ class KevCallSpec:
 
 
 def call_schedule(config: KevConfig) -> list[KevCallSpec]:
-    """Every (condition, order) combination one item needs - D27's schedule
-    is deliberately flat compared to judge.py's D19 schedule: no
-    prompt_variant axis, no sampling. `len(conditions) * 2` calls/item.
-    """
+    """Every (condition, order) pair: len(conditions) * 2 calls per item."""
     return [KevCallSpec(condition, order) for condition in config.conditions for order in ("AB", "BA")]
 
 
@@ -94,9 +78,7 @@ def checkpoint_key(item: str, condition: str, order: str) -> str:
 
 
 def load_completed_keys(checkpoint_path: Path) -> set[str]:
-    """Same resumability guarantee as judge.py's own version (CLAUDE.md
-    invariant 9), against this module's simpler 3-field key.
-    """
+    """Keys already in the checkpoint (invariant 9)."""
     completed: set[str] = set()
     if not checkpoint_path.exists():
         return completed
@@ -113,9 +95,7 @@ def load_completed_keys(checkpoint_path: Path) -> set[str]:
 def pending_calls(
     items_df: "pd.DataFrame", specs: list[KevCallSpec], completed: set[str]
 ) -> list[tuple[str, "pd.Series", KevCallSpec]]:
-    """Same shape as judge.py::pending_calls() - a pure function, no
-    network, so resumability is directly testable without a server running.
-    """
+    """Every (item, spec) pair not already completed - pure, testable without a server."""
     pending: list[tuple[str, "pd.Series", KevCallSpec]] = []
     for _, item_row in items_df.iterrows():
         item = item_id(item_row["question_id"], item_row["model_a"], item_row["model_b"], item_row["turn"])
@@ -127,12 +107,8 @@ def pending_calls(
 
 
 def _render_side(label: str, conversation: list[dict], turn: int) -> str:
-    """Renders one side's transcript - a small, local copy of
-    src/prompts.py's own private _render_conversation(), not an import:
-    prompts.py is frozen after Week 1 (CLAUDE.md invariant 10, "ask before
-    touching src/prompts.py") and this comparison arm postdates that freeze
-    by three weeks. Duplicating ~6 lines here is cheaper than reopening a
-    frozen file for a private-function visibility change.
+    """One side's transcript. A local copy of prompts.py's private
+    _render_conversation(), so the frozen prompts.py needn't change.
     """
     lines = [f"[Response from Assistant {label}]"]
     lines.append(f"User: {conversation[0]['content']}")
@@ -150,14 +126,10 @@ def build_state(
     model_b_conversation: list[dict],
     turn: int,
 ) -> str:
-    """Builds kev's `state` (the document) - just the question+two-responses
-    content, no instruction text (that lives in build_payload()'s
-    `questions.verdict` branch instead, since kev's typed-question format
-    separates the two). `order` picks which physical model is labeled A/B
-    (reuses prompts.py::apply_order() - public, generic, no template text,
-    so importing it doesn't touch anything frozen). `condition == "verbose"`
-    applies the identical verbose_pad() perturbation task 4.2 used for the
-    primary judge - the same attack, not a re-derived one.
+    """kev's `state` document: the two responses only, no instructions
+    (those go in build_payload()'s question). `order` picks which model is
+    labeled A; "verbose" applies the same verbose_pad() the primary judge
+    saw.
     """
     displayed_a, displayed_b = apply_order(order, model_a_conversation, model_b_conversation)
     if condition == "verbose":
@@ -180,24 +152,10 @@ def build_payload(state: str) -> dict:
 
 
 def call_kev(base_url: str, state: str, timeout: int = 120) -> dict:
-    """The only function in this module that touches the network. Returns
-    the COMPLETE raw response - the full parsed JSON body on success, the
-    full raw error text on an HTTP error, the full exception string on a
-    network failure - never a curated subset of fields.
-
-    This mirrors judge.py's own raw-materials-first principle (CLAUDE.md
-    invariant 7: parsing/derivation happens later, in a separate step,
-    never at collection time) - a principle already established elsewhere
-    in this codebase, not a new judgment call. An earlier version of this
-    function extracted only choice/probabilities/input_tokens and
-    discarded the rest, which silently lost kev's own `confidence` field
-    (present in the documented response schema, and NOT equal to
-    max(probabilities.values()) in the worked example - a real, distinct
-    signal, not a derivable one) across the entire first full run. Fixed
-    22 Sep 2026 (DECISIONS.md D27 amendment) - that run was discarded and
-    redone with this version. Deriving choice/probabilities/confidence/
-    anything else from `raw_response` is a later step's job (K4), same
-    layering parse.py already uses for the primary judge.
+    """The only network call. Returns the COMPLETE raw response - the full
+    JSON body on success, the raw error text on an HTTP error, the exception
+    string on a network failure - never a curated subset. Deriving
+    choice/probabilities from it is kev_signals.py's job (invariant 7).
     """
     payload = build_payload(state)
     try:
@@ -210,16 +168,10 @@ def call_kev(base_url: str, state: str, timeout: int = 120) -> dict:
 
 
 def _run_calls(config: KevConfig, checkpoint_path: Path, items_df: "pd.DataFrame") -> None:
-    """Iterates the pending schedule, checking each state's real token
-    length (kev-8b's own tokenizer, Qwen3-8B-Base) against
-    config.max_state_tokens BEFORE calling - items over the cap are logged
-    to the checkpoint with skipped=True and a reason, never silently
-    dropped (same "never silently impute" standard D21 sets for
-    conf_sc/conf_ens on verbose). The only function besides call_kev()
-    that touches something external (here: the tokenizer download) -
-    everything above stays importable/testable without `transformers`
-    installed, the same "only touches vllm inside _run_generation" split
-    judge.py already uses for its own Colab-only dependency.
+    """Runs the pending schedule, checking each state's real token length
+    (kev's tokenizer, Qwen3-8B-Base) against max_state_tokens before calling.
+    Over-length states are logged with skipped=True and a reason, never
+    silently dropped.
     """
     from transformers import AutoTokenizer
 
@@ -273,9 +225,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     cfg = KevConfig.from_yaml(args.config)
-    # load_full_items_df() only reads config.dataset/config.tie_policy -
-    # KevConfig has both by the same names, so this works via duck typing
-    # despite the type hint upstream saying Config, not KevConfig.
+    # load_full_items_df() reads only dataset/tie_policy, which KevConfig has.
     kev_items_df = load_full_items_df(cfg)
 
     if args.n_items is not None:

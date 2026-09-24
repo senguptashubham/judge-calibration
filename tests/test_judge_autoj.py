@@ -213,12 +213,10 @@ def test_autoj_prompt_hash_is_stable_and_content_dependent():
 
 # --- split_by_prompt_length ------------------------------------------------
 #
-# Added 23 Sep 2026 after a real Colab run hit VLLMValidationError - a
-# prompt exceeded auto-j's 8,192-token context. `token_counter` is a plain
-# character-count stand-in here, not a real tokenizer - the split logic
-# itself doesn't care what "tokens" means, only that it compares against
-# the threshold correctly, so testing it this way keeps these tests fast
-# and offline (no tokenizer download), per this module's own docstring.
+# One over-length prompt crashes vLLM's whole batch, so these calls must be
+# split out before generation. `token_counter` is a character-count stand-in:
+# the split logic only compares counts against the threshold, so no real
+# tokenizer is needed.
 
 
 def _pending_with_lengths():
