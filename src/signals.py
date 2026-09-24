@@ -2,6 +2,10 @@
 (conf_verb / conf_lp / conf_sc / conf_bpe), the P1/P2/P3 ensemble's
 entropy decomposition (conf_ens, D20), and RQ4's Tier B/C columns.
 
+The *_prob and *_bidir columns are the calibration forms: each is a
+probability that a specific verdict is right, which ECE needs (see
+prob_on_verdict). conf_bpe and conf_ens stay the ranking signals.
+
 Every function takes `rows`: the already-parsed calls (src/parse.py's
 output) belonging to one (item_id, condition, prompt_variant) group. This
 file never touches `raw_output` (invariant 7).
@@ -108,7 +112,45 @@ def conf_bpe(rows: list[dict]) -> float | None:
     return 1 - _binary_entropy(p)
 
 
+def prob_on_verdict(p_model_a: float | None, verdict: str | None) -> float | None:
+    """The probability `p_model_a` puts on `verdict` winning: p if the
+    verdict is "A", 1 - p if "B".
+
+    This is the calibration form of an entropy signal. 1 - H(p) ranks items
+    correctly but is not a probability - a 50/50 split gives 1 - ln 2 = 0.307,
+    not 0.5 - so ECE and the overconfidence gap on it measure the scale, not
+    calibration. AUROC is unaffected either way. Against verdict_bidir, which
+    is argmax(p), this equals max(p, 1 - p).
+    """
+    if p_model_a is None or verdict is None:
+        return None
+    return p_model_a if verdict == "A" else 1 - p_model_a
+
+
+def conf_verb_bidir(rows: list[dict]) -> float | None:
+    """Verbalized confidence in verdict_bidir, averaged over both orders.
+
+    Each order's stated confidence c is in its own verdict; it counts as c
+    toward verdict_bidir when that order agrees with it and 1 - c when it
+    doesn't. conf_verb itself is confidence in the AB verdict only, so it
+    can't be scored against verdict_bidir.
+    """
+    bidir = verdict_bidir(rows)
+    call_ab = _find_call(rows, "AB", 0)
+    call_ba = _find_call(rows, "BA", 0)
+    if bidir is None or call_ab is None or call_ba is None:
+        return None
+    conf_ab, conf_ba = call_ab["verbalized_conf"], call_ba["verbalized_conf"]
+    verdict_ab, verdict_ba = judge_verdict(rows), _canonical_verdict_ba(rows)
+    if conf_ab is None or conf_ba is None or verdict_ab is None or verdict_ba is None:
+        return None
+    toward_ab = conf_ab if verdict_ab == bidir else 1 - conf_ab
+    toward_ba = conf_ba if verdict_ba == bidir else 1 - conf_ba
+    return (toward_ab + toward_ba) / 2
+
+
 def compute_item_signals(rows: list[dict], k_sc: int) -> dict:
+    p = _p_model_a_wins(rows)
     return {
         "judge_verdict": judge_verdict(rows),
         "verdict_bidir": verdict_bidir(rows),
@@ -116,6 +158,9 @@ def compute_item_signals(rows: list[dict], k_sc: int) -> dict:
         "conf_lp": conf_lp(rows),
         "conf_sc": conf_sc(rows, k_sc),
         "conf_bpe": conf_bpe(rows),
+        "conf_bpe_prob": prob_on_verdict(p, judge_verdict(rows)),
+        "conf_verb_bidir": conf_verb_bidir(rows),
+        "conf_lp_bidir": prob_on_verdict(p, verdict_bidir(rows)),
     }
 
 
@@ -124,6 +169,15 @@ def _binary_entropy(p: float) -> float:
     if p <= 0.0 or p >= 1.0:
         return 0.0
     return -((p * np.log(p)) + ((1 - p) * np.log(1 - p)))
+
+
+EMPTY_ENS = {
+    "ens_entropy_total": None,
+    "ens_entropy_aleatoric": None,
+    "ens_entropy_epistemic": None,
+    "conf_ens": None,
+    "conf_ens_prob": None,
+}
 
 
 def conf_ens(rows_by_variant: dict[str, list[dict]]) -> dict:
@@ -135,6 +189,7 @@ def conf_ens(rows_by_variant: dict[str, list[dict]]) -> dict:
         Aleatoric  = mean(H(p_P1), H(p_P2), H(p_P3))
         Epistemic  = Total - Aleatoric      # >= 0 by Jensen's inequality
         conf_ens   = 1 - Total
+        conf_ens_prob = mean_p on P1's judge_verdict side (prob_on_verdict)
 
     Aleatoric is how unsure each variant is on its own; Epistemic is the
     extra uncertainty that appears only when averaging ACROSS variants,
@@ -150,12 +205,7 @@ def conf_ens(rows_by_variant: dict[str, list[dict]]) -> dict:
     p_p3 = _p_model_a_wins(rows_by_variant["P3"])
 
     if p_p1 is None or p_p2 is None or p_p3 is None:
-        return {
-            "ens_entropy_total": None,
-            "ens_entropy_aleatoric": None,
-            "ens_entropy_epistemic": None,
-            "conf_ens": None,
-        }
+        return dict(EMPTY_ENS)
 
     mean_p = (p_p1 + p_p2 + p_p3) / 3
     total = _binary_entropy(mean_p)
@@ -166,6 +216,7 @@ def conf_ens(rows_by_variant: dict[str, list[dict]]) -> dict:
         "ens_entropy_aleatoric": aleatoric,
         "ens_entropy_epistemic": epistemic,
         "conf_ens": 1 - total,
+        "conf_ens_prob": prob_on_verdict(mean_p, judge_verdict(rows_by_variant["P1"])),
     }
 
 
@@ -288,12 +339,6 @@ def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc:
     Human labels and len_a/len_b are joined from items_labels on item_id.
     """
     labels_by_item = items_labels.set_index("item_id")
-    empty_ens = {
-        "ens_entropy_total": None,
-        "ens_entropy_aleatoric": None,
-        "ens_entropy_epistemic": None,
-        "conf_ens": None,
-    }
 
     records = []
     for (item_id, condition), item_condition_group in calls.groupby(["item_id", "condition"]):
@@ -355,7 +400,7 @@ def build_items_dataframe(calls: pd.DataFrame, items_labels: pd.DataFrame, k_sc:
                 **cot_aggregates_greedy(rows),
                 **cot_aggregates_sampled(rows, k_sc),
                 "flipped": flipped(rows),
-                **(ens_result if prompt_variant == "P1" and ens_result is not None else empty_ens),
+                **(ens_result if prompt_variant == "P1" and ens_result is not None else EMPTY_ENS),
             }
             records.append(record)
 

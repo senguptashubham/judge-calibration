@@ -40,14 +40,19 @@ from src.features import (
     load_rq4_population,
 )
 from src.bayesian import (
+    NUM_CHAINS,
+    NUM_SAMPLES,
+    NUM_WARMUP,
     build_group_index,
     fit_nuts,
     posterior_predictive_entropy_decomposition,
     predict_in_sample,
     repeated_stratified_group_kfold_bayesian,
+    summarize_diagnostics,
 )
 from src.metrics import auroc_error, brier, ece, get_bin_edges
 from src.plots import (
+    judge_name,
     plot_bayesian_convergence,
     plot_h4_interaction,
     plot_rq4_ablation,
@@ -537,19 +542,6 @@ def main_ablation(config_path: str) -> None:
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
-    plot_rq4_ablation(
-        tiers=table["tier"].tolist(),
-        models=table["model"].tolist(),
-        auroc_mean=table["auroc_mean"].to_numpy(),
-        auroc_low=table["auroc_low"].to_numpy(),
-        auroc_high=table["auroc_high"].to_numpy(),
-        baseline=baseline["auroc"],
-        baseline_ci_low=baseline["auroc_ci_low"],
-        baseline_ci_high=baseline["auroc_ci_high"],
-        baseline_label=baseline["signal"],
-        model_slug=config.model_slug,
-    )
-
     # Does every cell beat chance on this population specifically? (invariant 12)
     print()
     print("Permutation null (n=50 per cell - see compute_permutation_null_summary's own docstring):")
@@ -570,6 +562,20 @@ def main_ablation(config_path: str) -> None:
     null_table_path = f"{config.paths.results_dir}/rq4_ablation_null_{config.model_slug}.csv"
     null_table.to_csv(null_table_path, index=False)
     print(f"Wrote {len(null_table)} rows to {null_table_path}")
+
+    plot_rq4_ablation(
+        tiers=table["tier"].tolist(),
+        models=table["model"].tolist(),
+        auroc_mean=table["auroc_mean"].to_numpy(),
+        auroc_low=table["auroc_low"].to_numpy(),
+        auroc_high=table["auroc_high"].to_numpy(),
+        baseline=baseline["auroc"],
+        baseline_ci_low=baseline["auroc_ci_low"],
+        baseline_ci_high=baseline["auroc_ci_high"],
+        baseline_label=baseline["signal"],
+        model_slug=config.model_slug,
+        null_means=null_table["null_mean"].to_numpy(),
+    )
 
     plot_rq4_permutation_nulls(
         tiers=[row["tier"] for row in null_rows],
@@ -738,6 +744,11 @@ def main_calibration(config_path: str) -> None:
         signal_name="rq4_meta_model",
         n_bins=config.n_bins,
         model_slug=config.model_slug,
+        label="logistic regression, all tiers",
+        title=f"Meta-model calibration ({judge_name(config.model_slug)}, out-of-fold)",
+        xlabel="predicted P(judge wrong)",
+        ylabel="observed error rate",
+        note="below the diagonal = predicts more errors than occur",
     )
 
     print()
@@ -792,7 +803,7 @@ def compute_frequentist_arm(population: pd.DataFrame, seed: int) -> dict:
 
 
 def compute_bayesian_arm(
-    population: pd.DataFrame, seed: int, num_warmup: int = 500, num_samples: int = 1000, num_chains: int = 2
+    population: pd.DataFrame, seed: int, num_warmup: int = NUM_WARMUP, num_samples: int = NUM_SAMPLES, num_chains: int = NUM_CHAINS
 ) -> dict:
     """Tier A Bayesian hierarchical model under the same protocol (about 7
     minutes for the 50 fold-fits).
@@ -800,7 +811,7 @@ def compute_bayesian_arm(
     `pooled_draws` concatenates every repeat's posterior draws rather than
     averaging them: each repeat is an independent refit on a different
     partition, so pooling keeps both posterior and partition variability.
-    float32 keeps the (20,000 x 1,819) array small.
+    float32 keeps the (40,000 x 1,819) array at about 290 MB.
     """
     X, y, groups = build_xyg(population, build_tier_a)
     results = repeated_stratified_group_kfold_bayesian(
@@ -902,6 +913,7 @@ def main_bayesian_comparison(config_path: str) -> None:
                 "brier": bayes_brier,
                 "nll": bayes_nll,
                 "coverage_90": bayes_coverage,
+                **summarize_diagnostics(bayes["fold_diagnostics"]),
             },
         ]
     )
@@ -916,15 +928,21 @@ def main_bayesian_comparison(config_path: str) -> None:
         signal_name="rq4_bayesian_meta_model",
         n_bins=config.n_bins,
         model_slug=config.model_slug,
+        label="Bayesian hierarchical",
+        overlay=(freq_p_wrong, is_wrong, "logistic regression"),
+        title=f"Meta-model calibration, Tier A ({judge_name(config.model_slug)}, out-of-fold)",
+        xlabel="predicted P(judge wrong)",
+        ylabel="observed error rate",
+        note="below the diagonal = predicts more errors than occur",
     )
 
     all_diag = bayes["fold_diagnostics"]
-    n_flagged = sum(fold_diag["flagged"] for fold_diag in all_diag)
-    print(f"Bayesian convergence: {n_flagged}/{len(all_diag)} fold-fits flagged")
+    print(f"Bayesian convergence: {summarize_diagnostics(all_diag)}")
 
     plot_bayesian_convergence(
         max_rhat=np.array([fold_diag["max_rhat"] for fold_diag in all_diag]),
         flagged=np.array([fold_diag["flagged"] for fold_diag in all_diag]),
+        n_divergences=np.array([fold_diag["n_divergences"] for fold_diag in all_diag]),
         model_slug=config.model_slug,
     )
 
@@ -939,7 +957,7 @@ def main_bayesian_comparison(config_path: str) -> None:
 
 
 def fit_verbose_shift_model(
-    clean_items: pd.DataFrame, seed: int, num_warmup: int = 500, num_samples: int = 1000, num_chains: int = 2
+    clean_items: pd.DataFrame, seed: int, num_warmup: int = NUM_WARMUP, num_samples: int = NUM_SAMPLES, num_chains: int = NUM_CHAINS
 ) -> tuple[object, dict[int, int], StandardScaler]:
     """Fits the Bayesian model once on all of clean. Returns the fit, the
     training question-index mapping, and the feature scaler - both

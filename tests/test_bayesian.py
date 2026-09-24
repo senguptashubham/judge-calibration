@@ -164,12 +164,31 @@ def test_convergence_diagnostics_flags_nan_rhat_even_with_no_divergences(monkeyp
     # rather than making one fake get_extra_fields satisfy two shapes.
     fake_summary = pd.DataFrame({"r_hat": [np.nan, np.nan], "ess_bulk": [50.0, 60.0], "ess_tail": [55.0, 65.0]})
     monkeypatch.setattr("arviz.from_numpyro", lambda mcmc: None)
-    monkeypatch.setattr("arviz.summary", lambda idata: fake_summary)
+    monkeypatch.setattr("arviz.summary", lambda idata, **kwargs: fake_summary)
     monkeypatch.setattr(mcmc, "get_extra_fields", lambda: {"diverging": np.zeros(20, dtype=bool)})
 
     diag = convergence_diagnostics(mcmc)
     assert np.isnan(diag["max_rhat"])
     assert diag["n_divergences"] == 0
+    assert diag["flagged"] is True
+
+
+def test_convergence_diagnostics_flags_rhat_that_rounding_would_hide(monkeypatch):
+    # az.summary rounds to 2 decimals unless told not to: 1.014 would read
+    # as 1.01 and pass the > 1.01 check. The fake mimics that rounding.
+    X, y, group_idx, n_groups = _tiny_synthetic_data()
+    mcmc = fit_nuts(X, y, group_idx, n_groups, seed=0, num_warmup=10, num_samples=10, num_chains=2)
+
+    def fake_summary(idata, round_to=2, **kwargs):
+        r_hat = 1.014 if round_to == "none" else round(1.014, 2)
+        return pd.DataFrame({"r_hat": [r_hat], "ess_bulk": [500.0], "ess_tail": [500.0]})
+
+    monkeypatch.setattr("arviz.from_numpyro", lambda mcmc: None)
+    monkeypatch.setattr("arviz.summary", fake_summary)
+    monkeypatch.setattr(mcmc, "get_extra_fields", lambda: {"diverging": np.zeros(20, dtype=bool)})
+
+    diag = convergence_diagnostics(mcmc)
+    assert diag["max_rhat"] == pytest.approx(1.014)
     assert diag["flagged"] is True
 
 

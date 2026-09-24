@@ -17,6 +17,7 @@ from src.autoj_signals import (
     _self_consistency_proportion_a,
     build_calls_autoj,
     build_items_autoj_dataframe,
+    compute_item_signals_autoj,
     conf_sc_autoj,
     conf_sc_bpe_autoj,
     conf_sc_bpe_autoj_greedy,
@@ -313,3 +314,15 @@ def test_build_items_autoj_dataframe_fully_skipped_item_has_null_signals():
     assert pd.isna(items.loc["item2", "judge_verdict"])
     assert pd.isna(items.loc["item2", "correct"])
     assert bool(items.loc["item2", "any_skipped"]) is True
+
+
+def test_calibration_forms_are_probabilities_on_the_ab_verdict():
+    # Clean: AB draws 4/5 for model_a (0.8), BA greedy for model_a (1.0):
+    # pooled p = 0.9. Greedy only: AB 1.0, BA 1.0 -> 1.0. AB verdict is A.
+    rows = [
+        _call("AB", 0, 0), _call("AB", 1, 0), _call("AB", 2, 0), _call("AB", 3, 0), _call("AB", 4, 1),
+        _call("BA", 0, 1),
+    ]
+    signals = compute_item_signals_autoj(rows, k_sc=4)
+    assert signals["conf_sc_bpe_autoj_prob"] == pytest.approx(0.9)
+    assert signals["conf_sc_bpe_autoj_greedy_prob"] == pytest.approx(1.0)

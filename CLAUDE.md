@@ -49,6 +49,7 @@ Violating any of these silently corrupts a result. Never do it, never suggest it
    **`ece()` selects its own strategy and returns `(ece, n_effective_bins)`:** if `n_unique(conf) <= n_bins`, bin by **unique value** — for a discrete signal that is the *exact* ECE, not a fallback; otherwise quantile bins with duplicate edges dropped. `conf_sc` has only 5 possible values at `k_sc=4`, and naive `qcut` either raises on tied edges or silently returns fewer bins than asked. Always emit the reliability diagram alongside the scalar, and **always print `n_effective_bins`**. See D14.
 5. **Never report accuracy without Cohen's κ.** Raw agreement overstates judge ability by 33–41pp on MT-Bench (Reliability without Validity, 2026). This applies on the risk–coverage curve too: plot **κ@coverage** as well as accuracy@coverage, because dropping items shifts the base rate and inflates accuracy for free.
 6. **Never report ECE alone.** In a binary forced choice confidence is bounded below at 0.5, so a judge that always says 50% has perfect ECE and zero usefulness. ECE always ships with accuracy, AUROC, and the signed overconfidence gap (mean confidence − accuracy).
+   **ECE needs a probability in the verdict being scored.** An entropy signal (1 − H, e.g. `conf_bpe`) ranks fine but is not a probability — a 50/50 split scores 0.307 — so calibration metrics use its `*_prob` form (`signals.py::prob_on_verdict`). A confidence in the AB verdict is never scored against `verdict_bidir`. See D7 amendment.
 
 **Data flow**
 
@@ -139,6 +140,12 @@ conf_bpe            float  1 - entropy of mean p_a across both orders, WITHIN th
                            (condition, prompt_variant) pair (SCOPE, 2026)
 conf_ens            float  1 - ens_entropy_total. clean ONLY - null for verbose,
                            which never collects P2/P3 (D20, D21)
+                           ── calibration forms (D7 amendment) ── ECE/Brier/gap use these;
+                           conf_bpe and conf_ens stay the ranking (AUROC) signals
+conf_bpe_prob       float  mean p_a (order-corrected) on judge_verdict's side
+conf_ens_prob       float  3-prompt mean p on judge_verdict's side. clean ONLY
+conf_verb_bidir     float  both orders' conf_verb counted toward verdict_bidir, averaged
+conf_lp_bidir       float  max(p, 1 - p): the probability of verdict_bidir
 ens_entropy_total       float  H[mean p_a across P1,P2,P3]. clean ONLY (D20)
 ens_entropy_aleatoric   float  mean(H[p_a]) across P1,P2,P3. clean ONLY (D20)
 ens_entropy_epistemic   float  total - aleatoric (BALD / mutual information). clean ONLY (D20)
@@ -182,12 +189,15 @@ src/
   judge_kev.py, kev_signals.py        RQ6: kev-8b HTTP client; checkpoint → calls/items
   judge_autoj.py, autoj_signals.py    RQ7: auto-j-13b vLLM wrapper; checkpoint → calls/items
 analysis/    rq1.py … rq7.py (one per RQ), human_disagreement.py (tasks 3.3/3.4), vacuum.py (task 1.8),
-             decoding_ablation.py (task 4.5) — each a CLI over items.parquet
+             decoding_ablation.py (task 4.5) — each a CLI over items.parquet; compare_judges.py builds
+             the three-judge figure from the RQ1–RQ7 result CSVs
 tests/       one test file per src/ module. analysis/ scripts are verified against
              real data rather than unit-tested.
+notebooks/   Colab session records of the GPU inference runs (01 Qwen, 02 kev, 03 auto-j), outputs kept.
+             They only install, pull, and call src/ — no logic lives there.
 learning/    study exercises, not part of the pipeline
 runs/        per-model checkpoints and logprobs/ (gitignored)
-results/     parquet tables, per-RQ CSVs, figures/ (gitignored)
+results/     parquet tables (gitignored); per-RQ CSVs and figures/ (tracked - REPORT.md's evidence, D17 amendment)
 pyproject.toml   pinned deps; base install excludes vllm (`colab` extra adds it, D17)
                  but includes numpyro/jax/arviz (D24)
 PLAN.md      design rationale, RQ definitions, week plan
@@ -258,6 +268,9 @@ python -m analysis.rq6     --config configs/run_kev.yaml --task {calibration,pos
 python -m src.judge_autoj   --config configs/run_autoj.yaml
 python -m src.autoj_signals --config configs/run_autoj.yaml
 python -m analysis.rq7      --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}
+
+# Cross-judge comparison (after RQ1–RQ7)
+python -m analysis.compare_judges --config configs/run.yaml --kev-config configs/run_kev.yaml --autoj-config configs/run_autoj.yaml
 ```
 
 ---
@@ -267,7 +280,7 @@ python -m analysis.rq7      --config configs/run_autoj.yaml --task {calibration,
 - **Local (VSCode, dedicated conda env `judge-calib`, python 3.11):** everything except running the judge models — writing and testing all of `src/`, all analysis, the Gradio demo. `pip install -e .` here never installs `vllm`.
 - **Colab (fresh `venv`, GPU):** the only place `judge.py`/`judge_autoj.py` actually run. `pip install -e ".[colab]"` inside the fresh venv (D11) — never Colab's system Python. The Bayesian model (`bayesian.py`) is analysis, not inference — it runs locally (D24).
 - **A GitHub remote** carries code between the two: commit and push locally, `git clone`/`git pull` in Colab.
-- **`runs/` and `results/` are gitignored on purpose** — move generated data (checkpoints, `calls.parquet`) back from Colab via a Drive-mounted folder or direct download, never through git.
+- **`runs/` and the parquet tables are gitignored on purpose** — move generated data (checkpoints, `calls.parquet`) back from Colab via a Drive-mounted folder or direct download, never through git. `results/*.csv` and `results/figures/*.png` are tracked: after a rerun, commit them together with the `REPORT.md` change they support (D17 amendment).
 - See D17 for the full reasoning.
 
 ## 9. Current status

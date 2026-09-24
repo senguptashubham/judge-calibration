@@ -30,6 +30,12 @@ from src.config import Config
 from src.features import load_rq4_population
 from src.predictor import TIER_BUILDERS, build_xyg, make_fold_splits
 
+# NUTS settings for every fit. 2,000 draws per chain: at 1,000, 10-15 of each
+# run's 50 fold-fits landed just above R-hat 1.01 (D22 amendment).
+NUM_WARMUP = 500
+NUM_SAMPLES = 2000
+NUM_CHAINS = 2
+
 
 def build_group_index(question_ids: np.ndarray) -> tuple[np.ndarray, int, dict[int, int]]:
     """Maps raw question_id values to dense codes 0..n_groups-1, which is
@@ -105,9 +111,9 @@ def fit_nuts(
     group_idx: np.ndarray,
     n_groups: int,
     seed: int,
-    num_warmup: int = 500,
-    num_samples: int = 1000,
-    num_chains: int = 2,
+    num_warmup: int = NUM_WARMUP,
+    num_samples: int = NUM_SAMPLES,
+    num_chains: int = NUM_CHAINS,
 ) -> MCMC:
     """Fits hierarchical_logit_model() with NUTS on one fold's training
     data. Returns the MCMC object itself - diagnostics need more than the
@@ -147,7 +153,9 @@ def convergence_diagnostics(mcmc: MCMC) -> dict:
     caller's decision.
     """
     idata = az.from_numpyro(mcmc)
-    summary = az.summary(idata)
+    # az.summary rounds to 2 decimals by default, which would turn an R-hat
+    # of 1.014 into 1.01 and let it pass the > 1.01 check.
+    summary = az.summary(idata, kind="diagnostics", round_to="none")
     max_rhat = float(summary["r_hat"].max())
     min_ess = float(min(summary["ess_bulk"].min(), summary["ess_tail"].min()))
     n_divergences = int(mcmc.get_extra_fields()["diverging"].sum())
@@ -156,6 +164,22 @@ def convergence_diagnostics(mcmc: MCMC) -> dict:
     # bool(...) wraps the whole expression so a numpy.bool_ never leaks out.
     flagged = bool(max_rhat > 1.01 or np.isnan(max_rhat) or n_divergences > 0)
     return {"max_rhat": max_rhat, "min_ess": min_ess, "n_divergences": n_divergences, "flagged": flagged}
+
+
+def summarize_diagnostics(fold_diagnostics: list[dict]) -> dict:
+    """One row's worth of convergence_diagnostics() over every fold-fit of a
+    run: how many were flagged, and why - worst R-hat, lowest ESS, and how
+    many fits diverged at all. A flag count alone can't tell a fit at R-hat
+    1.2 from one with a single divergence.
+    """
+    return {
+        "n_folds_flagged": sum(d["flagged"] for d in fold_diagnostics),
+        "n_folds_total": len(fold_diagnostics),
+        "worst_rhat": max(d["max_rhat"] for d in fold_diagnostics),
+        "min_ess": min(d["min_ess"] for d in fold_diagnostics),
+        "n_folds_diverging": sum(d["n_divergences"] > 0 for d in fold_diagnostics),
+        "total_divergences": sum(d["n_divergences"] for d in fold_diagnostics),
+    }
 
 
 def predict_held_out(
@@ -242,9 +266,9 @@ def repeated_stratified_group_kfold_bayesian(
     n_splits: int = 5,
     n_repeats: int = 10,
     seed: int = 0,
-    num_warmup: int = 500,
-    num_samples: int = 1000,
-    num_chains: int = 2,
+    num_warmup: int = NUM_WARMUP,
+    num_samples: int = NUM_SAMPLES,
+    num_chains: int = NUM_CHAINS,
 ) -> list[BayesianRepeatResult]:
     """D8's repeated-CV protocol with the hierarchical model in place of
     LogReg/HistGBM, reusing predictor.py's make_fold_splits() unchanged.
@@ -337,9 +361,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--tier", required=True, choices=list(TIER_BUILDERS))
-    parser.add_argument("--num-warmup", type=int, default=500)
-    parser.add_argument("--num-samples", type=int, default=1000)
-    parser.add_argument("--num-chains", type=int, default=2)
+    parser.add_argument("--num-warmup", type=int, default=NUM_WARMUP)
+    parser.add_argument("--num-samples", type=int, default=NUM_SAMPLES)
+    parser.add_argument("--num-chains", type=int, default=NUM_CHAINS)
     parser.add_argument("--n-repeats", type=int, default=10, help="D8's protocol default; reduce only if the "
         "runtime measurement below shows the full count is impractical (D22) - preregister the reduction if so.")
     args = parser.parse_args()
@@ -372,12 +396,6 @@ if __name__ == "__main__":
     print("  (D8: the across-repeat spread is the headline uncertainty, not a within-split CI)")
 
     all_diag = [fold_diag for r in results for fold_diag in r.fold_diagnostics]
-    n_flagged = sum(fold_diag["flagged"] for fold_diag in all_diag)
-    worst_rhat = max(fold_diag["max_rhat"] for fold_diag in all_diag)
-    total_divergences = sum(fold_diag["n_divergences"] for fold_diag in all_diag)
-    print(
-        f"  Convergence (D22, invariant 13): {n_flagged}/{len(all_diag)} fold-fits flagged "
-        f"(worst max_rhat={worst_rhat:.3f}, total divergences={total_divergences})"
-    )
+    print(f"  Convergence (D22, invariant 13): {summarize_diagnostics(all_diag)}")
 
     print(f"  Runtime: {elapsed:.1f}s ({elapsed / 60:.1f} min) for {len(all_diag)} fold-fits")

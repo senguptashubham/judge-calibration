@@ -17,8 +17,10 @@ from src.signals import (
     conf_lp,
     conf_sc,
     conf_verb,
+    conf_verb_bidir,
     flipped,
     judge_verdict,
+    prob_on_verdict,
     verdict_bidir,
 )
 
@@ -241,6 +243,50 @@ def test_conf_bpe_at_minimum_when_orders_flatly_disagree():
 def test_conf_bpe_none_when_missing_data():
     rows = [_call("AB", 0, p_a=0.9)]
     assert conf_bpe(rows) is None
+
+
+# --- calibration forms ------------------------------------------------------
+
+
+def test_prob_on_verdict_reads_the_verdicts_side():
+    assert prob_on_verdict(0.75, "A") == pytest.approx(0.75)
+    assert prob_on_verdict(0.75, "B") == pytest.approx(0.25)
+    assert prob_on_verdict(None, "A") is None
+
+
+def test_coin_flip_is_0_5_as_a_probability_but_0_307_as_conf_bpe():
+    # The reason the *_prob forms exist: orders that flatly disagree are a
+    # coin flip. As a probability that is 0.5; conf_bpe reports 1 - ln 2.
+    rows = [_call("AB", 0, verdict="A", p_a=0.9), _call("BA", 0, verdict="A", p_a=0.9)]
+    signals = compute_item_signals(rows, k_sc=4)
+    assert signals["conf_bpe"] == pytest.approx(1 - math.log(2))
+    assert signals["conf_bpe_prob"] == pytest.approx(0.5)
+    assert signals["conf_lp_bidir"] == pytest.approx(0.5)
+
+
+def test_conf_bpe_prob_can_fall_below_half_when_ab_verdict_loses_the_average():
+    # AB says A at p_a=0.6; BA (raw "A" = model_b) at p_a=0.9 -> P(model_a)=0.1.
+    # mean p = 0.35: verdict_bidir is B, and the AB verdict A gets 0.35.
+    rows = [_call("AB", 0, verdict="A", p_a=0.6), _call("BA", 0, verdict="A", p_a=0.9)]
+    signals = compute_item_signals(rows, k_sc=4)
+    assert signals["conf_bpe_prob"] == pytest.approx(0.35)
+    assert signals["conf_lp_bidir"] == pytest.approx(0.65)
+
+
+def test_conf_verb_bidir_counts_a_disagreeing_order_against_the_verdict():
+    # AB: A, p_a 0.95. BA: raw "A" = model_b, p_a 0.6 -> P(model_a) 0.4.
+    # mean p 0.675 -> verdict_bidir A. AB agrees (0.9), BA disagrees (1 - 0.8).
+    rows = [
+        _call("AB", 0, verdict="A", verbalized_conf=0.9, p_a=0.95),
+        _call("BA", 0, verdict="A", verbalized_conf=0.8, p_a=0.6),
+    ]
+    assert verdict_bidir(rows) == "A"
+    assert conf_verb_bidir(rows) == pytest.approx((0.9 + 0.2) / 2)
+
+
+def test_conf_verb_bidir_none_without_ba_confidence():
+    rows = [_call("AB", 0, verdict="A", verbalized_conf=0.9, p_a=0.7), _call("BA", 0, verdict="B", p_a=0.1)]
+    assert conf_verb_bidir(rows) is None
 
 
 # --- compute_item_signals: integration ------------------------------------

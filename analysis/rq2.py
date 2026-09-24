@@ -24,7 +24,7 @@ from analysis.rq1 import SIGNALS, load_rq1_items
 from src.boot import cluster_bootstrap
 from src.config import Config
 from src.metrics import auroc_error, aurc, cohens_kappa, oracle_risk_coverage, risk_coverage
-from src.plots import plot_risk_coverage
+from src.plots import judge_name, plot_risk_coverage
 
 COVERAGE_TARGETS = [0.90, 0.75, 0.50]
 
@@ -120,7 +120,10 @@ def main(config_path: str) -> None:
         uncertainty = 1 - items[signal].to_numpy(dtype=float)
         curves[signal] = risk_coverage(uncertainty, items[correct_col].to_numpy())
 
-    plot_risk_coverage(curves, oracle_curve, filename=f"risk_coverage_{config.model_slug}.png")
+    plot_risk_coverage(
+        curves, oracle_curve, filename=f"risk_coverage_{config.model_slug}.png",
+        title=f"Abstaining on the least confident items ({judge_name(config.model_slug)})",
+    )
 
     table = pd.DataFrame.from_records(rows)
     table_path = f"{config.paths.results_dir}/rq2_table_{config.model_slug}.csv"

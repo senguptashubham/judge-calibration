@@ -25,11 +25,11 @@ import argparse
 
 import pandas as pd
 
-from analysis.rq1 import SIGNALS, load_rq1_items
+from analysis.rq1 import CALIBRATION_FORM, SIGNALS, load_rq1_items
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.metrics import auroc_error, ece
-from src.plots import plot_rq3a_confidence_gap, plot_rq3b_deltas
+from src.plots import judge_name, plot_confidence_gap, plot_verbosity_deltas
 
 RQ3B_SIGNALS = ["conf_verb", "conf_lp", "conf_bpe"]  # conf_sc dropped, D21
 
@@ -67,6 +67,31 @@ def compute_confidence_gap(items: pd.DataFrame, signal: str, seed: int) -> dict:
     }
 
 
+def confidence_gap_panel(table: pd.DataFrame, title: str) -> dict:
+    """One plot_confidence_gap() panel from a confidence-gap table."""
+    return {
+        "title": title,
+        "signals": table["signal"].tolist(),
+        "gap": table["gap_flipped_minus_unflipped"].to_numpy(),
+        "ci_low": table["gap_ci_low"].to_numpy(),
+        "ci_high": table["gap_ci_high"].to_numpy(),
+    }
+
+
+def verbosity_panel(table: pd.DataFrame, title: str) -> dict:
+    """One plot_verbosity_deltas() panel from a verbosity-delta table."""
+    return {
+        "title": title,
+        "signals": table["signal"].tolist(),
+        "delta_ece": table["delta_ece_verbose_minus_clean"].to_numpy(),
+        "ece_ci_low": table["delta_ece_ci_low"].to_numpy(),
+        "ece_ci_high": table["delta_ece_ci_high"].to_numpy(),
+        "delta_auroc": table["delta_auroc_verbose_minus_clean"].to_numpy(),
+        "auroc_ci_low": table["delta_auroc_ci_low"].to_numpy(),
+        "auroc_ci_high": table["delta_auroc_ci_high"].to_numpy(),
+    }
+
+
 def load_rq3b_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(clean_items, verbose_items): P1 rows with human_label present, per
     condition. Raises if the two item sets differ - a partial verbose
@@ -92,15 +117,27 @@ def load_rq3b_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def compute_signal_rq3b_metrics(
-    clean_items: pd.DataFrame, verbose_items: pd.DataFrame, signal: str, correct_col: str, n_bins: int, seed: int
+    clean_items: pd.DataFrame,
+    verbose_items: pd.DataFrame,
+    signal: str,
+    correct_col: str,
+    n_bins: int,
+    seed: int,
+    calibration_col: str | None = None,
 ) -> dict:
     """Paired cluster-bootstrap deltas (verbose - clean) in ECE, accuracy,
     and AUROC for one signal, plus each side's real value. A positive ΔECE
     means worse calibration under verbose; a negative ΔAUROC means the
     signal is less informative about errors.
+
+    ECE is computed on `calibration_col` (default: `signal` itself), AUROC
+    on `signal` - an entropy signal ranks errors but needs its probability
+    form for calibration (rq1.CALIBRATION_FORM).
     """
+    calibration_col = calibration_col or signal
+
     def _ece(df: pd.DataFrame) -> float:
-        value, _ = ece(df[signal].to_numpy(), df[correct_col].to_numpy(), n_bins)
+        value, _ = ece(df[calibration_col].to_numpy(), df[correct_col].to_numpy(), n_bins)
         return value
 
     def _accuracy(df: pd.DataFrame) -> float:
@@ -130,7 +167,9 @@ def run_rq3b(config: Config) -> pd.DataFrame:
 
     rows = []
     for signal in RQ3B_SIGNALS:
-        metrics = compute_signal_rq3b_metrics(clean_items, verbose_items, signal, "correct", config.n_bins, config.seed)
+        metrics = compute_signal_rq3b_metrics(
+            clean_items, verbose_items, signal, "correct", config.n_bins, config.seed, CALIBRATION_FORM[signal]
+        )
         rows.append({"signal": signal, **metrics})
 
     table = pd.DataFrame.from_records(rows)
@@ -138,15 +177,10 @@ def run_rq3b(config: Config) -> pd.DataFrame:
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
-    plot_rq3b_deltas(
-        signals=table["signal"].tolist(),
-        delta_ece=table["delta_ece_verbose_minus_clean"].to_numpy(),
-        ece_ci_low=table["delta_ece_ci_low"].to_numpy(),
-        ece_ci_high=table["delta_ece_ci_high"].to_numpy(),
-        delta_auroc=table["delta_auroc_verbose_minus_clean"].to_numpy(),
-        auroc_ci_low=table["delta_auroc_ci_low"].to_numpy(),
-        auroc_ci_high=table["delta_auroc_ci_high"].to_numpy(),
-        model_slug=config.model_slug,
+    plot_verbosity_deltas(
+        [verbosity_panel(table, "")],
+        title=f"Padding attack: calibration and error detection ({judge_name(config.model_slug)})",
+        filename=f"rq3b_deltas_{config.model_slug}.png",
     )
 
     headline = table[table["signal"] == "conf_verb"].iloc[0]
@@ -174,19 +208,17 @@ def run_rq3a(config: Config) -> pd.DataFrame:
     rows = []
     for signal in SIGNALS:
         gap = compute_confidence_gap(items, signal, config.seed)
-        rows.append({"signal": signal, **gap})
+        rows.append({"signal": signal, "n": len(items), **flip_rate_result, **gap})
 
     table = pd.DataFrame.from_records(rows)
     table_path = f"{config.paths.results_dir}/rq3a_table_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
-    plot_rq3a_confidence_gap(
-        signals=table["signal"].tolist(),
-        gap=table["gap_flipped_minus_unflipped"].to_numpy(),
-        ci_low=table["gap_ci_low"].to_numpy(),
-        ci_high=table["gap_ci_high"].to_numpy(),
-        model_slug=config.model_slug,
+    plot_confidence_gap(
+        [confidence_gap_panel(table, f"flip rate {flip_rate_result['flip_rate']:.1%}")],
+        title=f"Is the judge less confident when answer order changes its verdict? ({judge_name(config.model_slug)})",
+        filename=f"rq3a_confidence_gap_{config.model_slug}.png",
     )
 
     headline = table[table["signal"] == "conf_verb"].iloc[0]

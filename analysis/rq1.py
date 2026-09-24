@@ -2,15 +2,14 @@
 
 `python -m analysis.rq1 --config configs/run.yaml`
 
-For each of conf_verb, conf_lp, conf_sc, conf_bpe on (clean, P1): ECE, MCE,
-Brier and its decomposition, overconfidence gap, accuracy, κ - scored
-against both verdict definitions (D7: judge_verdict, the deployed single
-pass, and verdict_bidir, order-averaged), each with a cluster-bootstrap CI
-(invariant 2). conf_ens is RQ5's.
+On (clean, P1): ECE, MCE, Brier and its decomposition, overconfidence gap,
+accuracy, κ, each with a cluster-bootstrap CI (invariant 2), for every row
+of CALIBRATION_ROWS. Each row pairs a confidence with the verdict it is a
+confidence IN - judge_verdict (the deployed AB pass) or verdict_bidir
+(order-averaged, D7). conf_ens is RQ5's.
 
 Writes results/rq1_table_{model_slug}.csv and
-results/figures/reliability_{signal}_{model_slug}.png (both verdict
-definitions overlaid on each).
+results/figures/reliability_{signal}_{model_slug}.png.
 """
 
 import argparse
@@ -22,10 +21,22 @@ from src.config import Config
 from src.metrics import auroc_error, brier, brier_decomposition, cohens_kappa, ece, mce, overconfidence_gap
 from src.plots import plot_reliability_diagram
 
+# The ranking signals (AUROC, risk-coverage, RQ4's baseline).
 SIGNALS = ["conf_verb", "conf_lp", "conf_sc", "conf_bpe"]
-VERDICT_DEFINITIONS = [
-    ("judge_verdict", "correct"),
-    ("verdict_bidir", "correct_bidir"),
+
+# The column each ranking signal's calibration metrics use. conf_bpe is
+# 1 - entropy, not a probability, so it is scored through conf_bpe_prob
+# (signals.py::prob_on_verdict).
+CALIBRATION_FORM = {"conf_verb": "conf_verb", "conf_lp": "conf_lp", "conf_sc": "conf_sc", "conf_bpe": "conf_bpe_prob"}
+
+# (signal, confidence column, verdict column, correctness column). conf_sc
+# has no verdict_bidir row: its sampled draws exist in AB order only.
+# conf_lp_bidir = max(p, 1 - p) is the verdict_bidir form of both conf_lp
+# and conf_bpe, which is why it appears once.
+CALIBRATION_ROWS = [
+    *[(s, CALIBRATION_FORM[s], "judge_verdict", "correct") for s in SIGNALS],
+    ("conf_verb", "conf_verb_bidir", "verdict_bidir", "correct_bidir"),
+    ("conf_lp", "conf_lp_bidir", "verdict_bidir", "correct_bidir"),
 ]
 
 
@@ -141,28 +152,37 @@ def main(config_path: str) -> None:
     config = Config.from_yaml(config_path)
     items = load_rq1_items(config.paths.items_parquet)
 
+    verdict_metrics = {
+        verdict_col: compute_verdict_metrics(items, correct_col, verdict_col, config.seed)
+        for verdict_col, correct_col in [("judge_verdict", "correct"), ("verdict_bidir", "correct_bidir")]
+    }
     rows = []
-    for verdict_col, correct_col in VERDICT_DEFINITIONS:
-        verdict_metrics = compute_verdict_metrics(items, correct_col, verdict_col, config.seed)
-        for signal in SIGNALS:
-            signal_metrics = compute_signal_metrics(items, signal, correct_col, config.n_bins, config.seed)
-            rows.append(
-                {
-                    "signal": signal,
-                    "verdict_definition": verdict_col,
-                    **verdict_metrics,
-                    **signal_metrics,
-                }
-            )
+    for signal, confidence_col, verdict_col, correct_col in CALIBRATION_ROWS:
+        signal_metrics = compute_signal_metrics(items, confidence_col, correct_col, config.n_bins, config.seed)
+        rows.append(
+            {
+                "signal": signal,
+                "confidence_column": confidence_col,
+                "verdict_definition": verdict_col,
+                **verdict_metrics[verdict_col],
+                **signal_metrics,
+            }
+        )
 
+    bidir_form = {s: c for s, c, v, _ in CALIBRATION_ROWS if v == "verdict_bidir"}
+    bidir_form["conf_bpe"] = "conf_lp_bidir"
     for signal in SIGNALS:
+        overlay = None
+        if signal in bidir_form:
+            overlay = (items[bidir_form[signal]].to_numpy(), items["correct_bidir"].to_numpy(), "order-averaged verdict")
         plot_reliability_diagram(
-            items[signal].to_numpy(),
+            items[CALIBRATION_FORM[signal]].to_numpy(),
             items["correct"].to_numpy(),
             signal_name=signal,
             n_bins=config.n_bins,
             model_slug=config.model_slug,
-            correct_bidir=items["correct_bidir"].to_numpy(),
+            label="AB verdict",
+            overlay=overlay,
         )
 
     gap = compute_verdict_gap(items, config.seed)

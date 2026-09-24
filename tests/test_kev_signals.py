@@ -13,6 +13,7 @@ import pytest
 from src.kev_signals import (
     build_calls_kev,
     build_items_kev_dataframe,
+    compute_item_signals_kev,
     conf_kev,
     conf_kev_bpe,
     flipped_kev,
@@ -255,3 +256,10 @@ def test_build_items_kev_dataframe_fully_skipped_item_has_null_signals_and_state
     assert bool(items.loc["item2", "any_skipped"]) is True
     # No successful call means no input_tokens - falls back to state_tokens.
     assert items.loc["item2", "input_tokens"] == 9000
+
+
+def test_conf_kev_bpe_prob_is_the_probability_on_the_ab_verdict():
+    # AB: A at 0.8 -> P(model_a) 0.8. BA: raw prob_a 0.6 -> P(model_a) 0.4.
+    # mean 0.6. The AB verdict A gets 0.6; conf_kev_bpe (1 - H) would read 0.327.
+    signals = compute_item_signals_kev([_call("AB", "A", 0.8), _call("BA", "A", 0.6)])
+    assert signals["conf_kev_bpe_prob"] == pytest.approx(0.6)

@@ -1,0 +1,2 @@
+aleatoric_clean_mean,aleatoric_verbose_mean,aleatoric_gap,aleatoric_gap_ci_low,aleatoric_gap_ci_high,epistemic_clean_mean,epistemic_verbose_mean,epistemic_gap,epistemic_gap_ci_low,epistemic_gap_ci_high,epistemic_rose,aleatoric_flat,prediction_held
+0.4500740097329474,0.4303522316638496,-0.019721778069097806,-0.030166457859288558,-0.00958344389194592,0.004134860258358148,0.003787575713036306,-0.00034728454532184216,-0.0006118704365454299,-0.00011618907312112692,False,False,False

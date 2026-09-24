@@ -5,8 +5,8 @@
 
 - Two signals: conf_kev (probabilities[choice], the analog of conf_lp) and
   conf_kev_bpe (order-corrected bidirectional entropy, the analog of
-  conf_bpe). kev's `confidence` field is never used - it is an exact
-  rescaling of conf_kev (D27).
+  conf_bpe; calibrated through conf_kev_bpe_prob). kev's `confidence`
+  field is never used - it is an exact rescaling of conf_kev (D27).
 - Every test is split by coverage regime: in-coverage when the item's
   CLEAN input_tokens <= 1,024 (kev's training range), else out-of-coverage.
   The regime is a property of the item, applied to both its conditions, so
@@ -21,55 +21,33 @@ plumbing is new.
 
 import argparse
 
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from analysis.rq3 import compute_confidence_gap, compute_flip_rate, compute_signal_rq3b_metrics
-from src.bayesian import repeated_stratified_group_kfold_bayesian
+from analysis.rq3 import (
+    compute_confidence_gap,
+    compute_flip_rate,
+    compute_signal_rq3b_metrics,
+    confidence_gap_panel,
+    verbosity_panel,
+)
+from src.bayesian import repeated_stratified_group_kfold_bayesian, summarize_diagnostics
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.judge_kev import KevConfig
 from src.metrics import auroc_error, brier, ece, overconfidence_gap
-from src.plots import FIGURES_DIR, _draw_forest, plot_bayesian_convergence, plot_reliability_diagram
+from src.plots import (
+    plot_bayesian_convergence,
+    plot_confidence_gap,
+    plot_reliability_diagram,
+    plot_verbosity_deltas,
+    signal_label,
+)
 from src.predictor import build_xyg
 
-# plots.py's RQ3 forest figures size their height for 3-4 signals and clip
-# their title at 2, so RQ6 draws its own figures on the shared _draw_forest().
-
-
-def _plot_rq6_confidence_gap(signals: list[str], gap: np.ndarray, ci_low: np.ndarray, ci_high: np.ndarray, model_slug: str) -> None:
-    fig, ax = plt.subplots(figsize=(6, 4.2))
-    _draw_forest(ax, signals, gap, ci_low, ci_high, "mean confidence: flipped - unflipped")
-    ax.set_title("Confidence gap on flipped vs. unflipped items (RQ6)")
-    fig.tight_layout()
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"rq6_position_swap_gap_{model_slug}.png"
-    fig.savefig(FIGURES_DIR / filename, dpi=150)
-    plt.close(fig)
-
-
-def _plot_rq6_verbosity_deltas(
-    signals: list[str],
-    delta_ece: np.ndarray, ece_ci_low: np.ndarray, ece_ci_high: np.ndarray,
-    delta_auroc: np.ndarray, auroc_ci_low: np.ndarray, auroc_ci_high: np.ndarray,
-    model_slug: str,
-) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(11, 4.2))
-    _draw_forest(axes[0], signals, delta_ece, ece_ci_low, ece_ci_high, xlabel="delta ECE (verbose - clean)")
-    axes[0].set_title("Calibration")
-    _draw_forest(axes[1], signals, delta_auroc, auroc_ci_low, auroc_ci_high, xlabel="delta AUROC (verbose - clean)")
-    axes[1].set_title("Error-detection")
-    axes[1].set_ylabel("")
-    fig.suptitle("Verbosity's effect on calibration and error-detection (RQ6)")
-    fig.tight_layout()
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"rq6_verbosity_deltas_{model_slug}.png"
-    fig.savefig(FIGURES_DIR / filename, dpi=150)
-    plt.close(fig)
-
-
 KEV_SIGNALS = ["conf_kev", "conf_kev_bpe"]
+CALIBRATION_FORM = {"conf_kev": "conf_kev", "conf_kev_bpe": "conf_kev_bpe_prob"}
 IN_COVERAGE_THRESHOLD = 1024
+REGIME_TITLES = {"in_coverage": "in coverage (≤ 1,024 tokens)", "out_of_coverage": "out of coverage"}
 
 
 def _load_all_kev_items(items_parquet: str) -> pd.DataFrame:
@@ -121,20 +99,28 @@ def load_rq6_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFram
     return clean_items, verbose_items
 
 
-def compute_signal_calibration(items: pd.DataFrame, signal: str, n_bins: int, seed: int) -> dict:
+def compute_signal_calibration(
+    items: pd.DataFrame, signal: str, n_bins: int, seed: int, calibration_col: str | None = None
+) -> dict:
     """ECE, Brier, overconfidence gap, and AUROC for one signal, each with a
-    cluster-bootstrap CI - RQ1's recipe. conf_kev_bpe's raw-nats range
-    [1 - ln 2, 1] needs no rescaling, the same as conf_bpe.
+    cluster-bootstrap CI - RQ1's recipe. The caller must already have
+    filtered `items` to this signal's non-null rows.
+
+    ECE, Brier and the gap use `calibration_col` (default: `signal`), AUROC
+    uses `signal`: an entropy signal ranks errors but needs its probability
+    form for calibration (signals.py::prob_on_verdict).
     """
+    calibration_col = calibration_col or signal
+
     def _ece(df: pd.DataFrame) -> float:
-        value, _ = ece(df[signal].to_numpy(), df["correct"].to_numpy(), n_bins)
+        value, _ = ece(df[calibration_col].to_numpy(), df["correct"].to_numpy(), n_bins)
         return value
 
     def _brier(df: pd.DataFrame) -> float:
-        return brier(df[signal].to_numpy(), df["correct"].to_numpy())
+        return brier(df[calibration_col].to_numpy(), df["correct"].to_numpy())
 
     def _overconfidence_gap(df: pd.DataFrame) -> float:
-        return overconfidence_gap(df[signal].to_numpy(), df["correct"].to_numpy())
+        return overconfidence_gap(df[calibration_col].to_numpy(), df["correct"].to_numpy())
 
     def _auroc(df: pd.DataFrame) -> float:
         uncertainty = 1 - df[signal].to_numpy(dtype=float)
@@ -161,7 +147,9 @@ def main_calibration(config_path: str) -> None:
     for regime in ["in_coverage", "out_of_coverage"]:
         regime_items = clean_items[clean_items["regime"] == regime]
         for signal in KEV_SIGNALS:
-            metrics = compute_signal_calibration(regime_items, signal, config.n_bins, config.seed)
+            metrics = compute_signal_calibration(
+                regime_items, signal, config.n_bins, config.seed, CALIBRATION_FORM[signal]
+            )
             rows.append({"regime": regime, "signal": signal, "n": len(regime_items), **metrics})
             print(
                 f"  {regime}/{signal}: ECE={metrics['ece']:.4f} "
@@ -171,11 +159,13 @@ def main_calibration(config_path: str) -> None:
                 f"AUROC={metrics['auroc']:.4f} [{metrics['auroc_ci_low']:.4f}, {metrics['auroc_ci_high']:.4f}]"
             )
             plot_reliability_diagram(
-                confidences=regime_items[signal].to_numpy(),
+                confidences=regime_items[CALIBRATION_FORM[signal]].to_numpy(),
                 correct=regime_items["correct"].to_numpy(),
                 signal_name=f"{signal}_{regime}",
                 n_bins=config.n_bins,
                 model_slug=config.model_slug,
+                label="AB verdict",
+                title=f"{signal_label(signal)} (kev-8b, {REGIME_TITLES[regime]})",
             )
 
     table = pd.DataFrame.from_records(rows)
@@ -204,28 +194,28 @@ def main_position_swap(config_path: str) -> None:
             f"[{flip_result['flip_rate_ci_low']:.4f}, {flip_result['flip_rate_ci_high']:.4f}]"
         )
 
-        gap_results = []
         for signal in KEV_SIGNALS:
             gap_result = compute_confidence_gap(regime_items, signal, config.seed)
-            gap_results.append(gap_result)
             rows.append({"regime": regime, "signal": signal, "n": len(regime_items), **flip_result, **gap_result})
             print(
                 f"    {signal}: gap={gap_result['gap_flipped_minus_unflipped']:.4f} "
                 f"[{gap_result['gap_ci_low']:.4f}, {gap_result['gap_ci_high']:.4f}]"
             )
 
-        _plot_rq6_confidence_gap(
-            signals=KEV_SIGNALS,
-            gap=np.array([g["gap_flipped_minus_unflipped"] for g in gap_results]),
-            ci_low=np.array([g["gap_ci_low"] for g in gap_results]),
-            ci_high=np.array([g["gap_ci_high"] for g in gap_results]),
-            model_slug=f"{config.model_slug}_{regime}",
-        )
-
     table = pd.DataFrame.from_records(rows)
     table_path = f"{config.paths.results_dir}/rq6_position_swap_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
+
+    panels = []
+    for regime, regime_table in table.groupby("regime", sort=False):
+        flip_rate = regime_table["flip_rate"].iloc[0]
+        panels.append(confidence_gap_panel(regime_table, f"{REGIME_TITLES[regime]}: flip rate {flip_rate:.1%}"))
+    plot_confidence_gap(
+        panels,
+        title="Is kev-8b less confident when answer order changes its verdict?",
+        filename=f"rq6_position_swap_gap_{config.model_slug}.png",
+    )
 
 
 def main_verbosity(config_path: str) -> None:
@@ -242,13 +232,11 @@ def main_verbosity(config_path: str) -> None:
         verbose_regime = verbose_items[verbose_items["regime"] == regime]
         print(f"  {regime}: N={len(clean_regime)}")
 
-        signal_metrics = []
         for signal in KEV_SIGNALS:
             metrics = compute_signal_rq3b_metrics(
-                clean_regime, verbose_regime, signal, "correct", config.n_bins, config.seed
+                clean_regime, verbose_regime, signal, "correct", config.n_bins, config.seed, CALIBRATION_FORM[signal]
             )
             rows.append({"regime": regime, "signal": signal, "n": len(clean_regime), **metrics})
-            signal_metrics.append(metrics)
             print(
                 f"    {signal}: delta_ECE={metrics['delta_ece_verbose_minus_clean']:.4f} "
                 f"[{metrics['delta_ece_ci_low']:.4f}, {metrics['delta_ece_ci_high']:.4f}], "
@@ -256,21 +244,16 @@ def main_verbosity(config_path: str) -> None:
                 f"[{metrics['delta_auroc_ci_low']:.4f}, {metrics['delta_auroc_ci_high']:.4f}]"
             )
 
-        _plot_rq6_verbosity_deltas(
-            signals=KEV_SIGNALS,
-            delta_ece=np.array([m["delta_ece_verbose_minus_clean"] for m in signal_metrics]),
-            ece_ci_low=np.array([m["delta_ece_ci_low"] for m in signal_metrics]),
-            ece_ci_high=np.array([m["delta_ece_ci_high"] for m in signal_metrics]),
-            delta_auroc=np.array([m["delta_auroc_verbose_minus_clean"] for m in signal_metrics]),
-            auroc_ci_low=np.array([m["delta_auroc_ci_low"] for m in signal_metrics]),
-            auroc_ci_high=np.array([m["delta_auroc_ci_high"] for m in signal_metrics]),
-            model_slug=f"{config.model_slug}_{regime}",
-        )
-
     table = pd.DataFrame.from_records(rows)
     table_path = f"{config.paths.results_dir}/rq6_verbosity_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
+
+    plot_verbosity_deltas(
+        [verbosity_panel(t, REGIME_TITLES[r]) for r, t in table.groupby("regime", sort=False)],
+        title="Padding attack on kev-8b: calibration and error detection",
+        filename=f"rq6_verbosity_deltas_{config.model_slug}.png",
+    )
 
 
 def build_kev_tier(population: pd.DataFrame) -> pd.DataFrame:
@@ -296,7 +279,7 @@ def main_bayesian_recalibration(config_path: str) -> None:
 
         aurocs = np.array([r.auroc for r in results])
         fold_diagnostics = [fd for r in results for fd in r.fold_diagnostics]
-        n_flagged = sum(fd["flagged"] for fd in fold_diagnostics)
+        diagnostics = summarize_diagnostics(fold_diagnostics)
 
         best_single_auroc = max(
             compute_signal_calibration(population, signal, config.n_bins, config.seed)["auroc"]
@@ -307,7 +290,7 @@ def main_bayesian_recalibration(config_path: str) -> None:
             f"  meta-model AUROC={aurocs.mean():.4f} [{aurocs.min():.4f}, {aurocs.max():.4f}] "
             f"(D8 across-repeat spread) vs. best single signal AUROC={best_single_auroc:.4f}"
         )
-        print(f"  convergence: {n_flagged}/{len(fold_diagnostics)} fold-fits flagged")
+        print(f"  convergence: {diagnostics}")
 
         rows.append(
             {
@@ -317,15 +300,16 @@ def main_bayesian_recalibration(config_path: str) -> None:
                 "meta_model_auroc_min": aurocs.min(),
                 "meta_model_auroc_max": aurocs.max(),
                 "best_single_signal_auroc": best_single_auroc,
-                "n_folds_flagged": n_flagged,
-                "n_folds_total": len(fold_diagnostics),
+                **diagnostics,
             }
         )
 
         plot_bayesian_convergence(
             max_rhat=np.array([fd["max_rhat"] for fd in fold_diagnostics]),
             flagged=np.array([fd["flagged"] for fd in fold_diagnostics]),
+            n_divergences=np.array([fd["n_divergences"] for fd in fold_diagnostics]),
             model_slug=f"{config.model_slug}_{regime}",
+            title=f"Bayesian model convergence (kev-8b, {REGIME_TITLES[regime]})",
         )
 
     table = pd.DataFrame.from_records(rows)

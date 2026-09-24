@@ -6,7 +6,7 @@ quality, and does that survive distillation to a single call? (D20, D23)
 threshold_sweep (task 3.2b) - RQ1's population. threshold_sweep() over
 each of ens_entropy_{total,aleatoric,epistemic} (already uncertainty-typed,
 no 1 - x flip), with ECE on the retained set always scored against
-conf_ens so the three curves answer one comparable question. Tests the
+conf_ens_prob so the three curves answer one comparable question. Tests the
 preregistered prediction that epistemic thresholding beats total (a
 paired cluster-bootstrap on the AURC gap - one item set, two signals).
 Writes results/rq5_threshold_sweep_table_{model_slug}.csv and
@@ -43,7 +43,7 @@ from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
 from src.features import load_rq4_population
 from src.metrics import aurc, auroc_error, ece, oracle_risk_coverage, risk_coverage, threshold_sweep
-from src.plots import plot_d_human_correlations, plot_risk_coverage, plot_rq5_distillation
+from src.plots import judge_name, plot_d_human_correlations, plot_risk_coverage, plot_rq5_distillation
 
 ENTROPY_SIGNALS = ["ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_epistemic"]
 
@@ -65,7 +65,7 @@ def compute_entropy_sweep(items: pd.DataFrame, signal: str, n_bins: int) -> pd.D
         correct=items["correct"].to_numpy(),
         judge_verdict=items["judge_verdict"].to_numpy(),
         human_label=items["human_label"].to_numpy(),
-        confidences=items["conf_ens"].to_numpy(dtype=float),
+        confidences=items["conf_ens_prob"].to_numpy(dtype=float),
         n_bins=n_bins,
     )
     table = pd.DataFrame(result)
@@ -113,7 +113,7 @@ def main_threshold_sweep(config_path: str) -> None:
     plot_risk_coverage(
         curves, oracle_curve,
         filename=f"entropy_threshold_sweep_{config.model_slug}.png",
-        title="Entropy threshold sweep: RQ5",
+        title=f"Abstaining by ensemble entropy ({judge_name(config.model_slug)})",
     )
 
     full_table = pd.concat(tables, ignore_index=True)
@@ -140,7 +140,8 @@ def main_threshold_sweep(config_path: str) -> None:
 
 def compute_ensemble_metrics(items: pd.DataFrame, n_bins: int, seed: int) -> dict:
     """conf_ens's AUROC(uncertainty -> error), with a cluster-bootstrap CI,
-    and its ECE as P(wrong).
+    and its ECE as P(wrong) - on conf_ens_prob, since conf_ens is 1 - entropy,
+    not a probability (signals.py::prob_on_verdict).
     """
     def _auroc(df: pd.DataFrame) -> float:
         uncertainty = 1 - df["conf_ens"].to_numpy(dtype=float)
@@ -148,7 +149,7 @@ def compute_ensemble_metrics(items: pd.DataFrame, n_bins: int, seed: int) -> dic
 
     auroc_point, auroc_low, auroc_high = cluster_bootstrap(items, _auroc, "question_id", seed=seed)
 
-    p_wrong = 1 - items["conf_ens"].to_numpy(dtype=float)
+    p_wrong = 1 - items["conf_ens_prob"].to_numpy(dtype=float)
     is_wrong = 1 - items["correct"].astype(int).to_numpy()
     ece_value, _ = ece(p_wrong, is_wrong, n_bins)
 
@@ -319,7 +320,7 @@ def main_human_disagreement(config_path: str) -> None:
         ci_high=table["spearman_ci_high"].to_numpy(),
         model_slug=config.model_slug,
         filename_suffix="_ensemble_entropy",
-        title="Ensemble entropy vs. d_human (task 5.9e)",
+        title="Does ensemble entropy track human consensus?",
     )
 
     aleatoric_row = table[table["signal"] == "ens_entropy_aleatoric"].iloc[0]

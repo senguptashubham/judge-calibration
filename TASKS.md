@@ -163,7 +163,7 @@ Closeout notes record the result and where it lives. The reasoning behind each c
   **DoD:** the RQ3 money sentence in `REPORT.md`. Result: flip rate 27.8% [24.8%, 30.8%]; `conf_verb` gap −0.020 [−0.025, −0.015].
 
 - [x] **4.4 [A]** **RQ3b** — paired ΔECE/Δaccuracy/ΔAUROC clean(P1)→verbose(P1) for `conf_verb`, `conf_lp`, `conf_bpe` (`conf_sc` has no verbose data, D21).
-  **DoD:** `results/rq3_table_{model_slug}.csv` + the `conf_sc` exclusion noted in `REPORT.md`. Result: accuracy unchanged (+0.011, ns); AUROC drops significantly for all three signals; only `conf_bpe`'s calibration breaks (ΔECE +0.043 [0.014, 0.052]).
+  **DoD:** `results/rq3_table_{model_slug}.csv` + the `conf_sc` exclusion noted in `REPORT.md`. Result: accuracy unchanged (+0.011, ns); AUROC drops significantly for all three signals; only `conf_bpe`'s calibration breaks (ΔECE +0.043 [0.011, 0.052], scored on `conf_bpe_prob`).
 
 - [x] **4.5 [A]** Constrained vs free-form decoding on 100 items: parse rate and verdict agreement (D25).
   **DoD:** a limitations paragraph in `REPORT.md`. Result: 100%/100% parse rate; 96% verdict agreement — the 4 flips are all high-confidence, so constraining genuinely moves some verdicts.
@@ -205,13 +205,13 @@ Closeout notes record the result and where it lives. The reasoning behind each c
   **DoD:** `rq4_coefficients_{model_slug}.png` (significant coefficients) + `_full` appendix figure + CSV. Result: OOF AUROC 0.799, ECE 0.036; 8/37 coefficients clear zero — 5 in Tier A, 3 in Tier B, none in Tier C.
 
 - [x] **5.9b [C]** `src/bayesian.py` — hierarchical logistic regression (D22), NUTS under the same 10×5 protocol, held-out intercepts marginalized over the population prior, convergence diagnostics for every fold-fit.
-  **DoD:** `tests/test_bayesian.py` asserts held-out predictions don't depend on that fold's fitted `α_q`; diagnostics reported; runtime measured. Result: NUTS rung used (no fallback); non-centered parameterization required to avoid Neal's funnel (D22 amendment); full 50-fit run ≈7 min. *24 Sep 2026: features now standardized per training fold, as for LogReg — all Bayesian results re-run.*
+  **DoD:** `tests/test_bayesian.py` asserts held-out predictions don't depend on that fold's fitted `α_q`; diagnostics reported; runtime measured. Result: NUTS rung used (no fallback); non-centered parameterization required to avoid Neal's funnel (D22 amendment); full 50-fit run ≈9 min at 2,000 draws per chain. *24 Sep 2026: features now standardized per training fold, as for LogReg; R-hat read unrounded and draws doubled (D22 amendments) — all Bayesian results re-run.*
 
 - [x] **5.9c [A]** Head-to-head: LogReg vs Bayesian model, Tier A — AUROC, ECE, Brier, NLL, bin-aggregate 90% coverage.
-  **DoD:** `results/rq4_bayesian_comparison_{model_slug}.csv` + reliability and convergence figures. Result: the two models match - AUROC 0.795 vs 0.796, ECE 0.035 vs 0.037, Brier 0.143 both; Bayesian NLL 0.445, coverage_90 0.80; 1/50 fold-fits flagged.
+  **DoD:** `results/rq4_bayesian_comparison_{model_slug}.csv` + reliability and convergence figures. Result: the two models match - AUROC 0.795 vs 0.796, ECE 0.034 vs 0.037, Brier 0.143 both; Bayesian NLL 0.445, coverage_90 0.80; 0/50 fold-fits flagged (worst R-hat 1.008).
 
 - [x] **5.9d [A]** **RQ5 distillation** (D23): the 3-prompt ensemble vs the single-call Bayesian model on AUROC, ECE, and entropy quality (AUROC of each one's epistemic signal).
-  **DoD:** `results/rq5_distillation_{model_slug}.csv` + figure + headline sentence. Result: the 1-call model keeps 98.7% of the ensemble's AUROC edge (paired gap +0.004 [−0.011, 0.020]); its epistemic signal is a far better error predictor (0.779 vs 0.559, gap −0.221 [−0.268, −0.172]). Gaps in `rq5_distillation_gaps_{model_slug}.csv`.
+  **DoD:** `results/rq5_distillation_{model_slug}.csv` + figure + headline sentence. Result: the 1-call model keeps 98.7% of the ensemble's AUROC edge (paired gap +0.004 [−0.011, 0.020]); its epistemic signal is a far better error predictor (0.779 vs 0.559, gap −0.220 [−0.267, −0.172]); ECE 0.034 vs the ensemble's 0.071. Gaps in `rq5_distillation_gaps_{model_slug}.csv`.
 
 - [x] **5.9e [A]** **RQ5 human-disagreement validation** (D23): Spearman of `ens_entropy_aleatoric` and `ens_entropy_epistemic` against `d_human` (high `d_human` = strong consensus, so aleatoric should correlate *negatively*).
   **DoD:** both correlations with CIs and a one-sentence reading. Result: aleatoric −0.118 [−0.204, −0.016], epistemic +0.014 [−0.071, 0.099] — the decomposition validates.
@@ -247,7 +247,7 @@ A full RQ (`CLAUDE.md`, `PLAN.md` §7), numbered K1–K5 outside W0–W7 so it c
   **DoD:** items table for every non-skipped row. Result: 3,808 item rows; 1,852 verbose items with a verdict, of which 1,784 are also human-labeled — the paired verbosity population.
 
 - [x] **K4 [A]** Calibration, position-swap, verbosity attack, and Bayesian recalibration, split by coverage regime (`input_tokens` ≤ 1,024).
-  **DoD:** every metric with a CI, both signals, both regimes — `results/rq6_*_kev_8b.csv`. Result: `conf_kev_bpe` beats `conf_kev` on calibration in both regimes; `conf_kev`'s position-swap gap (−0.096) is ~5× the primary judge's `conf_verb`; `conf_kev_bpe`'s calibration breaks under verbosity in both regimes; the Bayesian meta-model does not beat the best single signal (0.772 vs 0.772 in-coverage, 0.775 vs 0.781 out; 5/50 and 2/50 fold-fits flagged after the 24 Sep 2026 standardized re-run).
+  **DoD:** every metric with a CI, both signals, both regimes — `results/rq6_*_kev_8b.csv`. Result: `conf_kev_bpe` beats `conf_kev` on calibration in both regimes; `conf_kev`'s position-swap gap (−0.096) is ~5× the primary judge's `conf_verb`; verbosity does not break either signal's calibration (`conf_kev_bpe` ΔECE −0.029 in-coverage, ns out); the Bayesian meta-model does not beat the best single signal (0.772 vs 0.772 in-coverage, 0.775 vs 0.781 out; 7/50 and 1/50 fold-fits flagged). *24 Sep 2026: calibration re-scored on `conf_kev_bpe_prob` (D7 amendment) — the earlier "calibration breaks under verbosity" reading was the entropy scale.*
 
 - [x] **K5 [W]** `REPORT.md` RQ6 section, out-of-domain caveat stated up front.
   **DoD:** written, every claim traceable to a results file.
@@ -277,7 +277,7 @@ A full RQ (`CLAUDE.md`, `PLAN.md` §8), numbered L1–L6 for the same reason as 
   **DoD:** a stated verdict. Result: a real problem, confined to verbose/turn=2 (the parse-failure rates in L3); clean/turn=2 is as reliable as turn=1.
 
 - [x] **L5 [A]** Calibration, position-swap, verbosity attack, and Bayesian recalibration, split by turn.
-  **DoD:** every metric with a CI — `results/rq7_*_autoj_13b_gptq_4bits.csv`. Result: both signals overconfident (gap 0.06–0.11), AUROC ~0.68; flip rate 12.5%/13.8%, about half the other two judges'. Verbosity (like-for-like `conf_sc_bpe_autoj_greedy`, N=1,137 paired): ΔECE ≈ −0.02 (ns), **ΔAUROC +0.06/+0.07 (significant)**, turn=2 accuracy −0.042. The Bayesian meta-model does not beat the best single signal (0.679 vs 0.683 turn=1, 0.674 vs 0.681 turn=2; 0/50 and 2/50 flagged). *24 Sep 2026: the first verbosity run compared the pooled signal across conditions and was confounded (D28 amendment); Bayesian re-run with standardized features.*
+  **DoD:** every metric with a CI — `results/rq7_*_autoj_13b_gptq_4bits.csv`. Result: both signals overconfident (gap 0.09–0.13), AUROC ~0.68; flip rate 12.5%/13.8%, about half the other two judges'. Verbosity (like-for-like `conf_sc_bpe_autoj_greedy`, N=1,137 paired): ΔECE −0.02/−0.03 (ns), **ΔAUROC +0.06/+0.07 (significant)**, turn=2 accuracy −0.042. The Bayesian meta-model does not beat the best single signal (0.680 vs 0.683 turn=1, 0.671 vs 0.681 turn=2; 0/50 and 1/50 flagged). *24 Sep 2026: the first verbosity run compared the pooled signal across conditions and was confounded (D28 amendment); Bayesian re-run with standardized features.*
 
 - [x] **L6 [W]** `REPORT.md` RQ7 section: purpose-built framing up front, the turn=2 failure finding stated prominently, L5's numbers.
   **DoD:** written, every claim traceable to a results file.

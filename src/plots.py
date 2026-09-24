@@ -1,5 +1,10 @@
 """Matplotlib figures, one per function, each saved to results/figures/ under
 a deterministic, model_slug-suffixed name (CLAUDE.md §5, D26).
+
+Figures use plain-language names for signals and judges (SIGNAL_LABELS,
+JUDGE_NAMES) so they read without the code; the CSVs keep the column names.
+Intervals are always labelled with their kind: a cluster-bootstrap CI and
+D8's across-repeat spread are different quantities.
 """
 
 from pathlib import Path
@@ -10,9 +15,66 @@ import pandas as pd
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 
-from src.metrics import auroc_error, ece, get_bin_edges
+from src.metrics import aurc, auroc_error, ece, get_bin_edges
 
 FIGURES_DIR = Path("results/figures")
+
+SIGNAL_LABELS = {
+    "conf_verb": "stated confidence",
+    "conf_lp": "verdict-token probability",
+    "conf_sc": "self-consistency",
+    "conf_bpe": "order-swap agreement",
+    "conf_bpe_prob": "order-swap agreement",
+    "conf_verb_bidir": "stated confidence, both orders",
+    "conf_lp_bidir": "verdict probability, both orders",
+    "conf_ens": "3-prompt ensemble",
+    "ens_entropy_total": "ensemble entropy: total",
+    "ens_entropy_aleatoric": "ensemble entropy: aleatoric",
+    "ens_entropy_epistemic": "ensemble entropy: epistemic",
+    "conf_kev": "class probability",
+    "conf_kev_bpe": "order-swap agreement",
+    "conf_sc_autoj": "self-consistency",
+    "conf_sc_bpe_autoj": "order-swap agreement",
+    "conf_sc_bpe_autoj_greedy": "order-swap agreement (greedy calls)",
+}
+
+# Signals built from the same AB/BA pair that defines `flipped`: their
+# flipped-vs-unflipped confidence gap is large by construction.
+BY_CONSTRUCTION = {"conf_bpe", "conf_kev_bpe", "conf_sc_bpe_autoj"}
+
+JUDGE_NAMES = {
+    "qwen2.5_7b_instruct": "Qwen2.5-7B",
+    "kev_8b": "kev-8b",
+    "autoj_13b_gptq_4bits": "auto-j-13b",
+}
+JUDGE_COLORS = {"Qwen2.5-7B": "tab:blue", "kev-8b": "tab:orange", "auto-j-13b": "tab:green"}
+
+_MUTED = "silver"
+
+
+def signal_label(name: str) -> str:
+    return SIGNAL_LABELS.get(name, name)
+
+
+def judge_name(model_slug: str) -> str:
+    """Display name for a model_slug, including suffixed ones such as
+    'kev_8b_in_coverage'."""
+    for slug, name in JUDGE_NAMES.items():
+        if model_slug.startswith(slug):
+            return name
+    return model_slug
+
+
+def _save(fig: Figure, filename: str) -> Figure:
+    fig.tight_layout()
+    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURES_DIR / filename, dpi=150)
+    return fig
+
+
+def _significance_colors(ci_low: np.ndarray, ci_high: np.ndarray, color: str = "tab:blue") -> list[str]:
+    """`color` where the CI excludes 0, muted where it doesn't."""
+    return [color if (lo > 0 or hi < 0) else _MUTED for lo, hi in zip(ci_low, ci_high)]
 
 
 def plot_ece_auroc_orthogonal() -> Figure:
@@ -44,8 +106,8 @@ def plot_ece_auroc_orthogonal() -> Figure:
 
     fig, axes = plt.subplots(1, 2, figsize=(9, 4), sharey=True)
     for ax, confidences, correct, ece_val, auroc_val, label in [
-        (axes[0], confidences_a, correct_a, ece_a, auroc_a, "A"),
-        (axes[1], confidences_b, correct_b, ece_b, auroc_b, "B"),
+        (axes[0], confidences_a, correct_a, ece_a, auroc_a, "A: ranks perfectly, miscalibrated"),
+        (axes[1], confidences_b, correct_b, ece_b, auroc_b, "B: calibrated, ranks nothing"),
     ]:
         correct_bool = np.asarray(correct, dtype=bool)
         x = np.arange(len(confidences))
@@ -53,15 +115,11 @@ def plot_ece_auroc_orthogonal() -> Figure:
         ax.scatter(x[~correct_bool], confidences[~correct_bool], c="tab:red", label="incorrect")
         ax.set_ylim(0.4, 1.05)
         ax.set_xlabel("item")
-        ax.set_title(f"Example {label}\nECE={ece_val:.2f}, AUROC={auroc_val:.2f}")
+        ax.set_title(f"{label}\nECE={ece_val:.2f}, AUROC={auroc_val:.2f}")
     axes[0].set_ylabel("confidence")
     axes[0].legend(loc="lower right")
-    fig.suptitle("ECE and AUROC are orthogonal (LEARNING.md C4)")
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / "ece_auroc_orthogonal.png", dpi=150)
-    return fig
+    fig.suptitle("ECE and AUROC measure different things")
+    return _save(fig, "ece_auroc_orthogonal.png")
 
 
 def _binned_means(
@@ -83,13 +141,6 @@ def _binned_means(
     return np.array(bin_x), np.array(bin_y), np.array(bin_weight)
 
 
-def _reliability_points(
-    confidences: np.ndarray, correct: np.ndarray, n_bins: int, strategy: str
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-bin (mean confidence, accuracy, weight) for a reliability diagram."""
-    return _binned_means(confidences, correct, n_bins, strategy)
-
-
 def _marker_sizes(weights: np.ndarray) -> np.ndarray:
     """Bin weight in [0, 1] -> marker area bounded to [40, 350] points².
     Unbounded, a bin holding most of the data gets a marker that spills
@@ -106,139 +157,144 @@ def plot_reliability_diagram(
     n_bins: int,
     model_slug: str,
     strategy: str = "auto",
-    correct_bidir: np.ndarray | None = None,
+    label: str = "judge_verdict",
+    overlay: tuple[np.ndarray, np.ndarray, str] | None = None,
+    title: str | None = None,
+    xlabel: str = "confidence",
+    ylabel: str = "accuracy",
+    note: str = "below the diagonal = overconfident",
 ) -> Figure:
-    """Mean confidence vs accuracy per bin, for one signal. Points below the
+    """Mean confidence vs accuracy per bin, on the same bins ece() uses,
+    with each curve's ECE and effective bin count in the legend
+    (invariant 4) and a histogram of the confidences underneath - most
+    signals pile up near 1, which the bins alone hide. Points below the
     diagonal are overconfident. Marker size is the bin's share of the data.
 
-    With `correct_bidir`, the verdict_bidir definition (D7) is overlaid as a
-    second curve - the confidences don't change, only what each bin is
-    scored against.
+    `overlay` = (confidences, correct, label) draws a second curve, e.g. the
+    verdict_bidir definition (D7). It carries its own confidences: a
+    confidence is only meaningful against the verdict it belongs to.
+
+    The axes start at the lowest confidence or accuracy shown, never above
+    0.5, so the region where the points actually sit fills the panel.
 
     Saved to results/figures/reliability_{signal_name}_{model_slug}.png.
     """
-    confidences_arr = np.asarray(confidences, dtype=float)
-    correct_arr = np.asarray(correct, dtype=float)
+    curves = [(np.asarray(confidences, dtype=float), np.asarray(correct, dtype=float), label, "tab:blue")]
+    if overlay is not None:
+        overlay_conf, overlay_correct, overlay_label = overlay
+        curves.append(
+            (np.asarray(overlay_conf, dtype=float), np.asarray(overlay_correct, dtype=float), overlay_label, "tab:orange")
+        )
 
-    fig, ax = plt.subplots(figsize=(5, 5))
-    ax.plot([0, 1], [0, 1], linestyle="--", color="gray")
-
-    legend_handles = [Line2D([0], [0], linestyle="--", color="gray", label="perfect calibration")]
-
-    conf_pts, acc_pts, weights = _reliability_points(confidences_arr, correct_arr, n_bins, strategy)
-    ax.plot(conf_pts, acc_pts, color="tab:blue", alpha=0.5, zorder=1)
-    ax.scatter(
-        conf_pts,
-        acc_pts,
-        s=_marker_sizes(weights),
-        alpha=0.8,
-        color="tab:blue",
-        edgecolors="white",
-        linewidths=1,
-        zorder=2,
-    )
-    legend_handles.append(
-        Line2D([0], [0], marker="o", linestyle="", color="tab:blue", markersize=10, label="judge_verdict")
+    fig, (ax, hist_ax) = plt.subplots(
+        2, 1, figsize=(5.5, 6.5), sharex=True, gridspec_kw={"height_ratios": [4, 1]}
     )
 
-    if correct_bidir is not None:
-        correct_bidir_arr = np.asarray(correct_bidir, dtype=float)
-        conf_pts2, acc_pts2, weights2 = _reliability_points(confidences_arr, correct_bidir_arr, n_bins, strategy)
-        ax.plot(conf_pts2, acc_pts2, color="tab:orange", alpha=0.5, zorder=1)
+    lowest = 0.5
+    legend_handles = []
+    for conf, corr, curve_label, color in curves:
+        conf_pts, acc_pts, weights = _binned_means(conf, corr, n_bins, strategy)
+        ece_value, n_effective_bins = ece(conf, corr, n_bins, strategy)
+        lowest = min(lowest, conf_pts.min(), acc_pts.min())
+
+        ax.plot(conf_pts, acc_pts, color=color, alpha=0.5, zorder=1)
         ax.scatter(
-            conf_pts2,
-            acc_pts2,
-            s=_marker_sizes(weights2),
-            alpha=0.8,
-            color="tab:orange",
-            edgecolors="white",
-            linewidths=1,
-            zorder=2,
+            conf_pts, acc_pts, s=_marker_sizes(weights), alpha=0.8, color=color,
+            edgecolors="white", linewidths=1, zorder=2,
         )
         legend_handles.append(
-            Line2D([0], [0], marker="o", linestyle="", color="tab:orange", markersize=10, label="verdict_bidir")
+            Line2D(
+                [0], [0], marker="o", linestyle="", color=color, markersize=9,
+                label=f"{curve_label}: ECE {ece_value:.3f} ({n_effective_bins} bins)",
+            )
         )
+        hist_ax.hist(conf, bins=40, range=(0, 1), color=color, alpha=0.5)
 
-    # A margin beyond [0, 1] so markers at the edge (common near 1.0) aren't clipped.
-    ax.set_xlim(-0.05, 1.05)
-    ax.set_ylim(-0.05, 1.05)
-    ax.set_xlabel("mean confidence in bin")
-    ax.set_ylabel("accuracy in bin")
-    ax.set_title(f"Reliability diagram: {signal_name}")
-    ax.legend(handles=legend_handles, loc="upper left", fontsize=9)
-    fig.tight_layout()
+    lo = np.floor(lowest * 10) / 10 - 0.02
+    ax.plot([lo, 1], [lo, 1], linestyle="--", color="gray", zorder=0)
+    legend_handles.insert(0, Line2D([0], [0], linestyle="--", color="gray", label="perfect calibration"))
 
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"reliability_{signal_name}_{model_slug}.png", dpi=150)
-    return fig
+    ax.set_xlim(lo, 1.02)
+    ax.set_ylim(lo, 1.02)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title or f"{signal_label(signal_name)} ({judge_name(model_slug)})")
+    ax.legend(handles=legend_handles, loc="upper left", fontsize=8)
+    ax.text(0.98, 0.02, note, transform=ax.transAxes,
+            ha="right", va="bottom", fontsize=8, color="dimgray")
+
+    hist_ax.set_xlabel(xlabel)
+    hist_ax.set_ylabel("items")
+    return _save(fig, f"reliability_{signal_name}_{model_slug}.png")
 
 
 def plot_risk_coverage(
     curves: dict[str, tuple[np.ndarray, np.ndarray]],
     oracle: tuple[np.ndarray, np.ndarray],
     filename: str = "risk_coverage.png",
-    title: str = "Risk-coverage: RQ2",
+    title: str = "Abstaining on the least confident items",
 ) -> Figure:
     """Every signal's risk-coverage curve plus the oracle, on one axis -
     RQ2's thesis figure, and RQ5's entropy threshold sweep via
-    `filename`/`title`. A flat curve is a finding; the oracle shows how much
-    headroom it leaves.
+    `filename`/`title`. Each signal's AURC is in the legend. The dotted
+    line is the error rate with no abstention, which random abstention
+    also keeps at every coverage; the oracle shows the headroom.
+
+    Below 5% coverage a point rests on fewer than ~90 items, so that strip
+    is shaded as noisy. A discrete signal's curve stops early: tied items
+    can't be split, so it has no point below its largest tie group.
 
     Args:
         curves: {name: (coverage, risk)}.
         oracle: (coverage, risk) from oracle_risk_coverage().
     """
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig, ax = plt.subplots(figsize=(6.5, 5))
 
     # Curves can coincide (RQ5's total and aleatoric entropy almost do), so
     # linestyle and marker vary too - color alone can't separate lines drawn
     # on top of each other.
-    _LINESTYLES = ["-", "--", "-.", ":"]
-    _MARKERS = ["o", "s", "^", "D"]
+    linestyles = ["-", "--", "-.", ":"]
+    markers = ["o", "s", "^", "D"]
 
+    base_risk = None
     for i, (name, (coverage, risk)) in enumerate(curves.items()):
+        coverage, risk = np.asarray(coverage, dtype=float), np.asarray(risk, dtype=float)
+        base_risk = float(risk[np.argmax(coverage)])
         ax.plot(
             coverage, risk,
-            linestyle=_LINESTYLES[i % len(_LINESTYLES)],
-            marker=_MARKERS[i % len(_MARKERS)],
+            linestyle=linestyles[i % len(linestyles)],
+            marker=markers[i % len(markers)],
             markersize=3,
             markevery=0.05,
             alpha=0.85,
-            label=name,
+            label=f"{signal_label(name)} (AURC {aurc(coverage, risk):.3f})",
         )
 
     oracle_coverage, oracle_risk = oracle
     ax.plot(
-        oracle_coverage, oracle_risk,
-        linestyle="--", color="black", linewidth=1.5, label="oracle",
+        oracle_coverage, oracle_risk, linestyle="--", color="black", linewidth=1.5,
+        label=f"oracle (AURC {aurc(oracle_coverage, oracle_risk):.3f})",
     )
+    if base_risk is not None:
+        ax.axhline(base_risk, linestyle=":", color="gray", linewidth=1.2,
+                   label=f"no abstention / random ({base_risk:.3f})")
+
+    ax.axvspan(0, 0.05, color="0.93", zorder=0)
+    ax.text(0.025, 0.98, "noisy", transform=ax.get_xaxis_transform(), ha="center", va="top",
+            fontsize=7, color="dimgray", rotation=90)
 
     ax.set_xlim(0, 1.02)
     ax.set_ylim(bottom=0)
-    ax.set_xlabel("coverage")
-    ax.set_ylabel("risk (1 - accuracy)")
+    ax.set_xlabel("coverage (share of items the judge keeps)")
+    ax.set_ylabel("risk (error rate on kept items)")
     ax.set_title(title)
-    ax.legend(loc="upper left", fontsize=9)
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / filename, dpi=150)
-    return fig
-
-
-def _ols_fit(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
-    """(slope, intercept) for the trend-line overlay. A small copy of
-    analysis/human_disagreement.py's formula: src/ must not import analysis/.
-    """
-    x_mean, y_mean = x.mean(), y.mean()
-    slope = float(np.sum((x - x_mean) * (y - y_mean)) / np.sum((x - x_mean) ** 2))
-    intercept = float(y_mean - slope * x_mean)
-    return slope, intercept
+    ax.legend(loc="upper left", bbox_to_anchor=(0.06, 1), fontsize=8)
+    return _save(fig, filename)
 
 
 def _spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
     """Spearman correlation for the figure's annotation (average ranks for
-    ties) - a copy of analysis/human_disagreement.py's, for the same reason.
+    ties) - a copy of analysis/human_disagreement.py's: src/ must not import
+    analysis/.
     """
     x_ranks = pd.Series(x).rank().to_numpy()
     y_ranks = pd.Series(y).rank().to_numpy()
@@ -255,10 +311,11 @@ def plot_human_disagreement(
     n_bins: int,
     model_slug: str,
 ) -> Figure:
-    """Task 3.3 (D9): accuracy (left) and conf_verb (right) against human
-    consensus strength d_human. Binned means (marker size = weight) plus the
-    OLS trend line in a different style, with Spearman in the title.
-    d_human has few distinct values, so the "auto" binning bins it exactly.
+    """Task 3.3 (D9): accuracy (left) and stated confidence (right) at each
+    level of human consensus d_human, labelled with how many items each
+    level holds. No fitted line: d_human takes only three values here, one
+    of them with a handful of items, so a line would overstate the shape.
+    The Spearman correlation (the test REPORT.md uses) is in each title.
 
     Saved to results/figures/human_disagreement_{model_slug}.png.
     """
@@ -269,55 +326,30 @@ def plot_human_disagreement(
     correct_arr = np.asarray(correct, dtype=float)
     confidence_arr = np.asarray(confidence, dtype=float)
 
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
     panels = [
         (axes[0], correct_arr, "accuracy", "tab:blue", "o"),
-        (axes[1], confidence_arr, "mean conf_verb", "tab:orange", "s"),
+        (axes[1], confidence_arr, "mean stated confidence", "tab:orange", "s"),
     ]
     for ax, y_arr, ylabel, color, marker in panels:
         bin_d, bin_y, weights = _binned_means(d_human_arr, y_arr, n_bins, strategy="auto")
-        ax.scatter(
-            bin_d, bin_y,
-            s=_marker_sizes(weights),
-            marker=marker,
-            color=color,
-            alpha=0.85,
-            edgecolors="white",
-            linewidths=1,
-            zorder=2,
-        )
+        ax.scatter(bin_d, bin_y, s=_marker_sizes(weights), marker=marker, color=color,
+                   alpha=0.85, edgecolors="white", linewidths=1, zorder=2)
+        for x, y, w in zip(bin_d, bin_y, weights):
+            ax.annotate(f"n={round(w * len(d_human_arr))}", xy=(x, y), xytext=(0, 12),
+                        textcoords="offset points", ha="center", fontsize=8, color="dimgray")
 
-        slope, intercept = _ols_fit(d_human_arr, y_arr)
-        line_x = np.array([d_human_arr.min(), d_human_arr.max()])
-        ax.plot(
-            line_x, slope * line_x + intercept,
-            linestyle="--", color="black", linewidth=1.5, zorder=1,
-        )
-
-        # Spearman is a rank summary, not a curve, so it goes in the title.
         rho = _spearman_corr(d_human_arr, y_arr)
-
-        legend_handles = [
-            Line2D([0], [0], marker=marker, linestyle="", color=color, markersize=8, label="binned mean"),
-            Line2D([0], [0], linestyle="--", color="black", label="OLS fit"),
-        ]
-
-        x_pad = 0.05 * (d_human_arr.max() - d_human_arr.min())
-        y_pad = 0.05 * max(y_arr.max() - y_arr.min(), 1e-6)
+        x_pad = 0.08 * (d_human_arr.max() - d_human_arr.min())
+        y_pad = 0.15 * max(bin_y.max() - bin_y.min(), 1e-6)
         ax.set_xlim(d_human_arr.min() - x_pad, d_human_arr.max() + x_pad)
-        ax.set_ylim(y_arr.min() - y_pad, y_arr.max() + y_pad)
-        ax.set_xlabel("d_human")
+        ax.set_ylim(bin_y.min() - y_pad, bin_y.max() + y_pad)
+        ax.set_xlabel("human consensus d_human (0.5 = unanimous)")
         ax.set_ylabel(ylabel)
-        ax.set_title(f"{ylabel} vs. d_human\nOLS slope={slope:.3f}, Spearman ρ={rho:.3f}", fontsize=10)
-        ax.legend(handles=legend_handles, loc="best", fontsize=9)
+        ax.set_title(f"{ylabel}\nSpearman ρ = {rho:.3f} over all items", fontsize=10)
 
-    fig.suptitle("Human disagreement (D9)")
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"human_disagreement_{model_slug}.png", dpi=150)
-    return fig
+    fig.suptitle(f"Judge behaviour vs. human consensus ({judge_name(model_slug)})")
+    return _save(fig, f"human_disagreement_{model_slug}.png")
 
 
 def _draw_forest(
@@ -329,15 +361,19 @@ def _draw_forest(
     xlabel: str,
     colors: list[str] | None = None,
     annotate: bool = True,
+    reference: float | None = 0.0,
+    decimals: int = 3,
 ) -> None:
-    """Draws a forest panel onto `ax`: a point + CI bar per label (first
-    label at the top) and a reference line at 0. No title, no save - the
-    shared primitive under every forest figure.
+    """Draws a forest panel onto `ax`: a point + interval bar per label
+    (first label at the top) and a dashed reference line (default 0). No
+    title, no save - the shared primitive under every forest figure.
 
     Args:
         colors: optional per-label colors (default: all tab:blue).
         annotate: print "value [lo, hi]" above each point. Turn off for
             dense panels whose exact values live in a CSV.
+        reference: x of the dashed line, or None for no line.
+        decimals: decimal places in the annotations.
     """
     labels = list(labels)
     values_arr = np.asarray(values, dtype=float)
@@ -350,29 +386,20 @@ def _draw_forest(
     err_low = values_arr - ci_low_arr
     err_high = ci_high_arr - values_arr
 
-    ax.axvline(0, linestyle="--", color="gray", linewidth=1, zorder=1)
+    if reference is not None:
+        ax.axvline(reference, linestyle="--", color="gray", linewidth=1, zorder=1)
     # One errorbar call per point, since one call takes only one color.
     for x, y, lo_err, hi_err, color in zip(values_arr, y_pos, err_low, err_high, point_colors):
-        ax.errorbar(
-            [x], [y],
-            xerr=[[lo_err], [hi_err]],
-            fmt="o",
-            color=color,
-            ecolor=color,
-            capsize=4,
-            markersize=7,
-            zorder=2,
-        )
+        ax.errorbar([x], [y], xerr=[[lo_err], [hi_err]], fmt="o", color=color, ecolor=color,
+                    capsize=4, markersize=7, zorder=2)
 
     # Exact values as text: when one estimate dwarfs the others, small but
     # real ones shrink to a dot with an invisible bar.
     if annotate:
         for x, y, lo, hi in zip(values_arr, y_pos, ci_low_arr, ci_high_arr):
-            ax.annotate(
-                f"{x:.3f} [{lo:.3f}, {hi:.3f}]",
-                xy=(x, y), xytext=(0, 10), textcoords="offset points",
-                ha="center", fontsize=8, color="dimgray",
-            )
+            text = f"{x:.{decimals}f}" if np.isnan(lo) else f"{x:.{decimals}f} [{lo:.{decimals}f}, {hi:.{decimals}f}]"
+            ax.annotate(text, xy=(x, y), xytext=(0, 10), textcoords="offset points",
+                        ha="center", fontsize=8, color="dimgray")
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels)
@@ -390,18 +417,15 @@ def _forest_plot(
     xlabel: str,
     title: str,
     filename: str,
+    colors: list[str] | None = None,
 ) -> Figure:
     """A single-panel forest plot (several estimates with CIs against 0),
     saved to results/figures/{filename}. Height scales with the label count.
     """
-    fig, ax = plt.subplots(figsize=(6, 0.9 * len(labels) + 1.5))
-    _draw_forest(ax, labels, values, ci_low, ci_high, xlabel)
+    fig, ax = plt.subplots(figsize=(7, 0.8 * len(labels) + 1.6))
+    _draw_forest(ax, labels, values, ci_low, ci_high, xlabel, colors=colors)
     ax.set_title(title)
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / filename, dpi=150)
-    return fig
+    return _save(fig, filename)
 
 
 def plot_d_human_correlations(
@@ -411,7 +435,7 @@ def plot_d_human_correlations(
     ci_high: np.ndarray,
     model_slug: str,
     filename_suffix: str = "",
-    title: str = "Signal-vs-d_human correlations (task 3.4)",
+    title: str = "Does confidence track human consensus?",
 ) -> Figure:
     """Forest plot of signals' Spearman correlation with d_human (task 3.4;
     reused by 5.9e). A second caller with a different signal set must pass
@@ -420,72 +444,73 @@ def plot_d_human_correlations(
     Saved to results/figures/d_human_correlations{filename_suffix}_{model_slug}.png.
     """
     return _forest_plot(
-        labels=signals,
+        labels=[signal_label(s) for s in signals],
         values=spearman,
         ci_low=ci_low,
         ci_high=ci_high,
-        xlabel="Spearman ρ (signal vs. d_human)",
-        title=title,
+        xlabel="Spearman ρ with d_human, 95% cluster-bootstrap CI",
+        title=f"{title} ({judge_name(model_slug)})",
         filename=f"d_human_correlations{filename_suffix}_{model_slug}.png",
+        colors=_significance_colors(ci_low, ci_high),
     )
 
 
-def plot_rq3a_confidence_gap(
-    signals: list[str],
-    gap: np.ndarray,
-    ci_low: np.ndarray,
-    ci_high: np.ndarray,
-    model_slug: str,
-) -> Figure:
-    """RQ3a: forest plot of each signal's flipped-minus-unflipped mean
-    confidence. A negative gap with a CI excluding 0 means the signal drops
-    exactly where order changed the verdict.
+def plot_confidence_gap(panels: list[dict], title: str, filename: str) -> Figure:
+    """RQ3a/RQ6/RQ7: each signal's mean confidence on items whose verdict
+    flipped between AB and BA, minus on items that didn't - one panel per
+    population (e.g. per coverage regime or turn). A negative gap with a CI
+    excluding 0 means the signal drops where order changed the verdict.
 
-    Saved to results/figures/rq3a_confidence_gap_{model_slug}.png.
+    Signals in BY_CONSTRUCTION are drawn muted and marked †: they are built
+    from the same two orders that define a flip, so their large gap is
+    expected and says nothing new.
+
+    Each panel: {"title", "signals", "gap", "ci_low", "ci_high"}.
+    Saved to results/figures/{filename}.
     """
-    return _forest_plot(
-        labels=signals,
-        values=gap,
-        ci_low=ci_low,
-        ci_high=ci_high,
-        xlabel="mean confidence: flipped - unflipped",
-        title="Confidence gap on flipped vs. unflipped items (task 4.3, RQ3a)",
-        filename=f"rq3a_confidence_gap_{model_slug}.png",
-    )
-
-
-def plot_rq3b_deltas(
-    signals: list[str],
-    delta_ece: np.ndarray,
-    ece_ci_low: np.ndarray,
-    ece_ci_high: np.ndarray,
-    delta_auroc: np.ndarray,
-    auroc_ci_low: np.ndarray,
-    auroc_ci_high: np.ndarray,
-    model_slug: str,
-) -> Figure:
-    """RQ3b: ΔECE and ΔAUROC (verbose - clean) side by side, sharing one
-    signal order - the finding (AUROC drops everywhere, calibration breaks
-    only for conf_bpe) only reads as one result on one figure. Positive
-    ΔECE = worse calibration; negative ΔAUROC = less informative signal.
-
-    Saved to results/figures/rq3b_deltas_{model_slug}.png.
-    """
-    fig, axes = plt.subplots(1, 2, figsize=(11, 0.9 * len(signals) + 1.5))
-
-    _draw_forest(axes[0], signals, delta_ece, ece_ci_low, ece_ci_high, xlabel="Δ ECE (verbose - clean)")
-    axes[0].set_title("Calibration")
-
-    _draw_forest(axes[1], signals, delta_auroc, auroc_ci_low, auroc_ci_high, xlabel="Δ AUROC (verbose - clean)")
-    axes[1].set_title("Error-detection")
-    axes[1].set_ylabel("")  # left panel's labels already identify the rows
-
-    fig.suptitle("Verbosity's effect on calibration and error-detection (task 4.4, RQ3b)")
-    fig.tight_layout()
-
+    n_rows = max(len(p["signals"]) for p in panels)
+    fig, axes = plt.subplots(1, len(panels), figsize=(max(6 * len(panels), 9), 0.8 * n_rows + 2), sharex=True,
+                             squeeze=False)
+    for ax, panel in zip(axes[0], panels):
+        labels = [signal_label(s) + (" †" if s in BY_CONSTRUCTION else "") for s in panel["signals"]]
+        colors = [_MUTED if s in BY_CONSTRUCTION else "tab:blue" for s in panel["signals"]]
+        _draw_forest(ax, labels, panel["gap"], panel["ci_low"], panel["ci_high"],
+                     "confidence when flipped − when stable\n(95% cluster-bootstrap CI)", colors=colors)
+        ax.set_title(panel["title"])
+    fig.suptitle(title)
+    fig.text(0.01, 0.01, "† built from the same two orders that define a flip, so a large gap is expected by construction",
+             fontsize=7, color="dimgray")
+    fig.tight_layout(rect=(0, 0.04, 1, 1))
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq3b_deltas_{model_slug}.png", dpi=150)
+    fig.savefig(FIGURES_DIR / filename, dpi=150)
     return fig
+
+
+def plot_verbosity_deltas(panels: list[dict], title: str, filename: str) -> Figure:
+    """RQ3b/RQ6/RQ7: ΔECE and ΔAUROC (verbose − clean) side by side, one
+    row per population. Positive ΔECE = worse calibration; negative ΔAUROC
+    = the signal detects errors less well. Estimates whose paired CI
+    excludes 0 are coloured; the rest are muted.
+
+    Each panel: {"title", "signals", "delta_ece", "ece_ci_low", "ece_ci_high",
+    "delta_auroc", "auroc_ci_low", "auroc_ci_high"}.
+    Saved to results/figures/{filename}.
+    """
+    n_signals = max(len(p["signals"]) for p in panels)
+    fig, axes = plt.subplots(len(panels), 2, figsize=(12, (0.8 * n_signals + 1.4) * len(panels) + 0.6), squeeze=False)
+    for row, panel in zip(axes, panels):
+        labels = [signal_label(s) for s in panel["signals"]]
+        _draw_forest(row[0], labels, panel["delta_ece"], panel["ece_ci_low"], panel["ece_ci_high"],
+                     "Δ ECE, verbose − clean (> 0 = worse calibrated)",
+                     colors=_significance_colors(panel["ece_ci_low"], panel["ece_ci_high"]))
+        _draw_forest(row[1], labels, panel["delta_auroc"], panel["auroc_ci_low"], panel["auroc_ci_high"],
+                     "Δ AUROC, verbose − clean (< 0 = detects errors less well)",
+                     colors=_significance_colors(panel["auroc_ci_low"], panel["auroc_ci_high"]))
+        row[0].set_title(f"{panel['title']}: calibration" if panel["title"] else "Calibration")
+        row[1].set_title(f"{panel['title']}: error detection" if panel["title"] else "Error detection")
+        row[1].set_yticklabels([])
+    fig.suptitle(f"{title}\n(paired 95% cluster-bootstrap CIs; muted = CI includes 0)")
+    return _save(fig, filename)
 
 
 def plot_rq4_ablation(
@@ -499,65 +524,41 @@ def plot_rq4_ablation(
     baseline_ci_high: float,
     baseline_label: str,
     model_slug: str,
+    null_means: np.ndarray | None = None,
 ) -> Figure:
-    """Task 5.5: one bar per (tier, model), grouped by tier and colored by
-    model, next to its own bar for the best single signal (with a thin
-    reference line at its height). Whiskers are D8's across-repeat spread
-    for the tiers and a cluster-bootstrap CI for the baseline.
+    """Task 5.5: AUROC of each (tier, model) meta-model next to the best
+    single signal, on a zoomed axis - the differences are hundredths.
+    Tier intervals are D8's across-repeat spread; the baseline's is a 95%
+    cluster-bootstrap CI. `null_means`, if given, shades the range of the
+    permutation-null means (invariant 12).
 
     Saved to results/figures/rq4_ablation_{model_slug}.png.
     """
-    tier_order = ["A", "B", "C"]
-    model_order = sorted(set(models))
-    bar_width = 0.8 / max(len(model_order), 1)
+    by_cell = {(t, m): (v, lo, hi) for t, m, v, lo, hi in zip(tiers, models, auroc_mean, auroc_low, auroc_high)}
+    tier_names = {"A": "A: judge's own signals", "B": "B: + surface features", "C": "C: + token statistics"}
+    model_colors = {"logreg": "tab:blue", "histgbm": "tab:purple"}
 
-    fig, ax = plt.subplots(figsize=(8, 5))
+    labels, values, lows, highs, colors = [f"best single signal ({signal_label(baseline_label)})"], [baseline], \
+        [baseline_ci_low], [baseline_ci_high], ["tab:green"]
+    for tier in ["A", "B", "C"]:
+        for model in sorted(set(models)):
+            if (tier, model) in by_cell:
+                v, lo, hi = by_cell[(tier, model)]
+                labels.append(f"Tier {tier_names[tier]}, {model}")
+                values.append(v)
+                lows.append(lo)
+                highs.append(hi)
+                colors.append(model_colors.get(model, "tab:gray"))
 
-    ax.axhline(baseline, linestyle="--", color="tab:gray", linewidth=1, zorder=1)
-
-    # The baseline bar at x=0, in its own color so it never reads as a model.
-    baseline_err_low = baseline - baseline_ci_low
-    baseline_err_high = baseline_ci_high - baseline
-    ax.bar(
-        [0], [baseline], width=0.7, color="tab:green", zorder=2,
-        label=f"best single signal ({baseline_label})",
-    )
-    ax.errorbar(
-        [0], [baseline], yerr=[[baseline_err_low], [baseline_err_high]],
-        fmt="none", ecolor="black", capsize=4, zorder=3,
-    )
-
-    for i, model in enumerate(model_order):
-        model_mask = [m == model for m in models]
-        model_tiers = [t for t, keep in zip(tiers, model_mask) if keep]
-        model_means = [v for v, keep in zip(auroc_mean, model_mask) if keep]
-        model_low = [v for v, keep in zip(auroc_low, model_mask) if keep]
-        model_high = [v for v, keep in zip(auroc_high, model_mask) if keep]
-
-        # Reorder into tier_order; the caller's rows needn't be sorted.
-        by_tier = dict(zip(model_tiers, zip(model_means, model_low, model_high)))
-        ordered = [by_tier[t] for t in tier_order if t in by_tier]
-        means = np.array([v[0] for v in ordered])
-        err_low = means - np.array([v[1] for v in ordered])
-        err_high = np.array([v[2] for v in ordered]) - means
-
-        # +1 shifts the tier groups right of the baseline bar at x=0.
-        x = 1 + np.arange(len(ordered)) + (i - (len(model_order) - 1) / 2) * bar_width
-        ax.bar(x, means, width=bar_width, label=model, zorder=2)
-        ax.errorbar(
-            x, means, yerr=[err_low, err_high], fmt="none", ecolor="black", capsize=4, zorder=3
-        )
-
-    ax.set_xticks([0] + list(1 + np.arange(len(tier_order))))
-    ax.set_xticklabels([baseline_label] + [f"Tier {t}" for t in tier_order])
-    ax.set_ylabel("AUROC (uncertainty/features → judge error)")
-    ax.set_title("RQ4 tier ablation: A → B → C (task 5.5)")
-    ax.legend(loc="lower right", fontsize=9)
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq4_ablation_{model_slug}.png", dpi=150)
-    return fig
+    fig, ax = plt.subplots(figsize=(8, 0.6 * len(labels) + 2))
+    if null_means is not None and len(null_means):
+        ax.axvspan(min(null_means), max(null_means), color="0.9", zorder=0)
+        ax.text(np.mean(null_means), len(labels) - 0.6, "permutation null", ha="center", va="bottom",
+                fontsize=8, color="dimgray")
+    _draw_forest(ax, labels, values, lows, highs, "AUROC predicting judge error", colors=colors, reference=baseline)
+    ax.set_title("Do more features help predict judge error?\n"
+                 "(tiers: range over 10 CV repeats; baseline: 95% cluster-bootstrap CI)", fontsize=10)
+    return _save(fig, f"rq4_ablation_{model_slug}.png")
 
 
 def plot_rq4_progression(
@@ -568,7 +569,7 @@ def plot_rq4_progression(
     model_slug: str,
 ) -> Figure:
     """Task 5.5: forest plot of each tier step's paired AUROC change. A CI
-    excluding 0 means that step is real.
+    excluding 0 means that step is real; muted points are not.
 
     Saved to results/figures/rq4_progression_{model_slug}.png.
     """
@@ -577,9 +578,10 @@ def plot_rq4_progression(
         values=auroc_diff,
         ci_low=ci_low,
         ci_high=ci_high,
-        xlabel="Δ AUROC (higher tier - lower tier)",
-        title="RQ4 tier-progression paired comparison (task 5.5)",
+        xlabel="Δ AUROC, higher tier − lower tier (paired 95% cluster-bootstrap CI)",
+        title="Does each added feature tier change AUROC?",
         filename=f"rq4_progression_{model_slug}.png",
+        colors=_significance_colors(ci_low, ci_high),
     )
 
 
@@ -590,41 +592,31 @@ def plot_rq4_permutation_nulls(
     null_distributions: list[np.ndarray],
     model_slug: str,
 ) -> Figure:
-    """Task 5.5: each (tier, model) cell's null AUROC histogram with the
-    observed AUROC marked - a visual check that the observed value sits well clear of its null.
-    Grid: one row per model, one column per tier, whatever the input order.
+    """Task 5.5: for each (tier, model) cell, every permutation-null AUROC
+    (grey dots, labels shuffled within each question) and the observed
+    AUROC (red diamond), on one shared axis.
 
     Saved to results/figures/rq4_permutation_nulls_{model_slug}.png.
     """
-    tier_order = [t for t in ["A", "B", "C"] if t in tiers]
-    model_order = sorted(set(models))
-    nrows, ncols = len(model_order), len(tier_order)
+    rng = np.random.default_rng(0)  # jitter only; no statistic depends on it
+    order = sorted(range(len(tiers)), key=lambda i: (tiers[i], models[i]))
 
-    by_cell = {(t, m): i for i, (t, m) in enumerate(zip(tiers, models))}
-
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
-
-    for row, model in enumerate(model_order):
-        for col, tier in enumerate(tier_order):
-            ax = axes[row][col]
-            i = by_cell[(tier, model)]
-
-            ax.hist(null_distributions[i], bins=15, color="tab:gray", alpha=0.8, edgecolor="white")
-            ax.axvline(observed[i], color="tab:red", linestyle="--", linewidth=2)
-            ax.set_title(f"Tier {tier}, {model}", fontsize=10)
-            ax.set_xlabel("null AUROC")
-            ax.set_xlim(0, 1)
-
-    legend_handles = [
-        Line2D([0], [0], color="tab:red", linestyle="--", linewidth=2, label="observed AUROC"),
-    ]
-    fig.legend(handles=legend_handles, loc="upper right", fontsize=9)
-    fig.suptitle("Permutation null distributions vs. observed AUROC (task 5.5)")
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq4_permutation_nulls_{model_slug}.png", dpi=150)
-    return fig
+    fig, ax = plt.subplots(figsize=(8, 0.55 * len(order) + 1.8))
+    for row, i in enumerate(order):
+        null = np.asarray(null_distributions[i], dtype=float)
+        ax.scatter(null, row + rng.uniform(-0.15, 0.15, len(null)), s=10, color="gray", alpha=0.5, zorder=2)
+        ax.scatter([observed[i]], [row], marker="D", s=60, color="tab:red", zorder=3)
+    ax.axvline(0.5, linestyle="--", color="gray", linewidth=1, zorder=1)
+    ax.set_yticks(range(len(order)))
+    ax.set_yticklabels([f"Tier {tiers[i]}, {models[i]}" for i in order])
+    ax.set_ylim(len(order) - 0.5, -0.5)
+    ax.set_xlabel("AUROC predicting judge error")
+    ax.legend(handles=[
+        Line2D([0], [0], marker="o", linestyle="", color="gray", label="null (labels shuffled within question)"),
+        Line2D([0], [0], marker="D", linestyle="", color="tab:red", label="observed"),
+    ], loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, fontsize=8)
+    ax.set_title("Observed AUROC vs. permutation null")
+    return _save(fig, f"rq4_permutation_nulls_{model_slug}.png")
 
 
 def plot_h4_interaction(
@@ -651,31 +643,25 @@ def plot_h4_interaction(
     for color, d_human_value, curve in zip(colors, d_human_values, predicted_curves):
         ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
     # Rug below the [0, 1] axis so it never overlaps the curves.
-    ax.plot(
-        oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color="black", alpha=0.3,
-        markersize=8, clip_on=False,
-    )
+    ax.plot(oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color="black", alpha=0.3,
+            markersize=8, clip_on=False)
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.08, 1.02)
-    ax.set_xlabel("predictor's out-of-fold score (P(correct))")
-    ax.set_ylabel("predicted P(correct)")
+    ax.set_xlabel("meta-model's out-of-fold P(correct)")
+    ax.set_ylabel("fitted P(judge correct)")
     ax.set_title("Probability scale")
-    ax.legend(loc="upper left", fontsize=9, title="human consensus (d_human)")
+    ax.legend(loc="upper left", fontsize=9, title="human consensus (0.5 = unanimous)")
 
     ax = axes[1]
     for color, d_human_value, curve in zip(colors, d_human_values, log_odds_curves):
         ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
     ax.set_xlim(0, 1)
-    ax.set_xlabel("predictor's out-of-fold score (P(correct))")
-    ax.set_ylabel("log-odds of correct (linear predictor)")
-    ax.set_title("Log-odds scale (undistorted slope)")
+    ax.set_xlabel("meta-model's out-of-fold P(correct)")
+    ax.set_ylabel("log-odds of correct")
+    ax.set_title("Log-odds scale (slopes undistorted)")
 
-    fig.suptitle("H4: the predictor's edge grows with human consensus (task 5.6)")
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"h4_interaction_{model_slug}.png", dpi=150)
-    return fig
+    fig.suptitle("The meta-model's edge grows with human consensus (H4)")
+    return _save(fig, f"h4_interaction_{model_slug}.png")
 
 
 def plot_rq4_transfer(
@@ -688,49 +674,25 @@ def plot_rq4_transfer(
     transfer_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.7: per model, in-domain AUROC (clean CV, D8 spread) next to
-    transfer AUROC (fit on clean, evaluated on verbose, bootstrap CI).
+    """Task 5.7: per model, in-domain AUROC (clean CV, D8 across-repeat
+    spread) next to transfer AUROC (fit on clean, evaluated on verbose, 95%
+    cluster-bootstrap CI), on a zoomed axis.
 
     Saved to results/figures/rq4_transfer_{model_slug}.png.
     """
-    n = len(models)
-    x = np.arange(n)
-    bar_width = 0.35
+    labels, values, lows, highs, colors = [], [], [], [], []
+    for i, model in enumerate(models):
+        labels += [f"{model}: in-domain (clean)", f"{model}: transfer (clean → verbose)"]
+        values += [baseline_mean[i], transfer_mean[i]]
+        lows += [baseline_low[i], transfer_low[i]]
+        highs += [baseline_high[i], transfer_high[i]]
+        colors += ["tab:blue", "tab:red"]
 
-    fig, ax = plt.subplots(figsize=(6, 5))
-
-    baseline_mean_arr = np.asarray(baseline_mean, dtype=float)
-    transfer_mean_arr = np.asarray(transfer_mean, dtype=float)
-
-    ax.bar(
-        x - bar_width / 2, baseline_mean_arr, width=bar_width, label="in-domain (clean)", color="tab:blue", zorder=2
-    )
-    ax.errorbar(
-        x - bar_width / 2, baseline_mean_arr,
-        yerr=[baseline_mean_arr - np.asarray(baseline_low), np.asarray(baseline_high) - baseline_mean_arr],
-        fmt="none", ecolor="black", capsize=4, zorder=3,
-    )
-
-    ax.bar(
-        x + bar_width / 2, transfer_mean_arr, width=bar_width, label="transfer (clean → verbose)",
-        color="tab:red", zorder=2,
-    )
-    ax.errorbar(
-        x + bar_width / 2, transfer_mean_arr,
-        yerr=[transfer_mean_arr - np.asarray(transfer_low), np.asarray(transfer_high) - transfer_mean_arr],
-        fmt="none", ecolor="black", capsize=4, zorder=3,
-    )
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(models)
-    ax.set_ylabel("AUROC (uncertainty/features → judge error)")
-    ax.set_title("RQ4 transfer test: clean → verbose (task 5.7)")
-    ax.legend(loc="lower right", fontsize=9)
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq4_transfer_{model_slug}.png", dpi=150)
-    return fig
+    fig, ax = plt.subplots(figsize=(9, 0.7 * len(labels) + 2))
+    _draw_forest(ax, labels, values, lows, highs, "AUROC predicting judge error", colors=colors, reference=None)
+    ax.set_title("Does a meta-model trained on clean inputs survive the padding attack?\n"
+                 "(in-domain: range over 10 CV repeats; transfer: 95% cluster-bootstrap CI)", fontsize=10)
+    return _save(fig, f"rq4_transfer_{model_slug}.png")
 
 
 def plot_rq4_category_transfer(
@@ -739,40 +701,36 @@ def plot_rq4_category_transfer(
     auroc: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.8: held-out AUROC per category (LeaveOneGroupOut), one bar per
-    model, categories sorted weakest to strongest. No category is singled
-    out in advance; the dashed line marks chance.
+    """Task 5.8: held-out AUROC per category (LeaveOneGroupOut), one marker
+    per model, categories sorted weakest to strongest. No category is
+    singled out in advance; the dashed line marks chance. Each value is one
+    deterministic split, so there is no interval.
 
     Saved to results/figures/rq4_category_transfer_{model_slug}.png.
     """
     df = pd.DataFrame({"category": categories, "model": models, "auroc": auroc})
-    category_order = df.groupby("category")["auroc"].mean().sort_values().index.tolist()
-    model_order = sorted(df["model"].unique())
+    category_order = df.groupby("category")["auroc"].mean().sort_values(ascending=False).index.tolist()
+    model_styles = {"logreg": ("tab:blue", "o"), "histgbm": ("tab:purple", "s")}
 
-    bar_width = 0.8 / max(len(model_order), 1)
-    fig, ax = plt.subplots(figsize=(10, 5))
-
-    ax.axhline(0.5, linestyle="--", color="gray", linewidth=1, zorder=1, label="chance (0.5)")
-
-    for i, model in enumerate(model_order):
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.axvline(0.5, linestyle="--", color="gray", linewidth=1, zorder=1)
+    for model in sorted(df["model"].unique()):
         model_df = df[df["model"] == model].set_index("category").reindex(category_order)
-        x = np.arange(len(category_order)) + (i - (len(model_order) - 1) / 2) * bar_width
-        ax.bar(x, model_df["auroc"].to_numpy(), width=bar_width, label=model, zorder=2)
-
-    ax.set_xticks(np.arange(len(category_order)))
-    ax.set_xticklabels(category_order, rotation=30, ha="right")
-    ax.set_ylim(0, 1)
-    ax.set_ylabel("held-out AUROC (LeaveOneGroupOut)")
-    ax.set_title("RQ4 transfer test 2: generalization across category (task 5.8)")
+        color, marker = model_styles.get(model, ("tab:gray", "o"))
+        ax.scatter(model_df["auroc"], np.arange(len(category_order)), color=color, marker=marker, s=60,
+                   label=model, zorder=2)
+    ax.set_yticks(np.arange(len(category_order)))
+    ax.set_yticklabels(category_order)
+    ax.set_ylim(len(category_order) - 0.5, -0.5)
+    ax.set_xlim(0.45, 0.95)
+    ax.set_xlabel("AUROC on the held-out category (dashed = chance)")
+    ax.set_title("Does the meta-model generalize to an unseen category?")
     ax.legend(loc="lower right", fontsize=9)
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq4_category_transfer_{model_slug}.png", dpi=150)
-    return fig
+    return _save(fig, f"rq4_category_transfer_{model_slug}.png")
 
 
 _FEATURE_FAMILY_COLORS = {"A": "tab:blue", "B": "tab:green", "C": "tab:purple"}
+_FEATURE_FAMILY_NAMES = {"A": "Tier A: judge's own signals", "B": "Tier B: surface features", "C": "Tier C: token statistics"}
 
 
 def _sort_coefficient_rows(
@@ -792,7 +750,7 @@ def _sort_coefficient_rows(
 
 def _family_legend_handles(families_present: list[str]) -> list[Line2D]:
     return [
-        Line2D([0], [0], marker="o", linestyle="", color=_FEATURE_FAMILY_COLORS[f], label=f"Tier {f}")
+        Line2D([0], [0], marker="o", linestyle="", color=_FEATURE_FAMILY_COLORS[f], label=_FEATURE_FAMILY_NAMES[f])
         for f in ["A", "B", "C"]
         if f in families_present
     ]
@@ -816,30 +774,16 @@ def plot_rq4_coefficients(
     """
     df = _sort_coefficient_rows(features, coef, ci_low, ci_high, family)
     df = df[(df["ci_low"] > 0) | (df["ci_high"] < 0)].reset_index(drop=True)
-
     colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
 
-    fig, ax = plt.subplots(figsize=(7, 0.9 * max(len(df), 1) + 1.5))
-    _draw_forest(
-        ax,
-        df["feature"].tolist(),
-        df["coef"].to_numpy(),
-        df["ci_low"].to_numpy(),
-        df["ci_high"].to_numpy(),
-        "coefficient (standardized scale)",
-        colors=colors,
-    )
-
-    ax.legend(handles=_family_legend_handles(sorted(df["family"].unique())), loc="lower right", fontsize=9)
-    ax.set_title(
-        f"RQ4 meta-model: significant coefficients only ({len(df)}/{len(features)} clear 0)\n"
-        f"Tier C + logreg (task 5.9, {model_slug})"
-    )
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq4_coefficients_{model_slug}.png", dpi=150)
-    return fig
+    fig, ax = plt.subplots(figsize=(7.5, 0.8 * max(len(df), 1) + 1.8))
+    _draw_forest(ax, df["feature"].tolist(), df["coef"].to_numpy(), df["ci_low"].to_numpy(),
+                 df["ci_high"].to_numpy(), "coefficient on standardized feature (> 0 = judge more likely right)",
+                 colors=colors)
+    ax.legend(handles=_family_legend_handles(sorted(df["family"].unique())), loc="lower right", fontsize=8)
+    ax.set_title(f"Which features predict judge error?\n{len(df)} of {len(features)} coefficients clear zero "
+                 f"(logistic regression, all tiers)", fontsize=10)
+    return _save(fig, f"rq4_coefficients_{model_slug}.png")
 
 
 def plot_rq4_coefficients_full(
@@ -860,64 +804,53 @@ def plot_rq4_coefficients_full(
     colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
 
     fig, ax = plt.subplots(figsize=(8, 0.22 * len(df) + 1.2))
-    _draw_forest(
-        ax,
-        df["feature"].tolist(),
-        df["coef"].to_numpy(),
-        df["ci_low"].to_numpy(),
-        df["ci_high"].to_numpy(),
-        "coefficient (standardized scale)",
-        colors=colors,
-        annotate=False,
-    )
+    _draw_forest(ax, df["feature"].tolist(), df["coef"].to_numpy(), df["ci_low"].to_numpy(),
+                 df["ci_high"].to_numpy(), "coefficient on standardized feature", colors=colors, annotate=False)
     ax.tick_params(axis="y", labelsize=7)
-
-    ax.legend(handles=_family_legend_handles(["A", "B", "C"]), loc="lower right", fontsize=9)
-    ax.set_title(
-        f"RQ4 meta-model coefficients, full Tier C feature set (task 5.9, {model_slug})\n"
-        f"exact values: results/rq4_coefficients_{model_slug}.csv",
-        fontsize=9,
-    )
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq4_coefficients_full_{model_slug}.png", dpi=150)
-    return fig
+    ax.legend(handles=_family_legend_handles(["A", "B", "C"]), loc="lower right", fontsize=8)
+    ax.set_title(f"All meta-model coefficients (exact values: rq4_coefficients_{model_slug}.csv)", fontsize=9)
+    return _save(fig, f"rq4_coefficients_full_{model_slug}.png")
 
 
-def plot_bayesian_convergence(max_rhat: np.ndarray, flagged: np.ndarray, model_slug: str) -> Figure:
-    """Max R-hat for every fold-fit against D22's 1.01 threshold, flagged
-    fits in red (flagged = R-hat > 1.01, NaN, or any divergence).
+def plot_bayesian_convergence(
+    max_rhat: np.ndarray,
+    flagged: np.ndarray,
+    model_slug: str,
+    n_divergences: np.ndarray | None = None,
+    title: str | None = None,
+) -> Figure:
+    """Max R-hat for every fold-fit against D22's 1.01 threshold. A fit is
+    flagged for R-hat > 1.01 (red) or for any divergence (orange ×) - two
+    different problems, so they are drawn differently.
 
     Saved to results/figures/rq4_bayesian_convergence_{model_slug}.png.
     """
     max_rhat_arr = np.asarray(max_rhat, dtype=float)
     flagged_arr = np.asarray(flagged, dtype=bool)
+    divergences = np.zeros(len(max_rhat_arr), dtype=int) if n_divergences is None else np.asarray(n_divergences)
     x = np.arange(len(max_rhat_arr))
-    point_colors = np.where(flagged_arr, "tab:red", "tab:blue")
+    high_rhat = max_rhat_arr > 1.01
+    diverged = divergences > 0
 
     fig, ax = plt.subplots(figsize=(9, 4))
     ax.axhline(1.01, linestyle="--", color="gray", linewidth=1, zorder=1)
-    ax.scatter(x, max_rhat_arr, c=point_colors, zorder=2)
+    ok = ~flagged_arr
+    ax.scatter(x[ok], max_rhat_arr[ok], color="tab:blue", zorder=2)
+    ax.scatter(x[high_rhat], max_rhat_arr[high_rhat], color="tab:red", zorder=3)
+    ax.scatter(x[diverged], max_rhat_arr[diverged], marker="x", s=70, color="tab:orange", zorder=4)
 
-    n_flagged = int(flagged_arr.sum())
-    legend_handles = [
-        Line2D([0], [0], linestyle="--", color="gray", label="D22 threshold (1.01)"),
-        Line2D(
-            [0], [0], marker="o", linestyle="", color="tab:blue",
-            label=f"converged ({len(flagged_arr) - n_flagged})",
-        ),
-        Line2D([0], [0], marker="o", linestyle="", color="tab:red", label=f"flagged ({n_flagged})"),
-    ]
-    ax.legend(handles=legend_handles, loc="upper right", fontsize=9)
-    ax.set_xlabel("fold-fit (50 total: 5 folds x 10 repeats, D8)")
-    ax.set_ylabel("max R-hat")
-    ax.set_title(f"Bayesian model convergence across all fold-fits (task 5.9c, {model_slug})")
-    fig.tight_layout()
-
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq4_bayesian_convergence_{model_slug}.png", dpi=150)
-    return fig
+    ax.legend(handles=[
+        Line2D([0], [0], linestyle="--", color="gray", label="threshold (R-hat 1.01)"),
+        Line2D([0], [0], marker="o", linestyle="", color="tab:blue", label=f"converged ({int(ok.sum())})"),
+        Line2D([0], [0], marker="o", linestyle="", color="tab:red", label=f"R-hat > 1.01 ({int(high_rhat.sum())})"),
+        Line2D([0], [0], marker="x", linestyle="", color="tab:orange",
+               label=f"divergences ({int(diverged.sum())} fits, {int(divergences.sum())} total)"),
+    ], loc="upper left", bbox_to_anchor=(1.01, 1), fontsize=8)
+    ax.set_ylim(min(max_rhat_arr.min(), 1.0) - 0.001, max(max_rhat_arr.max(), 1.01) + 0.003)
+    ax.set_xlabel("fold-fit (5 folds × 10 repeats)")
+    ax.set_ylabel("worst R-hat in the fit")
+    ax.set_title(title or f"Bayesian model convergence ({judge_name(model_slug)})")
+    return _save(fig, f"rq4_bayesian_convergence_{model_slug}.png")
 
 
 def plot_rq5_distillation(
@@ -930,69 +863,39 @@ def plot_rq5_distillation(
     epistemic_auroc_bayesian_ci: tuple[float, float],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9d: the 3-call ensemble vs the 1-call Bayesian model on AUROC
-    and on entropy quality (AUROC of each one's epistemic signal).
+    """Task 5.9d: the 3-call ensemble vs the 1-call Bayesian model on error
+    detection (AUROC) and on how well each one's own epistemic signal
+    detects errors.
 
-    The Bayesian AUROC bar has no whisker on purpose: every other bar has a
+    The Bayesian AUROC has no interval on purpose: every other point has a
     cluster-bootstrap CI, and borrowing D8's across-repeat spread for it
     would imply a false equivalence between two kinds of interval.
 
     Saved to results/figures/rq5_distillation_{model_slug}.png.
     """
-    metrics = ["AUROC", "Epistemic AUROC\n(entropy quality)"]
-    x = np.arange(len(metrics))
-    width = 0.35
-
-    ensemble_vals = np.array([auroc_ensemble, epistemic_auroc_ensemble])
-    ensemble_err = np.array(
-        [
-            [auroc_ensemble - auroc_ensemble_ci[0], epistemic_auroc_ensemble - epistemic_auroc_ensemble_ci[0]],
-            [auroc_ensemble_ci[1] - auroc_ensemble, epistemic_auroc_ensemble_ci[1] - epistemic_auroc_ensemble],
-        ]
-    )
-    bayesian_vals = np.array([auroc_bayesian, epistemic_auroc_bayesian])
-    bayesian_err = np.array(
-        [
-            [0.0, epistemic_auroc_bayesian - epistemic_auroc_bayesian_ci[0]],
-            [0.0, epistemic_auroc_bayesian_ci[1] - epistemic_auroc_bayesian],
-        ]
-    )
-
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.axhline(0.5, linestyle="--", color="gray", linewidth=1, zorder=1)
-
-    ax.bar(
-        x - width / 2, ensemble_vals, width, yerr=ensemble_err, capsize=4,
-        label="ensemble (3-call)", color="tab:orange", zorder=2,
-    )
-    ax.bar(
-        x + width / 2, bayesian_vals, width, yerr=bayesian_err, capsize=4,
-        label="Bayesian (1-call)", color="tab:blue", zorder=2,
-    )
-    ax.annotate(
-        "point only - see caption",
-        xy=(x[0] + width / 2, auroc_bayesian), xytext=(0, 8), textcoords="offset points",
-        ha="center", fontsize=7, color="dimgray",
-    )
-
-    legend_handles = [
-        Line2D([0], [0], linestyle="--", color="gray", label="chance (0.5)"),
-        *[
-            plt.Rectangle((0, 0), 1, 1, color=c, label=lbl)
-            for c, lbl in [("tab:orange", "ensemble (3-call)"), ("tab:blue", "Bayesian (1-call)")]
-        ],
+    labels = [
+        "error detection: ensemble (3 calls)",
+        "error detection: Bayesian (1 call)",
+        "its epistemic signal: ensemble",
+        "its epistemic signal: Bayesian",
     ]
-    ax.legend(handles=legend_handles, loc="upper left", fontsize=9)
-    ax.set_xticks(x)
-    ax.set_xticklabels(metrics)
-    ax.set_ylim(0, 1)
-    ax.set_ylabel("AUROC")
-    ax.set_title(f"RQ5 distillation: ensemble vs single-call Bayesian (task 5.9d, {model_slug})")
-    fig.tight_layout()
+    values = [auroc_ensemble, auroc_bayesian, epistemic_auroc_ensemble, epistemic_auroc_bayesian]
+    lows = [auroc_ensemble_ci[0], np.nan, epistemic_auroc_ensemble_ci[0], epistemic_auroc_bayesian_ci[0]]
+    highs = [auroc_ensemble_ci[1], np.nan, epistemic_auroc_ensemble_ci[1], epistemic_auroc_bayesian_ci[1]]
+    colors = ["tab:orange", "tab:blue", "tab:orange", "tab:blue"]
 
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq5_distillation_{model_slug}.png", dpi=150)
-    return fig
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    # errorbar can't take NaN widths, so the point-only row gets zero width.
+    safe_lows = [v if np.isnan(lo) else lo for v, lo in zip(values, lows)]
+    safe_highs = [v if np.isnan(hi) else hi for v, hi in zip(values, highs)]
+    _draw_forest(ax, labels, values, safe_lows, safe_highs, "AUROC predicting judge error (dashed = chance)",
+                 colors=colors, annotate=False, reference=0.5)
+    for y, (v, lo, hi) in enumerate(zip(values, lows, highs)):
+        text = f"{v:.3f} (point only)" if np.isnan(lo) else f"{v:.3f} [{lo:.3f}, {hi:.3f}]"
+        ax.annotate(text, xy=(v, y), xytext=(0, 10), textcoords="offset points", ha="center",
+                    fontsize=8, color="dimgray")
+    ax.set_title("A single-call Bayesian model vs. a 3-prompt ensemble\n(95% cluster-bootstrap CIs)", fontsize=10)
+    return _save(fig, f"rq5_distillation_{model_slug}.png")
 
 
 def plot_rq5_verbose_shift(
@@ -1004,42 +907,59 @@ def plot_rq5_verbose_shift(
     epistemic_gap_ci: tuple[float, float],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9f: mean aleatoric and epistemic entropy on clean vs verbose,
-    from the one Bayesian model fit on clean. Two panels with separate
-    y-axes - epistemic is ~100x smaller than aleatoric and would look like
-    zero on a shared axis. Each panel is annotated with its paired-bootstrap
-    gap CI, the statistic the preregistered verdict rests on.
+    """Task 5.9f: the change in mean aleatoric and epistemic entropy from
+    clean to verbose, for the one Bayesian model fit on clean, with the
+    paired-bootstrap CI the preregistered verdict rests on. Two panels on
+    separate axes - epistemic is ~100x smaller than aleatoric. The
+    prediction was: epistemic rises (> 0), aleatoric stays at 0.
 
     Saved to results/figures/rq5_verbose_shift_{model_slug}.png.
     """
-    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
-
+    fig, axes = plt.subplots(1, 2, figsize=(11, 3.2))
     panels = [
-        (axes[0], "Aleatoric", aleatoric_clean, aleatoric_verbose, aleatoric_gap_ci),
-        (axes[1], "Epistemic", epistemic_clean, epistemic_verbose, epistemic_gap_ci),
+        (axes[0], "Aleatoric (predicted: no change)", aleatoric_clean, aleatoric_verbose, aleatoric_gap_ci),
+        (axes[1], "Epistemic (predicted: rises)", epistemic_clean, epistemic_verbose, epistemic_gap_ci),
     ]
     for ax, label, clean_val, verbose_val, (gap_lo, gap_hi) in panels:
-        x = np.arange(1)
-        width = 0.35
-        ax.bar(x - width / 2, [clean_val], width, label="clean", color="tab:blue", zorder=2)
-        ax.bar(x + width / 2, [verbose_val], width, label="verbose", color="tab:red", zorder=2)
-        ax.annotate(
-            f"gap [{gap_lo:.4f}, {gap_hi:.4f}]",
-            xy=(0, max(clean_val, verbose_val)), xytext=(0, 8), textcoords="offset points",
-            ha="center", fontsize=8, color="dimgray",
-        )
-        ax.set_xticks([])
-        ax.set_ylim(0, max(clean_val, verbose_val) * 1.3)
-        ax.set_ylabel("mean entropy (nats)")
+        gap = verbose_val - clean_val
+        _draw_forest(ax, ["verbose − clean"], [gap], [gap_lo], [gap_hi],
+                     f"change in mean entropy, nats\n(clean {clean_val:.4f} → verbose {verbose_val:.4f})",
+                     colors=["tab:blue"], decimals=4)
         ax.set_title(label)
-        ax.legend(loc="upper right", fontsize=9)
+    fig.suptitle("Does the meta-model's uncertainty rise under the padding attack?\n(paired 95% cluster-bootstrap CIs)")
+    return _save(fig, f"rq5_verbose_shift_{model_slug}.png")
 
-    fig.suptitle(f"RQ5 verbose-shift validation: clean vs verbose (task 5.9f, {model_slug})")
-    fig.tight_layout()
 
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / f"rq5_verbose_shift_{model_slug}.png", dpi=150)
-    return fig
+def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.png") -> Figure:
+    """The three judges side by side, one panel per measure, one row per
+    judge population (split by coverage regime or turn where the RQ split
+    it). Rows are coloured by judge.
+
+    Each panel: {"title", "xlabel", "reference" (x of the dashed line, or
+    None), "rows": [(judge, label, value, ci_low, ci_high), ...]}.
+    Saved to results/figures/{filename}.
+    """
+    n_rows = max(len(p["rows"]) for p in panels)
+    ncols = 2
+    nrows = int(np.ceil(len(panels) / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(13, (0.6 * n_rows + 1.6) * nrows), squeeze=False)
+    for ax, panel in zip(axes.flat, panels):
+        rows = panel["rows"]
+        _draw_forest(
+            ax,
+            [label for _, label, _, _, _ in rows],
+            [v for _, _, v, _, _ in rows],
+            [lo for _, _, _, lo, _ in rows],
+            [hi for _, _, _, _, hi in rows],
+            panel["xlabel"],
+            colors=[JUDGE_COLORS.get(judge, "tab:gray") for judge, _, _, _, _ in rows],
+            reference=panel.get("reference"),
+        )
+        ax.set_title(panel["title"], fontsize=10)
+    for ax in list(axes.flat)[len(panels):]:
+        ax.set_visible(False)
+    fig.suptitle("Three judges, same items, same tests (95% cluster-bootstrap CIs)")
+    return _save(fig, filename)
 
 
 if __name__ == "__main__":

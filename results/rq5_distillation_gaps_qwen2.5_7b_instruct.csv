@@ -1,0 +1,4 @@
+comparison,gap,ci_low,ci_high
+auroc_ensemble_minus_bayesian,0.0038884445892533037,-0.010788594448234943,0.01984659377907949
+epistemic_auroc_ensemble_minus_bayesian,-0.22011344450697545,-0.26702577823987117,-0.17145129342184048
+pct_auroc_edge_retained,98.67344446908311,,

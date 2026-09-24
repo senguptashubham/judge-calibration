@@ -18,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.judge_autoj import AutojConfig
-from src.signals import _binary_entropy, _sanitize_records
+from src.signals import _binary_entropy, _sanitize_records, prob_on_verdict
 
 
 def extract_autoj_verdict(raw_output: str) -> int:
@@ -213,12 +213,17 @@ def conf_sc_bpe_autoj_greedy(rows: list[dict]) -> float | None:
 
 
 def compute_item_signals_autoj(rows: list[dict], k_sc: int) -> dict:
+    verdict = judge_verdict_autoj(rows)
     return {
-        "judge_verdict": judge_verdict_autoj(rows),
+        "judge_verdict": verdict,
         "verdict_bidir": verdict_bidir_autoj(rows, k_sc),
         "conf_sc_autoj": conf_sc_autoj(rows, k_sc),
         "conf_sc_bpe_autoj": conf_sc_bpe_autoj(rows, k_sc),
         "conf_sc_bpe_autoj_greedy": conf_sc_bpe_autoj_greedy(rows),
+        # Calibration forms of the two entropy signals: the same p, as a
+        # probability on the AB verdict (signals.py::prob_on_verdict).
+        "conf_sc_bpe_autoj_prob": prob_on_verdict(_p_model_a_wins_autoj(rows, k_sc), verdict),
+        "conf_sc_bpe_autoj_greedy_prob": prob_on_verdict(_p_model_a_wins_autoj(rows, 0), verdict),
         "flipped": flipped_autoj(rows),
     }
 

@@ -1,6 +1,12 @@
-# Project-specific: heavy/regenerable, and secrets (see CLAUDE.md sec 8, DECISIONS.md D17)
+# Project-specific: heavy/regenerable, and secrets (see CLAUDE.md sec 8, DECISIONS.md D17).
+# results/ is tracked for its CSV tables and figures only - the evidence REPORT.md
+# cites. Parquet tables and runs/ (checkpoints, logprobs) stay out (D17 amendment).
 runs/
-results/
+results/*
+!results/*.csv
+!results/figures/
+results/figures/*
+!results/figures/*.png
 *.parquet
 .env
 

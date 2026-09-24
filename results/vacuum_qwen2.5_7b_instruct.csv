@@ -1,0 +1,4 @@
+row,n,parse_rate,pct_a,pct_b,binomial_p,mean_verbalized_conf
+identical,40,1.0,0.725,0.275,0.006426576095691416,0.97
+empty,20,1.0,0.1,0.9,0.0004024505615234375,0.9724999999999999
+real clean/P1 items,1836,,,,,0.9491830065359476

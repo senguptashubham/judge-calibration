@@ -12,26 +12,46 @@ overwrite this one's). Data: `results/items_qwen2.5_7b_instruct.parquet`, filter
 
 **Headline: the judge is measurably overconfident.** Its own verbalized confidence
 (`conf_verb`) overstates its actual accuracy by **0.192 [0.172, 0.213]** when scored
-against a single canonical pass (`judge_verdict`), and by **0.157 [0.136, 0.178]** once both presentation orders are averaged (`verdict_bidir`) — both 95% CIs sit well clear of zero.
+against a single canonical pass (`judge_verdict`). Every confidence signal is
+overconfident, with every CI clear of zero.
 
-**Full results** (`judge_verdict` = single canonical AB pass; `verdict_bidir` =
-order-averaged, D7):
+**Full results.** Each confidence is scored against the verdict it is a confidence
+*in*: `judge_verdict` (the single canonical AB pass) or `verdict_bidir`
+(order-averaged, D7). The order-swap signal is scored through its probability form
+(explained below).
 
-| signal | verdict def. | accuracy | κ | ECE | MCE | Brier | overconfidence gap |
+| confidence | verdict def. | accuracy | κ | ECE | MCE | Brier | overconfidence gap |
 |---|---|---|---|---|---|---|---|
 | `conf_verb` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.192 | 0.383 | 0.215 | 0.192 [0.172, 0.213] |
 | `conf_lp` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.242 | 0.492 | 0.242 | 0.242 [0.221, 0.264] |
 | `conf_sc` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.183 | 0.313 | 0.205 | 0.169 [0.150, 0.187] |
-| `conf_bpe` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.115 | 0.229 | 0.164 | 0.049 [0.030, 0.069] |
-| `conf_verb` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.157 | 0.216 | 0.186 | 0.157 [0.136, 0.178] |
-| `conf_lp` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.207 | 0.397 | 0.207 | 0.207 [0.186, 0.228] |
-| `conf_sc` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.177 | 0.688 | 0.196 | 0.133 [0.116, 0.152] |
-| `conf_bpe` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.151 | 0.316 | 0.177 | **0.014 [-0.011, 0.038]** |
+| `conf_bpe_prob` | judge_verdict | 0.757 [0.735, 0.778] | 0.514 [0.471, 0.556] | 0.103 | 0.229 | 0.159 | 0.103 [0.086, 0.122] |
+| `conf_verb_bidir` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.077 | 0.174 | 0.150 | **0.038 [0.018, 0.059]** |
+| `conf_lp_bidir` | verdict_bidir | 0.792 [0.771, 0.813] | 0.585 [0.542, 0.626] | 0.096 | 0.229 | 0.159 | 0.068 [0.047, 0.090] |
 
-**Every original signal is overconfident, but the magnitude varies by roughly 5x
-depending which one you trust.** 
+**Every signal is overconfident, by 4 to 24 points depending on which one you trust.**
 `conf_lp` (raw exp(verdict-token logprob)) is the worst — 0.242 overconfident under `judge_verdict`, worse than `conf_verb`. This traces directly to its distribution: 99.3% of `conf_lp` values sit at or above 0.99 (median is exactly 1.0) — the model is essentially always "sure" of the token it generated, regardless of whether the underlying judgment was right, a well-documented property of greedy-decoded token probabilities, not a bug in how it's computed.
-`conf_bpe` (the order-consistency-based entropy signal) is the best-calibrated by a wide margin, and under `verdict_bidir` specifically its overconfidence gap's CI **crosses zero** (0.014 [-0.011, 0.038]) — not distinguishable from perfect calibration at this sample size. This is plausibly not a coincidence: `conf_bpe` is itself built from agreement across both presentation orders, so it looks best exactly when scored against the order-aware ground truth it was already implicitly modeling.
+
+**The order-swap signal needs its probability form to be scored for calibration.**
+`conf_bpe` = 1 − H(p), with p the order-averaged P(model_a wins). It ranks errors
+well (RQ2), but it is not a probability: a 50/50 split gives 1 − ln 2 = 0.307, not 0.5,
+so ECE on it measures that difference in scale, not calibration. Its calibration
+is scored on `conf_bpe_prob`, the same p read as the probability of the AB verdict
+(`signals.py::prob_on_verdict`). So scored, it is the best-calibrated of the four
+AB-verdict signals, and still overconfident by 0.103 [0.086, 0.122]. An earlier
+version of this table scored raw `conf_bpe` and found its gap indistinguishable
+from zero; that was the scale difference (methods note, "Calibration forms").
+
+**Asking twice, with the answers swapped, removes most of the stated overconfidence.**
+A confidence scored against `verdict_bidir` has to describe the order-averaged
+verdict. `conf_verb_bidir` averages the two orders' stated confidences toward it
+(each order counts c when it agreed with `verdict_bidir` and 1 − c when it didn't).
+`conf_lp_bidir` = max(p, 1 − p) is the order-averaged verdict probability, which is
+also `conf_bpe`'s probability form for this verdict. `conf_verb_bidir`'s gap is
+0.038 [0.018, 0.059], against 0.192 for the single pass: on items where the two
+orders disagree, the two stated confidences pull toward 0.5 instead of both
+sitting near 0.95. `conf_sc` has no `verdict_bidir` row, because its sampled draws
+exist in AB order only.
 
 **Debiasing by averaging both orders buys a real, statistically confirmed accuracy
 gain.** Accuracy moves from 0.757 to 0.792 going from `judge_verdict` to `verdict_bidir` — a difference that could just be noise if judged by eye from two separate CIs, so it was tested properly: a **paired** cluster bootstrap on the per-item accuracy difference (invariant 3 — same 1836 items scored two ways is not two independent samples) gives **+0.0354 [0.0177, 0.0531]**, a CI that excludes zero. Concretely: averaging both orders flips 157 items from wrong to right, and only 92 from right to wrong — a net gain of 65/1836 = 0.0354, matching the bootstrap exactly. The debiasing gain is real, not just directionally plausible.
@@ -44,7 +64,7 @@ pairs with *no real content difference to judge* (0.970 identical, 0.973 empty) 
 RQ1's overconfidence finding and the vacuum test's false-confidence finding are two independent measurements pointing at the same underlying problem: the judge's stated confidence tracks something other than its actual likelihood of being right.
 
 **Caveat for `conf_lp`/`conf_bpe`'s `reliability`/`resolution` numbers specifically.**
-`brier_decomposition()`'s reconstruction identity (`brier = reliability - resolution + uncertainty`) is exact only when every bin shares one literal confidence value — true for the two discrete signals here (`conf_verb`: 4 unique values, `conf_sc`: 5), so their reconstruction matches `brier()` to floating-point precision. `conf_lp` (72 unique values) and `conf_bpe` (1521 unique values) fall through `ece()`'s `"auto"` strategy to quantile binning instead, where `reliability`/`resolution` are computed from each bin's *mean* confidence rather than each item's own value — a real, expected "grouping loss" gap from `brier()` (up to ~0.006 for `conf_bpe`), not a bug. The table above reports `ece`/`mce`/`brier` (computed directly, unaffected by this) alongside `reliability`/ `resolution` at face value; treat the latter two as describing the *binned* forecast for these two signals specifically, not a claim they reconstruct `brier()` to the letter.
+`brier_decomposition()`'s reconstruction identity (`brier = reliability - resolution + uncertainty`) is exact only when every bin shares one literal confidence value — true for the two discrete signals here (`conf_verb`: 4 unique values, `conf_sc`: 5), so their reconstruction matches `brier()` to floating-point precision. The continuous ones (`conf_lp`, `conf_bpe_prob`, `conf_lp_bidir`) fall through `ece()`'s `"auto"` strategy to quantile binning instead, where `reliability`/`resolution` are computed from each bin's *mean* confidence rather than each item's own value — a real, expected "grouping loss" gap from `brier()`, not a bug. `results/rq1_table_{model_slug}.csv` reports `reliability`/`resolution` alongside `ece`/`mce`/`brier` (computed directly, unaffected by this); treat the former two as describing the *binned* forecast for these signals, not a claim they reconstruct `brier()` to the letter.
 
 ---
 
@@ -261,7 +281,10 @@ needs the greedy call at both orders, which `verbose` does collect.
 |---|---|---|---|---|---|---|---|---|
 | `conf_verb` | 0.192 | 0.182 | −0.0098 | [−0.0268, 0.0079] | 0.639 | 0.611 | −0.0276 | [−0.0571, −0.0023] |
 | `conf_lp` | 0.242 | 0.232 | −0.0106 | [−0.0279, 0.0074] | 0.715 | 0.670 | −0.0447 | [−0.0740, −0.0170] |
-| `conf_bpe` | 0.115 | 0.159 | **+0.0432** | **[0.0144, 0.0516]** | 0.794 | 0.766 | −0.0278 | [−0.0494, −0.0064] |
+| `conf_bpe` | 0.103 | 0.147 | **+0.0431** | **[0.0114, 0.0521]** | 0.794 | 0.766 | −0.0278 | [−0.0494, −0.0064] |
+
+`conf_bpe`'s ECE columns are computed on its probability form, `conf_bpe_prob` (RQ1);
+its AUROC columns on `conf_bpe` itself.
 
 Accuracy itself barely moves and isn't significant for any signal (0.757 → 0.768,
 Δ +0.0109 [−0.0070, 0.0281], identical across all three rows since accuracy only
@@ -376,9 +399,9 @@ is not statistically real at this sample size, for either model, at any
 step. Honest reading: Tier A's own uncertainty signals already capture
 whatever surface and token-distribution features have to offer — adding
 them neither measurably helps nor measurably hurts. Figures:
-`rq4_ablation_{model_slug}.png` (bar chart, baseline as its own bar),
+`rq4_ablation_{model_slug}.png` (every cell next to the baseline, with the permutation-null range shaded),
 `rq4_progression_{model_slug}.png` (forest plot of the 6 paired deltas),
-`rq4_permutation_nulls_{model_slug}.png` (6-panel null histograms). Tables:
+`rq4_permutation_nulls_{model_slug}.png` (every null AUROC against the observed one, per cell). Tables:
 `rq4_ablation_{model_slug}.csv`, `rq4_ablation_progression_{model_slug}.csv`,
 `rq4_ablation_null_{model_slug}.csv`.
 
@@ -521,10 +544,13 @@ to 1.01, effective sample size rose ~38× (21→791), at the same settings, on
 the same real fold. NUTS (fallback ladder rung 1) was sufficient throughout
 — Laplace/bootstrap-ensemble fallbacks were never needed. Real, measured
 runtime for the full 5-fold×10-repeat protocol (not extrapolated): about
-**6–7 minutes**, N=1819, Tier A — `n_repeats=10` used as originally planned.
-Convergence held at that full scale: **1/50 fold-fits flagged** — visible
-directly in `rq4_bayesian_convergence_{model_slug}.png` (R-hat per real
-fold-fit, D22's 1.01 threshold line). Features are standardized on each
+**9 minutes**, N=1819, Tier A — `n_repeats=10` used as originally planned.
+Every fit uses 2 chains × 2,000 draws after 500 warmup. Convergence at that
+full scale: **0/50 fold-fits flagged** — worst R-hat 1.008, lowest ESS 611,
+no divergences — visible in `rq4_bayesian_convergence_{model_slug}.png`
+(R-hat per real fold-fit, D22's 1.01 threshold line). At 1,000 draws, 13/50
+fits sat just above 1.01 (worst 1.016); an earlier count of 1/50 came from
+R-hat values rounded to two decimals (D22 amendment). Features are standardized on each
 training fold, exactly as for the logistic regression: `β ~ Normal(0, 1)`
 only means the same thing for every feature once they share a scale. An
 earlier run without that step effectively switched off the narrow-range
@@ -536,7 +562,7 @@ amendment).*
 | | AUROC | 95% CI/spread | ECE | Brier | NLL | 90% coverage |
 |---|---|---|---|---|---|---|
 | frequentist `LogisticRegression` | 0.7962 | [0.7932, 0.7986] | 0.0366 | 0.1431 | — | — |
-| Bayesian hierarchical | 0.7950 | [0.7917, 0.7968] | 0.0347 | 0.1430 | 0.4446 | 0.80 |
+| Bayesian hierarchical | 0.7949 | [0.7914, 0.7968] | 0.0344 | 0.1430 | 0.4446 | 0.80 |
 
 *NLL is the proper posterior-predictive log-likelihood — the mean Bernoulli
 likelihood averaged across posterior draws first, then `-log`, never a
@@ -552,7 +578,7 @@ NLL and coverage use posterior draws pooled across all 10 repeats
 refit on a different fold partition.*
 
 **The Bayesian model matches the frequentist one on every shared metric** —
-AUROC 0.795 vs. 0.796 (spreads overlap), ECE 0.035 vs. 0.037, Brier tied.
+AUROC 0.795 vs. 0.796 (spreads overlap), ECE 0.034 vs. 0.037, Brier tied.
 Partial pooling over questions buys no discrimination or calibration here
 on Tier A. What it adds is structural: the frequentist model has no native
 posterior, so NLL and credible-interval coverage don't exist for it, and the
@@ -623,8 +649,8 @@ list deliberately excludes it as D20's own separate signal). Student = the
 
 | | AUROC | 95% CI | ECE | entropy-quality AUROC | 95% CI |
 |---|---|---|---|---|---|
-| ensemble (3-call) | 0.7931 | [0.7660, 0.8199] | 0.1009 | 0.5585 | [0.5141, 0.6019] |
-| Bayesian (1-call) | 0.7894 (point) | — | **0.0347** | **0.7791** | [0.7492, 0.8079] |
+| ensemble (3-call) | 0.7931 | [0.7660, 0.8199] | 0.0714 | 0.5585 | [0.5141, 0.6019] |
+| Bayesian (1-call) | 0.7892 (point) | — | **0.0344** | **0.7786** | [0.7487, 0.8072] |
 
 *"Entropy-quality AUROC" = AUROC(epistemic → error) for each arm's own
 epistemic signal — the ensemble's judge-level one vs. the Bayesian model's
@@ -633,13 +659,16 @@ own meta-model-level one. Every gap below is a **paired** cluster bootstrap
 trick used throughout this project for one-item-set, two-score comparisons.*
 
 **Headline: the single-call model retains 98.7% of the ensemble's AUROC edge
-over chance (0.5)** — paired gap +0.0037 [−0.0109, 0.0196], CI includes
-zero, not statistically distinguishable. **ECE strongly favors the Bayesian
-model** — expected, since `conf_ens` is a raw judge signal that has never
-itself been calibrated via cross-validation, unlike the trained OOF
-meta-model. **The genuinely surprising result is entropy quality, and it
+over chance (0.5)** — paired gap +0.0039 [−0.0108, 0.0198], CI includes
+zero, not statistically distinguishable. **ECE favors the Bayesian model**
+(0.034 vs 0.071) — expected, since `conf_ens` is a raw judge signal that has
+never itself been calibrated via cross-validation, unlike the trained OOF
+meta-model. The ensemble's ECE is computed on its probability form,
+`conf_ens_prob` (the three-prompt average p on the AB verdict's side), for
+the same reason as RQ1's `conf_bpe_prob`; scoring 1 − entropy directly had
+given 0.101. **The genuinely surprising result is entropy quality, and it
 runs in the opposite direction the "how much survives" framing would
-predict:** paired gap −0.2206 [−0.2678, −0.1723], entirely below zero — the
+predict:** paired gap −0.2201 [−0.2670, −0.1715], entirely below zero — the
 single-call model's *own* epistemic signal is a *much better* error
 predictor than the expensive ensemble's judge-level epistemic signal, not
 merely comparable to it. Reading: these are conceptually different
@@ -650,7 +679,7 @@ depending on how the question is phrased. The Bayesian model's captures the
 model trained specifically to predict error about its prediction for this
 item. The task-targeted signal wins decisively, even though it costs a
 third as much to obtain. Figure: `rq5_distillation_{model_slug}.png`
-(the Bayesian AUROC bar is deliberately shown without an error whisker,
+(the Bayesian AUROC is deliberately shown as a point without an interval,
 rather than borrowing 5.9c's differently-typed D8-across-repeat-spread
 interval and implying a false equivalence with the ensemble's own
 cluster-bootstrap CI). Tables: `rq5_distillation_{model_slug}.csv`, and the paired gaps in
@@ -741,8 +770,8 @@ to decide whether the added complexity was actually necessary.
 
 | | clean | verbose | gap (verbose − clean) | 95% CI |
 |---|---|---|---|---|
-| aleatoric | 0.4499 | 0.4302 | **−0.0197** | [−0.0301, −0.0096] |
-| epistemic | 0.0042 | 0.0039 | **−0.0004** | [−0.0006, −0.0001] |
+| aleatoric | 0.4501 | 0.4304 | **−0.0197** | [−0.0302, −0.0096] |
+| epistemic | 0.0041 | 0.0038 | **−0.0003** | [−0.0006, −0.0001] |
 
 **The preregistered prediction did not hold, in either direction.**
 Aleatoric did not stay flat — it fell, significantly. Epistemic did not
@@ -757,10 +786,8 @@ Separately notable: epistemic's absolute scale (~0.004 nats) is roughly
 simple 3-feature model's parameter uncertainty is nearly negligible next
 to the irreducible per-item noise, a real finding about the model itself,
 not a side effect of the shift test. Figure:
-`rq5_verbose_shift_{model_slug}.png` (two panels, one per metric, on
-independent y-axes — a shared axis rendered epistemic's real, significant
-bars as visually indistinguishable from zero next to aleatoric's much
-larger scale, caught during review and fixed before finalizing). Table:
+`rq5_verbose_shift_{model_slug}.png` (each gap with its CI, on separate
+axes, since epistemic's scale is ~100× smaller than aleatoric's). Table:
 `rq5_verbose_shift_{model_slug}.csv`.
 
 **Reading: this Bayesian model's meta-model-level epistemic signal does not
@@ -849,41 +876,39 @@ each item's stable, unpadded `clean`-side length, so the same item never
 carries a different regime label depending on which condition is in
 front of you.*
 
-**Headline: kev-8b's best signal shows the identical vulnerability
-signature the primary judge's own best signal showed — strong on
-calibration and position-bias tracking, but its calibration specifically
-breaks under the verbosity attack — and a Bayesian meta-model over both
-signals does not beat the better one alone.** Two findings cut against the
-"leaves its training range, degrades" story a naive reading of the
-out-of-domain caveat might predict: calibration is not worse
-out-of-coverage, and the verbosity-attack effect is directionally larger
-out-of-coverage but the confidence intervals are wide enough at N=474–526
-that this should be read as suggestive, not confirmed.
+**Headline: kev-8b's best signal is its order-swap signal, as for the primary
+judge — overconfident, but tracking its own position-bias errors strongly —
+and unlike the primary judge, its calibration does not break under the
+verbosity attack. A Bayesian meta-model over both signals again does not
+beat the better one alone.** Calibration is not worse out-of-coverage, which
+cuts against the "leaves its training range, degrades" story a naive reading
+of the out-of-domain caveat might predict.
 
 ### Calibration check
 
 *Population: N=1,836 (`clean`, human-labeled — identical population size
 to RQ1's own, same filter). `analysis/rq6.py::main_calibration`, reusing
-`src/metrics.py::ece`/`brier`/`overconfidence_gap`/`auroc_error` unchanged
-— `conf_kev_bpe`'s raw-nats range ([1−ln 2, 1] ≈ [0.307, 1]) needs no
-rescaling before these, confirmed the same way `conf_bpe`'s own range
-already was.*
+`src/metrics.py::ece`/`brier`/`overconfidence_gap`/`auroc_error` unchanged.
+ECE, Brier and the gap for `conf_kev_bpe` use `conf_kev_bpe_prob`; AUROC uses
+`conf_kev_bpe` itself.*
 
 | Regime | Signal | ECE | 95% CI | Overconfidence gap | AUROC | 95% CI |
 |---|---|---|---|---|---|---|
 | in-coverage (N=1,310) | `conf_kev` | 0.1525 | [0.1247, 0.1814] | +0.1525 | 0.6972 | [0.6596, 0.7335] |
-| in-coverage | `conf_kev_bpe` | **0.0980** | [0.0763, 0.1158] | **−0.0647** | **0.7722** | [0.7407, 0.8005] |
+| in-coverage | `conf_kev_bpe` | **0.0664** | [0.0544, 0.0932] | **+0.0664** | **0.7722** | [0.7407, 0.8005] |
 | out-of-coverage (N=526) | `conf_kev` | 0.1297 | [0.0942, 0.1766] | +0.1297 | 0.7074 | [0.6472, 0.7652] |
-| out-of-coverage | `conf_kev_bpe` | **0.1015** | [0.0747, 0.1451] | **−0.0835** | **0.7806** | [0.7231, 0.8313] |
+| out-of-coverage | `conf_kev_bpe` | **0.0619** | [0.0442, 0.1062] | **+0.0547** | **0.7806** | [0.7231, 0.8313] |
 
 **`conf_kev_bpe` beats `conf_kev` on every metric, in both regimes.** This
 replicates, on a completely different non-autoregressive architecture, the
 exact pattern this project already found for the primary Qwen judge — its
 own bidirectional-entropy signal, `conf_bpe`, was RQ1/RQ2's best performer
-too. `conf_kev` is meaningfully overconfident (gap +0.13 to +0.15);
-`conf_kev_bpe` is mildly *underconfident* instead (gap −0.06 to −0.08) —
-neither is well calibrated in an absolute sense, but the direction of the
-miscalibration flips between the two signals. **Out-of-coverage is not
+too. Both signals are overconfident: `conf_kev` by +0.13 to +0.15,
+`conf_kev_bpe` by +0.05 to +0.07 (every CI above zero). `conf_kev_bpe`'s
+calibration columns use its probability form, `conf_kev_bpe_prob`, the same
+treatment as the primary judge's `conf_bpe` (RQ1); scored as raw 1 − entropy
+it had looked mildly *underconfident*, which was the scale difference.
+**Out-of-coverage is not
 worse than in-coverage** — AUROC is marginally *higher* out of range for
 both signals, though the CIs overlap substantially at N=526 vs. 1,310.
 This does not support a simple "leaves its training range, degrades"
@@ -921,7 +946,7 @@ not a controlled result — this section is the controlled version, with
 real MT-Bench content on both sides and a proper cluster-bootstrap CI,
 and it confirms substantial, statistically real position-sensitivity,
 even if not the literal 100%-deterministic effect the content-free probe
-showed. Figures: `rq6_position_swap_gap_kev_8b_{in,out_of}_coverage.png`.
+showed. Figure: `rq6_position_swap_gap_kev_8b.png` (both regimes).
 Table: `rq6_position_swap_kev_8b.csv`.
 
 ### Verbosity attack
@@ -935,27 +960,25 @@ side, or the paired bootstrap silently loses its pairing). Reuses
 | Regime | Signal | ΔECE (verbose − clean) | 95% CI | ΔAUROC | 95% CI |
 |---|---|---|---|---|---|
 | in-coverage (n=1,310) | `conf_kev` | +0.0092 | [−0.0088, 0.0267] | −0.0058 | [−0.0452, 0.0328] |
-| in-coverage | `conf_kev_bpe` | **+0.0330** | **[0.0125, 0.0584]** | +0.0055 | [−0.0116, 0.0259] |
+| in-coverage | `conf_kev_bpe` | **−0.0292** | **[−0.0446, −0.0015]** | +0.0055 | [−0.0116, 0.0259] |
 | out-of-coverage (n=474) | `conf_kev` | +0.0213 | [−0.0188, 0.0691] | −0.0241 | [−0.0868, 0.0406] |
-| out-of-coverage | `conf_kev_bpe` | **+0.0678** | **[0.0206, 0.1091]** | +0.0050 | [−0.0324, 0.0443] |
+| out-of-coverage | `conf_kev_bpe` | −0.0057 | [−0.0598, 0.0395] | +0.0050 | [−0.0324, 0.0443] |
 
-**`conf_kev_bpe`'s calibration breaks significantly under the verbosity
-attack, in both regimes; `conf_kev` shows no significant change in
-either.** This is a striking parallel to the primary judge's own RQ3b
-finding: there too, the *best* clean-data signal (`conf_bpe`, ECE +0.0432
-[0.0144, 0.0516]) was the one whose calibration broke under the identical
-attack, while the weaker raw signals were comparatively unaffected. The
-effect is directionally larger out-of-coverage (+0.068 vs. +0.033), though
-the CIs are wide enough at this N that this should be read as suggestive
-of a coverage-dependent effect, not confirmed as one. AUROC does not move
-significantly for either signal in either regime — unlike the primary
-judge, where AUROC dropped significantly for all three surviving signals
-under the same attack; this attack degrades kev-8b's *calibration*
-specifically, not its *discrimination*. Accuracy itself does not move
+**The verbosity attack does not break either signal's calibration.**
+`conf_kev` shows no significant change in either regime. `conf_kev_bpe`
+(ECE on `conf_kev_bpe_prob`) slightly *improves* in-coverage, −0.029
+[−0.045, −0.002], and doesn't move out-of-coverage. This is the one clear
+difference from the primary judge, whose best signal (`conf_bpe`, ΔECE
++0.043 [0.011, 0.052]) was the one the attack broke. An earlier version of
+this table scored raw 1 − entropy and showed `conf_kev_bpe` breaking too
+(+0.033 / +0.068); that parallel was the scale difference, not a finding.
+AUROC does not move significantly for either signal in either regime —
+unlike the primary judge, where AUROC dropped significantly for all three
+surviving signals under the same attack. Accuracy itself does not move
 significantly either (Δ −0.014 to −0.025, both CIs include zero) —
 verbosity does not make kev-8b more wrong, the same qualitative pattern
 the primary judge showed. Figures:
-`rq6_verbosity_deltas_kev_8b_{in,out_of}_coverage.png`. Table:
+`rq6_verbosity_deltas_kev_8b.png` (both regimes). Table:
 `rq6_verbosity_kev_8b.csv`.
 
 ### Bayesian recalibration check
@@ -970,17 +993,20 @@ Tier A.*
 
 | Regime | Meta-model AUROC | D8 spread | Best single signal AUROC | Fold-fits flagged |
 |---|---|---|---|---|
-| in-coverage | 0.7720 | [0.7694, 0.7744] | 0.7722 | **5/50** |
-| out-of-coverage | 0.7747 | [0.7662, 0.7850] | 0.7806 | **2/50** |
+| in-coverage | 0.7719 | [0.7692, 0.7748] | 0.7722 | **7/50** |
+| out-of-coverage | 0.7752 | [0.7670, 0.7836] | 0.7806 | 1/50 |
 
 **The meta-model does not beat the best single signal in either regime**
 — essentially tied in-coverage, slightly *worse* out-of-coverage.
-Convergence is mostly but not entirely clean: 5/50 and 2/50 fold-fits are
-flagged. The two features are strongly correlated, and once standardized
-they give the posterior a ridge that NUTS mixes along less cleanly - a
-plausible reading, not one checked separately. The conclusion doesn't
-rest on the flagged fits: the across-repeat AUROC spread is tight and sits
-on or below the single signal in both regimes. This null is methodologically
+Convergence is mostly but not entirely clean. In-coverage, 7/50 fold-fits
+are flagged: one at R-hat 1.012, the other six for divergences (11 in total,
+out of 200,000 post-warmup draws). Out-of-coverage, one fit has 2
+divergences. Worst R-hat is 1.012 and lowest ESS 569 across both regimes.
+The two features are strongly correlated, and once standardized they give
+the posterior a ridge that NUTS occasionally steps off - a plausible
+reading, not one checked separately. The conclusion doesn't rest on the
+flagged fits: the across-repeat AUROC spread is tight and sits on or below
+the single signal in both regimes. This null is methodologically
 sound, not a red flag to explain away: `conf_kev` is a function of one
 number (`prob_a` from the AB call alone), `conf_kev_bpe` a function of two
 (`prob_a` from AB *and* BA, order-corrected) — they share one of two
@@ -1091,7 +1117,7 @@ all in a meaningful fraction of cases (up to 39.8% for `verbose`/turn=2)
 and one neither the schema-constrained primary judge nor the deterministic
 kev-8b could exhibit by construction. Among the verdicts it does produce,
 verbosity does *not* break auto-j's uncertainty signal the way it broke
-the other two judges' best signal: calibration is unchanged and error
+the primary judge's best signal: calibration is unchanged and error
 detection measurably improves.
 
 ### Calibration check
@@ -1099,7 +1125,8 @@ detection measurably improves.
 *Population: N=1,797 (`clean`, human-labeled, `correct` present).
 `analysis/rq7.py::main_calibration`, reusing
 `src/metrics.py::ece`/`brier`/`overconfidence_gap`/`auroc_error`
-unchanged. Unlike RQ6's kev arm, auto-j's two signals have genuinely
+unchanged; ECE, Brier and the gap for `conf_sc_bpe_autoj` use its
+probability form, `conf_sc_bpe_autoj_prob` (RQ1). Unlike RQ6's kev arm, auto-j's two signals have genuinely
 different null patterns from each other and from `correct` even on
 `clean` (real Tie/parse-failure rates there), so each signal's own row
 below uses its own filtered N, not one shared population size.*
@@ -1107,14 +1134,12 @@ below uses its own filtered N, not one shared population size.*
 | Turn | Signal | N | ECE | 95% CI | Overconfidence gap | AUROC | 95% CI |
 |---|---|---|---|---|---|---|---|
 | turn=1 | `conf_sc_autoj` | 889 | 0.1465 | [0.1182, 0.1810] | +0.1105 | 0.6778 | [0.6346, 0.7194] |
-| turn=1 | `conf_sc_bpe_autoj` | 872 | 0.1356 | [0.1070, 0.1658] | +0.0913 | 0.6832 | [0.6469, 0.7210] |
+| turn=1 | `conf_sc_bpe_autoj` | 872 | 0.1438 | [0.1136, 0.1782] | +0.1339 | 0.6832 | [0.6469, 0.7210] |
 | turn=2 | `conf_sc_autoj` | 908 | 0.1242 | [0.0980, 0.1547] | +0.0906 | 0.6794 | [0.6343, 0.7235] |
-| turn=2 | `conf_sc_bpe_autoj` | 898 | 0.1262 | [0.1090, 0.1626] | +0.0583 | 0.6806 | [0.6371, 0.7217] |
+| turn=2 | `conf_sc_bpe_autoj` | 898 | 0.1402 | [0.1131, 0.1688] | +0.1000 | 0.6806 | [0.6371, 0.7217] |
 
-**Both signals are meaningfully overconfident, in both turns** — unlike
-kev-8b, where `conf_kev_bpe` was mildly *underconfident*, both of auto-j's
-signals sit on the same (overconfident) side the primary judge's own
-signals did. Turn=1 and turn=2 are close to each other in magnitude
+**Both signals are meaningfully overconfident, in both turns** (+0.09 to
++0.13), the same side as every signal of the other two judges. Turn=1 and turn=2 are close to each other in magnitude
 despite the sharp gap in their *failure rates* (see Verbosity attack,
 below) — calibration quality among the calls that do succeed doesn't
 itself degrade much turn-to-turn. AUROC (~0.68 for both signals, both
@@ -1158,7 +1183,7 @@ minimized on a flip. The informative number is `conf_sc_autoj`'s gap
 does drop on items whose verdict the order swap changes — a stronger
 tracking signal than the primary judge's `conf_verb` (−0.020) and closer
 to its `conf_sc` (−0.11). Figures:
-`rq7_position_swap_gap_autoj_13b_gptq_4bits_turn{1,2}.png`. Table:
+`rq7_position_swap_gap_autoj_13b_gptq_4bits.png` (both turns). Table:
 `rq7_position_swap_autoj_13b_gptq_4bits.csv`.
 
 ### Verbosity attack
@@ -1203,14 +1228,13 @@ always returns something) could fail this way at all.
 
 | Turn | Signal | ΔECE (verbose − clean) | 95% CI | ΔAccuracy | 95% CI | ΔAUROC | 95% CI |
 |---|---|---|---|---|---|---|---|
-| turn=1 (n=709) | `conf_sc_bpe_autoj_greedy` | −0.0198 | [−0.0558, 0.0180] | −0.0282 | [−0.0569, 0.0040] | **+0.0626** | **[0.0123, 0.1154]** |
-| turn=2 (n=428) | `conf_sc_bpe_autoj_greedy` | −0.0191 | [−0.0584, 0.0197] | **−0.0421** | **[−0.0791, −0.0028]** | **+0.0704** | **[0.0144, 0.1277]** |
+| turn=1 (n=709) | `conf_sc_bpe_autoj_greedy` | −0.0247 | [−0.0630, 0.0106] | −0.0282 | [−0.0569, 0.0040] | **+0.0626** | **[0.0123, 0.1154]** |
+| turn=2 (n=428) | `conf_sc_bpe_autoj_greedy` | −0.0339 | [−0.0667, 0.0123] | **−0.0421** | **[−0.0791, −0.0028]** | **+0.0704** | **[0.0144, 0.1277]** |
 
-**Calibration does not move under verbosity (ΔECE ≈ −0.02, CI crosses zero
+**Calibration does not move under verbosity (ΔECE −0.02 to −0.03, CI crosses zero
 at both turns), and error detection gets significantly *better* (ΔAUROC
-+0.06/+0.07, both CIs above zero).** This is the opposite of the primary
-judge and kev-8b, whose best signal's calibration broke under the same
-attack. The mechanism shows up in the same paired sample: under verbosity,
++0.06/+0.07, both CIs above zero).** Calibration holding matches kev-8b;
+the primary judge's best signal is the only one the attack broke. The mechanism shows up in the same paired sample: under verbosity,
 auto-j's errors become much more often order-inconsistent (47.6% of wrong
 verdicts flip between AB and BA on `verbose`, vs. 28.4% on `clean`), and
 an order-swap signal assigns exactly those items its lowest confidence.
@@ -1221,7 +1245,7 @@ turn=2 is the one population in this project where the verbosity attack
 makes the judge measurably more likely to be wrong, or to not answer at
 all — but the judge's own uncertainty signal flags those new errors
 rather than hiding them.
-Figures: `rq7_verbosity_deltas_autoj_13b_gptq_4bits_turn{1,2}.png`. Table:
+Figure: `rq7_verbosity_deltas_autoj_13b_gptq_4bits.png` (both turns). Table:
 `rq7_verbosity_autoj_13b_gptq_4bits.csv`.
 
 ### Bayesian recalibration check
@@ -1233,8 +1257,8 @@ valid.*
 
 | Turn | Meta-model AUROC | D8 spread | Best single signal AUROC | Fold-fits flagged |
 |---|---|---|---|---|
-| turn=1 | 0.6792 | [0.6661, 0.6979] | 0.6832 | 0/50 |
-| turn=2 | 0.6740 | [0.6590, 0.6938] | 0.6806 | **2/50** |
+| turn=1 | 0.6802 | [0.6715, 0.6906] | 0.6832 | 0/50 |
+| turn=2 | 0.6714 | [0.6502, 0.6842] | 0.6806 | 1/50 |
 
 **The meta-model does not beat the best single signal in either turn** —
 essentially tied-to-slightly-worse in both, the same qualitative pattern
@@ -1243,9 +1267,8 @@ architectures, three null results. `conf_sc_autoj` and `conf_sc_bpe_autoj`
 share one of their two underlying self-consistency proportions
 (correlated, not collinear, the same distinction D28 already draws for
 kev's own signal pair), so a coherent null is the expected outcome, not a
-modeling failure. Convergence is clean at turn=1 (0/50 flagged) with a
-small uptick at turn=2 (2/50) - a small minority of fold-fits, not a
-systemic convergence problem. Figures:
+modeling failure. Convergence is clean: 0/50 flagged at turn=1, and at
+turn=2 one fit with a single divergence; worst R-hat 1.007, lowest ESS 410. Figures:
 `rq4_bayesian_convergence_autoj_13b_gptq_4bits_turn{1,2}.png`. Table:
 `rq7_bayesian_recalibration_autoj_13b_gptq_4bits.csv`.
 
@@ -1462,3 +1485,44 @@ some branch point, not sampling noise.
    generation instead. Per D25's own decision, this is evidence-based grounds to revisit
    the `vllm` pin (for `logprobs_mode="raw_logprobs"`) in a future run, not something to
    act on inside this project's remaining timeline.
+
+### Calibration forms and convergence counts — corrected 24 Sep 2026
+
+Two errors in earlier drafts of this report, both found while reviewing the
+figures, and what changed after fixing them.
+
+**1. Entropy signals were scored for calibration as if they were
+probabilities.** `conf_bpe`, `conf_ens`, `conf_kev_bpe` and `conf_sc_bpe_autoj`
+are all 1 − H(p). That ranks items correctly, so every AUROC, AURC and
+risk-coverage result is unaffected. But it is not a probability: a 50/50
+split, a coin flip, gives 0.307 rather than 0.5, so ECE and the overconfidence
+gap on it partly measure that difference in scale. Each is now scored through
+its probability form, the same p read as the probability of the verdict being
+scored (`signals.py::prob_on_verdict`): p on the AB verdict's side for
+`judge_verdict`, max(p, 1 − p) for `verdict_bidir`. Separately, RQ1 had scored
+`conf_verb`, `conf_lp` and `conf_sc` — confidences in the AB verdict — against
+`verdict_bidir` too. Each confidence is now scored only against the verdict
+it belongs to, with `conf_verb_bidir` and `conf_lp_bidir` as the
+order-averaged forms (D7 amendment). What changed:
+
+- RQ1: `conf_bpe` no longer looks near-perfectly calibrated (gap 0.014,
+  CI crossing zero); scored properly it is overconfident by 0.103 (AB verdict)
+  or 0.068 (order-averaged verdict).
+- RQ3b: unchanged in substance — `conf_bpe`'s ΔECE under verbosity is +0.043
+  [0.011, 0.052].
+- RQ5: the ensemble's ECE is 0.071, not 0.101.
+- RQ6: `conf_kev_bpe` is overconfident (+0.055 to +0.066), not
+  underconfident, and the verbosity attack does not break its calibration
+  (−0.029 in-coverage, where it had read +0.033). The earlier "identical
+  vulnerability signature" to the primary judge does not hold.
+- RQ7: `conf_sc_bpe_autoj`'s overconfidence is +0.10 to +0.13, not +0.06 to
+  +0.09; its verbosity ΔECE stays non-significant.
+
+**2. R-hat was rounded to two decimals before the convergence check.**
+`az.summary()` rounds by default, so an R-hat of 1.014 read as 1.01 and passed
+the > 1.01 test. Read at full precision, 10–15 of each run's 50 fold-fits sat
+just above the threshold (worst 1.024). Doubling the draws to 2,000 per chain
+cleared almost all of them (D22 amendment); AUROC, ECE and every conclusion
+moved only in the third or fourth decimal. The Bayesian result tables now
+also record worst R-hat, lowest ESS and divergence counts, not just the
+number of flagged fits.

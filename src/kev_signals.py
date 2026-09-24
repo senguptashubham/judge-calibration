@@ -7,7 +7,8 @@ is never used: it is an exact rescaling of probabilities[choice] (D27).
 
 items_kev_8b.parquet columns: item_id, question_id, category, condition,
 turn, the human-label columns, judge_verdict, verdict_bidir, conf_kev,
-conf_kev_bpe, flipped, correct, correct_bidir, input_tokens, any_skipped.
+conf_kev_bpe, conf_kev_bpe_prob, flipped, correct, correct_bidir,
+input_tokens, any_skipped.
 """
 
 import argparse
@@ -17,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 from src.judge_kev import KevConfig
-from src.signals import _binary_entropy, _sanitize_records
+from src.signals import _binary_entropy, _sanitize_records, prob_on_verdict
 
 
 def _kev_response_fields(row: dict) -> tuple[str | None, dict, int | None]:
@@ -150,6 +151,9 @@ def compute_item_signals_kev(rows: list[dict]) -> dict:
         "verdict_bidir": verdict_bidir_kev(rows),
         "conf_kev": conf_kev(rows),
         "conf_kev_bpe": conf_kev_bpe(rows),
+        # conf_kev_bpe's calibration form: the same order-corrected p, as a
+        # probability on the AB verdict (signals.py::prob_on_verdict).
+        "conf_kev_bpe_prob": prob_on_verdict(_p_model_a_wins_kev(rows), judge_verdict_kev(rows)),
         "flipped": flipped_kev(rows),
     }
 
