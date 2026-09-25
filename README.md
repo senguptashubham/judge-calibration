@@ -109,7 +109,10 @@ site's "Trick the judge" section.*
 | <img src="docs/readme/dot-kev.svg" width="12" alt=""> | kev-8b | Open stand-in for an industry "calibrated decision model" claim; never trained to judge | RQ6 | class probability, order-swap agreement |
 | <img src="docs/readme/dot-autoj.svg" width="12" alt=""> | auto-j-13b (GPTQ 4-bit) | Llama-2-13B fine-tuned specifically for pairwise judging | RQ7 | self-consistency, order-swap agreement |
 
-![Three judges compared on error detection, overconfidence, position bias and the padding attack, each with its 95% interval](results/figures/judge_comparison.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="results/figures/judge_comparison_dark.png">
+  <img src="results/figures/judge_comparison.png" alt="Three judges compared on error detection, overconfidence, position bias and the padding attack, each with its 95% interval">
+</picture>
 
 | | <img src="docs/readme/dot-qwen.svg" width="12" alt=""> Qwen2.5-7B | <img src="docs/readme/dot-kev.svg" width="12" alt=""> kev-8b | <img src="docs/readme/dot-autoj.svg" width="12" alt=""> auto-j-13b |
 |---|---|---|---|
@@ -255,11 +258,6 @@ analysis to the site's data, is in [`CLAUDE.md`](CLAUDE.md) §7.
   signals.
 - The primary judge's output is JSON-schema constrained. A 100-item ablation
   found this changes the verdict on 4% of items.
-
-## Status
-
-RQ1–RQ7 and the interactive site are complete. Remaining: the report's
-framing sections and a fresh-clone reproducibility check (`REPRODUCE.md`).
 
 ## How to cite
 

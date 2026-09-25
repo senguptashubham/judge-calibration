@@ -61,6 +61,17 @@ JUDGE_NAMES = {
 JUDGE_COLORS = {"Qwen2.5-7B": "#2a78d6", "kev-8b": "#eda100", "auto-j-13b": "#1baf7a"}
 ACCENT_RED = "#d03b3b"
 INK, INK_MUTED = "#111110", "#8a877e"
+# The site's dark theme, for figure variants shown on dark pages (the README
+# picks one by the reader's GitHub theme). Amber steps to #c98500 on dark, as on
+# the site; blue, teal and red pass there unchanged.
+DARK_JUDGE_COLORS = {**JUDGE_COLORS, "kev-8b": "#c98500"}
+DARK_RC = {
+    "figure.facecolor": "#1a1815", "axes.facecolor": "#1a1815", "savefig.facecolor": "#1a1815",
+    "axes.edgecolor": "#8f897d", "axes.labelcolor": "#ece7dc", "text.color": "#ece7dc",
+    "xtick.color": "#8f897d", "ytick.color": "#8f897d",
+    "xtick.labelcolor": "#c8c1b3", "ytick.labelcolor": "#ece7dc",
+}
+DARK_MUTED = "#aaa293"   # annotations and reference lines: 7:1 on the dark page
 
 _MUTED = "silver"
 
@@ -376,6 +387,8 @@ def _draw_forest(
     annotate: bool = True,
     reference: float | None = 0.0,
     decimals: int = 3,
+    muted: str = "dimgray",
+    reference_color: str = "gray",
 ) -> None:
     """Draws a forest panel onto `ax`: a point + interval bar per label
     (first label at the top) and a dashed reference line (default 0). No
@@ -387,6 +400,8 @@ def _draw_forest(
             dense panels whose exact values live in a CSV.
         reference: x of the dashed line, or None for no line.
         decimals: decimal places in the annotations.
+        muted, reference_color: annotation and reference-line colours
+            (lighter greys for a dark figure).
     """
     labels = list(labels)
     values_arr = np.asarray(values, dtype=float)
@@ -400,7 +415,7 @@ def _draw_forest(
     err_high = ci_high_arr - values_arr
 
     if reference is not None:
-        ax.axvline(reference, linestyle="--", color="gray", linewidth=1, zorder=1)
+        ax.axvline(reference, linestyle="--", color=reference_color, linewidth=1, zorder=1)
     # One errorbar call per point, since one call takes only one color.
     for x, y, lo_err, hi_err, color in zip(values_arr, y_pos, err_low, err_high, point_colors):
         ax.errorbar([x], [y], xerr=[[lo_err], [hi_err]], fmt="o", color=color, ecolor=color,
@@ -412,7 +427,7 @@ def _draw_forest(
         for x, y, lo, hi in zip(values_arr, y_pos, ci_low_arr, ci_high_arr):
             text = f"{x:.{decimals}f}" if np.isnan(lo) else f"{x:.{decimals}f} [{lo:.{decimals}f}, {hi:.{decimals}f}]"
             ax.annotate(text, xy=(x, y), xytext=(0, 10), textcoords="offset points",
-                        ha="center", fontsize=8, color="dimgray")
+                        ha="center", fontsize=8, color=muted)
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels)
@@ -943,15 +958,23 @@ def plot_rq5_verbose_shift(
     return _save(fig, f"rq5_verbose_shift_{model_slug}.png")
 
 
-def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.png") -> Figure:
+def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.png", dark: bool = False) -> Figure:
     """The three judges side by side, one panel per measure, one row per
     judge population (split by coverage regime or turn where the RQ split
     it). Rows are coloured by judge.
 
     Each panel: {"title", "xlabel", "reference" (x of the dashed line, or
     None), "rows": [(judge, label, value, ci_low, ci_high), ...]}.
+    `dark` draws it in the site's dark theme (same data, same layout).
     Saved to results/figures/{filename}.
     """
+    with plt.rc_context(DARK_RC if dark else {}):
+        return _judge_comparison_figure(panels, filename, dark)
+
+
+def _judge_comparison_figure(panels: list[dict], filename: str, dark: bool) -> Figure:
+    colors = DARK_JUDGE_COLORS if dark else JUDGE_COLORS
+    greys = {"muted": DARK_MUTED, "reference_color": DARK_MUTED} if dark else {}
     n_rows = max(len(p["rows"]) for p in panels)
     ncols = 2
     nrows = int(np.ceil(len(panels) / ncols))
@@ -965,8 +988,9 @@ def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.
             [lo for _, _, _, lo, _ in rows],
             [hi for _, _, _, _, hi in rows],
             panel["xlabel"],
-            colors=[JUDGE_COLORS.get(judge, "tab:gray") for judge, _, _, _, _ in rows],
+            colors=[colors.get(judge, "tab:gray") for judge, _, _, _, _ in rows],
             reference=panel.get("reference"),
+            **greys,
         )
         ax.set_title(panel["title"], fontsize=10)
     for ax in list(axes.flat)[len(panels):]:

@@ -9,7 +9,8 @@ ranker. kev-8b rows are split by coverage regime and auto-j rows by turn,
 as in RQ6 and RQ7. Nothing is recomputed: each value and CI is copied from
 the table that reported it.
 
-Writes results/judge_comparison.csv and results/figures/judge_comparison.png.
+Writes results/judge_comparison.csv and results/figures/judge_comparison.png (plus
+judge_comparison_dark.png, the same figure in the site's dark theme for the README).
 """
 
 import argparse
@@ -142,6 +143,7 @@ def main(config_path: str, kev_config_path: str, autoj_config_path: str) -> None
             }
         )
     plot_judge_comparison(panels)
+    plot_judge_comparison(panels, "judge_comparison_dark.png", dark=True)   # the README's dark-theme copy
 
 
 if __name__ == "__main__":
