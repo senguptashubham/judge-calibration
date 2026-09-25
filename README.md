@@ -24,6 +24,7 @@ By **Shubham Sengupta** · [GitHub](https://github.com/senguptashubham) · [Link
   </a>
 </p>
 
+The same site is also on [Hugging Face Spaces](https://huggingface.co/spaces/shubhamsengupta/judge-calibration).
 Every verdict on the site is what the judges actually produced in the recorded
 runs; nothing is generated live. Full results, intervals and caveats are in
 [`REPORT.md`](REPORT.md).

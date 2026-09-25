@@ -198,6 +198,7 @@ site/        the interactive site (D29): index.html, style.css, app.js; data/ bu
              analysis/site_data.py; fonts/ bundled (OFL). Plain HTML/CSS/JS, no build step, computes
              no statistic. Published to GitHub Pages by .github/workflows/pages.yml
 docs/readme/ screenshots and small SVGs the README shows
+scripts/     deploy_space.py: publishes site/ as a static Hugging Face Space (https://huggingface.co/spaces/shubhamsengupta/judge-calibration)
 tests/       one test file per src/ module. analysis/ scripts are verified against
              real data rather than unit-tested, except the site's item pickers
              (test_site_data.py). test_site_e2e.py drives the site in a browser (Playwright;
@@ -287,6 +288,8 @@ HF_DATASETS_OFFLINE=1 python -m analysis.demo_bundle --config configs/run.yaml -
 python -m analysis.site_data --config configs/run.yaml    # → site/data/site-data.js, examples.js
 # open site/index.html directly, or: python -m http.server -d site
 # site tests: pip install -e ".[site]" && playwright install chromium, then pytest
+python scripts/deploy_space.py --repo-id shubhamsengupta/judge-calibration --dry-run   # then without --dry-run: publishes - owner only
+# GitHub Pages redeploys by itself on a push that touches site/
 ```
 
 ---
