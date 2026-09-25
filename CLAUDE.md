@@ -2,7 +2,7 @@
 
 Read this before doing anything in this repo. It is the contract, not a summary.
 
-**Also read `DECISIONS.md`** — D4–D28 (the Week-0 design review, the 31 Aug 2026 professor-feedback integration, and the owner-initiated RQ6/RQ7 additions) override anything here that contradicts them.
+**Also read `DECISIONS.md`** — D4–D29 (the Week-0 design review, the 31 Aug 2026 professor-feedback integration, the owner-initiated RQ6/RQ7 additions, and the demo site) override anything here that contradicts them.
 
 ---
 
@@ -190,9 +190,18 @@ src/
   judge_autoj.py, autoj_signals.py    RQ7: auto-j-13b vLLM wrapper; checkpoint → calls/items
 analysis/    rq1.py … rq7.py (one per RQ), human_disagreement.py (tasks 3.3/3.4), vacuum.py (task 1.8),
              decoding_ablation.py (task 4.5) — each a CLI over items.parquet; compare_judges.py builds
-             the three-judge figure from the RQ1–RQ7 result CSVs
+             the three-judge figure from the RQ1–RQ7 result CSVs; auto_accept.py is the post-hoc
+             "what would auto-accepting cost" analysis (post-hoc, D29); demo_bundle.py and
+             site_data.py build the site's data (bundle → results/site_bundle.json.gz, gitignored →
+             site/data/*.js, tracked)
+site/        the interactive site (D29): index.html, style.css, app.js; data/ built by
+             analysis/site_data.py; fonts/ bundled (OFL). Plain HTML/CSS/JS, no build step, computes
+             no statistic. Published to GitHub Pages by .github/workflows/pages.yml
+docs/readme/ screenshots and small SVGs the README shows
 tests/       one test file per src/ module. analysis/ scripts are verified against
-             real data rather than unit-tested.
+             real data rather than unit-tested, except the site's item pickers
+             (test_site_data.py). test_site_e2e.py drives the site in a browser (Playwright;
+             skips without one).
 notebooks/   Colab session records of the GPU inference runs (01 Qwen, 02 kev, 03 auto-j), outputs kept.
              They only install, pull, and call src/ — no logic lives there.
 learning/    study exercises, not part of the pipeline
@@ -202,7 +211,7 @@ pyproject.toml   pinned deps; base install excludes vllm (`colab` extra adds it,
                  but includes numpyro/jax/arviz (D24)
 PLAN.md      design rationale, RQ definitions, week plan
 TASKS.md     atomic tasks with definition-of-done and closeout notes
-DECISIONS.md resolutions from the design reviews, D4–D28
+DECISIONS.md resolutions from the design reviews, D4–D29
 PREREGISTRATION.md   frozen before the Week 2 full run
 REPORT.md    written incrementally, not at the end
 LEARNING.md  reading / courses / skills tracker
@@ -269,20 +278,27 @@ python -m src.judge_autoj   --config configs/run_autoj.yaml
 python -m src.autoj_signals --config configs/run_autoj.yaml
 python -m analysis.rq7      --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}
 
-# Cross-judge comparison (after RQ1–RQ7)
+# Cross-judge comparison and the auto-accept analysis (after RQ1–RQ7)
 python -m analysis.compare_judges --config configs/run.yaml --kev-config configs/run_kev.yaml --autoj-config configs/run_autoj.yaml
+python -m analysis.auto_accept    --config configs/run.yaml --kev-config configs/run_kev.yaml --autoj-config configs/run_autoj.yaml
+
+# The site's data (after the above); the bundle needs the MT-Bench HF cache, not the network
+HF_DATASETS_OFFLINE=1 python -m analysis.demo_bundle --config configs/run.yaml --kev-config configs/run_kev.yaml --autoj-config configs/run_autoj.yaml
+python -m analysis.site_data --config configs/run.yaml    # → site/data/site-data.js, examples.js
+# open site/index.html directly, or: python -m http.server -d site
+# site tests: pip install -e ".[site]" && playwright install chromium, then pytest
 ```
 
 ---
 
 ## 8. Environment & workflow
 
-- **Local (VSCode, dedicated conda env `judge-calib`, python 3.11):** everything except running the judge models — writing and testing all of `src/`, all analysis, the Gradio demo. `pip install -e .` here never installs `vllm`.
+- **Local (VSCode, dedicated conda env `judge-calib`, python 3.11):** everything except running the judge models — writing and testing all of `src/`, all analysis, the site's data build and its browser tests. `pip install -e .` here never installs `vllm`.
 - **Colab (fresh `venv`, GPU):** the only place `judge.py`/`judge_autoj.py` actually run. `pip install -e ".[colab]"` inside the fresh venv (D11) — never Colab's system Python. The Bayesian model (`bayesian.py`) is analysis, not inference — it runs locally (D24).
 - **A GitHub remote** carries code between the two: commit and push locally, `git clone`/`git pull` in Colab.
-- **`runs/` and the parquet tables are gitignored on purpose** — move generated data (checkpoints, `calls.parquet`) back from Colab via a Drive-mounted folder or direct download, never through git. `results/*.csv` and `results/figures/*.png` are tracked: after a rerun, commit them together with the `REPORT.md` change they support (D17 amendment).
+- **`runs/` and the parquet tables are gitignored on purpose** — move generated data (checkpoints, `calls.parquet`) back from Colab via a Drive-mounted folder or direct download, never through git. `results/*.csv` and `results/figures/*.png` are tracked: after a rerun, commit them together with the `REPORT.md` change they support (D17 amendment). `site/data/*.js` is tracked too — the published site needs it — so rebuild it after any result it shows changes.
 - See D17 for the full reasoning.
 
 ## 9. Current status
 
-RQ1–RQ7 are complete and written up in `REPORT.md`. GATE 5, GATE K, and GATE L are left unchecked in `TASKS.md` pending the owner's review. Remaining: Week 6 (Gradio demo, finishing `REPORT.md`'s framing sections, slides) and Week 7 (fresh-clone reproducibility check, `REPRODUCE.md`).
+RQ1–RQ7 are complete and written up in `REPORT.md`. GATE 5, GATE K, and GATE L are left unchecked in `TASKS.md` pending the owner's review. The interactive site (task 6.2, D29) and the post-hoc auto-accept section are done. Remaining: Week 6 (finishing `REPORT.md`'s framing sections, slides) and Week 7 (fresh-clone reproducibility check, `REPRODUCE.md`).

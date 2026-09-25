@@ -1,0 +1,288 @@
+<!doctype html>
+<!--
+  Do LLM Judges Know When They're Wrong?
+  Built by Shubham Sengupta - https://github.com/senguptashubham - https://www.linkedin.com/in/senguptashubham/
+  Source: https://github.com/senguptashubham/judge-calibration
+  Code MIT, text and figures CC BY 4.0 (c) 2026 Shubham Sengupta. Keep this credit when reusing.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Do LLM Judges Know When They're Wrong?</title>
+  <meta name="description" content="Three LLM judges, 1,836 real MT-Bench comparisons, graded against human votes. Swap the answers, pad them, or auto-accept confident verdicts, and see what happens.">
+  <meta name="author" content="Shubham Sengupta">
+  <link rel="canonical" href="https://senguptashubham.github.io/judge-calibration/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Do LLM Judges Know When They're Wrong?">
+  <meta property="og:description" content="Three LLM judges, 1,836 MT-Bench comparisons, graded against human votes. By Shubham Sengupta.">
+  <meta property="og:url" content="https://senguptashubham.github.io/judge-calibration/">
+  <meta name="twitter:card" content="summary">
+  <meta name="color-scheme" content="light dark">
+  <!-- Apply a saved theme before the first paint, so there is no flash. -->
+  <script>try { var t = localStorage.getItem("theme"); if (t === "dark" || t === "light") document.documentElement.dataset.theme = t; } catch (e) {}</script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas class="dots" aria-hidden="true"></canvas>
+
+  <header class="topbar">
+    <a class="mark" href="#">judge-calibration</a>
+    <nav id="site-nav" aria-label="Sections">
+      <a href="#trick">Trick the judge</a>
+      <a href="#game">You vs the judge</a>
+      <a href="#judges">Three judges</a>
+      <a href="#cost">Ship it?</a>
+      <a href="#method">Method</a>
+      <a href="#credits">Credits</a>
+    </nav>
+    <div class="top-actions">
+      <button type="button" class="theme-btn" id="theme-btn" aria-label="Switch to dark mode">
+        <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+      <button type="button" class="menu-btn" id="menu-btn" aria-expanded="false" aria-controls="site-nav" aria-label="Open menu">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <!-- 1. Hook ------------------------------------------------------------>
+    <section class="hero">
+      <p class="kicker">A capstone study of LLM-as-a-judge</p>
+      <h1>Do LLM judges know when they're&nbsp;<em class="hl">wrong</em>?</h1>
+      <p class="lede">Three LLM judges compared <b data-bind="n_items"></b> pairs of chatbot answers from <span class="nowrap">MT-Bench</span>,
+        and every verdict was checked against what human voters chose. Here is what they said, and how sure
+        they were.</p>
+
+      <div class="stat-row">
+        <figure class="window stat">
+          <figcaption class="titlebar">stated_vs_right.log</figcaption>
+          <div class="win-body">
+            <div class="big"><span data-bind="stated_confidence"></span> <small>sure</small></div>
+            <div class="big dim"><span data-bind="accuracy"></span> <small>right</small></div>
+            <p><span class="nowrap">Qwen2.5-7B's</span> stated confidence, against how often it matched the human majority.</p>
+          </div>
+        </figure>
+        <figure class="window stat">
+          <figcaption class="titlebar">order_swap.log</figcaption>
+          <div class="win-body">
+            <div class="big"><span data-bind="flip_rate"></span></div>
+            <p>of its verdicts flip when the same two answers simply swap places.</p>
+          </div>
+        </figure>
+        <figure class="window stat alert">
+          <figcaption class="titlebar">auto_accept.cfg</figcaption>
+          <div class="win-body">
+            <div class="big"><span data-bind="slip_stated_09"></span></div>
+            <p>of its wrong verdicts would pass a pipeline that auto-accepts anything stated at &ge;&nbsp;90%.</p>
+          </div>
+        </figure>
+      </div>
+      <a class="scroll-cue" href="#trick">Try to trick the judge &darr;</a>
+    </section>
+
+    <!-- 2. Trick the judge ------------------------------------------------->
+    <section id="trick" class="chapter">
+      <p class="kicker">01 &middot; Trick the judge</p>
+      <h2>Same two answers. Opposite verdict. Same confidence.</h2>
+      <p class="lede">Swap which answer is shown first, or pad both with filler that adds no information.
+        These are the judge's real recorded verdicts, not a simulation.</p>
+
+      <div class="control-bar">
+        <div class="stepper">
+          <button type="button" class="btn" id="prev" aria-label="Previous example">&larr;</button>
+          <div class="stepper-label"><span id="ex-count"></span><span id="ex-kind"></span></div>
+          <button type="button" class="btn" id="next" aria-label="Next example">&rarr;</button>
+          <button type="button" class="btn" id="random" title="Show a comparison drawn at random">Random</button>
+        </div>
+        <div class="segmented" id="judge-tabs" role="tablist" aria-label="Judge"></div>
+        <div class="switches">
+          <label class="switch"><input type="checkbox" id="swap"><span></span>Swap order</label>
+          <label class="switch"><input type="checkbox" id="pad"><span></span>Pad answers</label>
+        </div>
+      </div>
+
+      <div class="banner-row">
+        <div id="banner" class="banner" aria-live="polite"></div>
+        <button type="button" class="btn primary" id="reveal" aria-pressed="false">Reveal what humans chose</button>
+      </div>
+
+      <article class="window question">
+        <div class="titlebar"><span id="q-meta"></span></div>
+        <div class="win-body" id="question"></div>
+      </article>
+
+      <div class="answers">
+        <article class="window answer" id="answer-first"></article>
+        <article class="window answer" id="answer-second"></article>
+      </div>
+
+      <p class="reasoning-label">What the judge wrote</p>
+      <div class="reasoning">
+        <article class="note-card" id="reason-original"></article>
+        <article class="note-card" id="reason-now"></article>
+      </div>
+
+    </section>
+
+    <!-- 3. You vs the judge ---------------------------------------------------->
+    <section id="game" class="chapter">
+      <p class="kicker">02 &middot; You vs the judge</p>
+      <h2>Pick the better answer. Say how sure you are.</h2>
+      <p class="lede">Five real comparisons where every human voter agreed. After each pick you see what the humans chose
+        and what the three judges said, and at the end, who was right more often and who was more honest about it.</p>
+
+      <div class="game-status">
+        <span id="g-progress"></span>
+        <ol class="pips" id="g-pips" aria-label="Your results so far"></ol>
+      </div>
+
+      <div id="g-play">
+        <article class="window question">
+          <div class="titlebar"><span id="g-meta"></span></div>
+          <div class="win-body" id="g-question"></div>
+        </article>
+        <div class="answers">
+          <article class="window answer" id="g-answer-A"></article>
+          <article class="window answer" id="g-answer-B"></article>
+        </div>
+        <div class="confidence-row" id="g-confidence" hidden>
+          <span class="confidence-label">How sure are you?</span>
+          <div class="segmented" id="g-chips" role="group" aria-label="Your confidence"></div>
+        </div>
+        <article class="window result-card" id="g-result" aria-live="polite" hidden></article>
+      </div>
+      <article class="window result-card" id="g-final" aria-live="polite" hidden></article>
+    </section>
+
+    <!-- 4. Three judges ----------------------------------------------------------->
+    <section id="judges" class="chapter">
+      <p class="kicker">03 &middot; Three judges</p>
+      <h2>Three judges, four presentations, one pair of answers.</h2>
+      <p class="lede">Every judge saw every comparison four ways: as published, with the order swapped, with both answers
+        padded, and both. The answers never change, so a judge that is reading them should give the same verdict four
+        times. <span class="flip-key">Red</span> marks a verdict that changed.</p>
+
+      <article class="window question showdown-question">
+        <div class="titlebar">
+          <span id="s-meta"></span>
+          <span class="tb-stepper">
+            <button type="button" class="tb-btn" id="s-prev" aria-label="Previous comparison">&larr;</button>
+            <span id="s-count"></span>
+            <button type="button" class="tb-btn" id="s-next" aria-label="Next comparison">&rarr;</button>
+          </span>
+        </div>
+        <div class="win-body">
+          <div id="s-question"></div>
+          <p class="human-line" id="s-human"></p>
+          <details class="both-answers">
+            <summary>Read both answers</summary>
+            <div class="answers" id="s-answers"></div>
+          </details>
+        </div>
+      </article>
+
+      <div class="verdict-grid" id="s-grid" role="table" aria-label="Each judge's verdict under each presentation"></div>
+
+      <h3 class="subhead">Across all <span data-bind="n_items"></span> comparisons</h3>
+      <p class="note">Each judge's confidence here is its order-swap agreement, the one signal all three have. Dots are
+        the estimate, bars its 95% interval (resampling whole questions). kev-8b is split by whether the prompt fits
+        its training length, auto-j by conversation turn.</p>
+      <p class="note warn" id="s-autoj-note"></p>
+      <div class="measures" id="s-measures"></div>
+      <div id="s-tooltip" class="tooltip" hidden></div>
+    </section>
+
+    <!-- 5. Ship it? --------------------------------------------------------->
+    <section id="cost" class="chapter">
+      <p class="kicker">04 &middot; Ship it?</p>
+      <h2>Auto-accept the confident verdicts. How many wrong ones get through?</h2>
+      <p class="lede">A pipeline accepts every verdict whose confidence clears a threshold and sends the rest to a
+        human. Each dot below is one recorded verdict; <span class="swatch wrong"></span> red ones are wrong.</p>
+
+      <div class="control-bar">
+        <div class="segmented" id="cost-judge-tabs" role="tablist" aria-label="Judge"></div>
+        <label class="field">Confidence signal
+          <select id="signal"></select>
+        </label>
+        <label class="switch" title="Both answers padded with filler that adds no information: the attack from section 01"><input type="checkbox" id="cost-pad"><span></span>Padded answers</label>
+      </div>
+
+      <div class="pipeline">
+        <canvas id="flow" aria-label="Animation: verdicts flowing through the confidence gate"></canvas>
+        <div class="node source"><span class="node-title">Judge</span><span class="node-sub" id="flow-judge"></span></div>
+        <div class="node gate">
+          <span class="node-title">confidence &ge; <b id="gate-value"></b>?</span>
+          <input type="range" id="threshold" min="0" max="49" step="1" value="40" aria-label="Auto-accept threshold">
+          <div class="ticks" id="ticks" aria-hidden="true"></div>
+        </div>
+        <div class="node sink accept"><span class="node-title">Auto-accepted</span><span class="node-sub" id="sink-accept"></span></div>
+        <div class="node sink human"><span class="node-title">Sent to a human</span><span class="node-sub" id="sink-human"></span></div>
+      </div>
+
+      <div class="readouts">
+        <div class="window readout hero-readout">
+          <div class="titlebar">wrong verdicts shipped</div>
+          <div class="win-body"><div class="big" id="ro-slip"></div><p id="ro-reading"></p></div>
+        </div>
+        <div class="window readout"><div class="titlebar">auto-accepted</div><div class="win-body"><div class="mid" id="ro-accepted"></div></div></div>
+        <div class="window readout"><div class="titlebar">error among accepted</div><div class="win-body"><div class="mid" id="ro-error"></div><p id="ro-base"></p></div></div>
+        <div class="window readout"><div class="titlebar">&kappa; among accepted</div><div class="win-body"><div class="mid" id="ro-kappa"></div><p>agreement with humans, chance-corrected</p></div></div>
+      </div>
+
+      <figure class="chart">
+        <svg id="curve" role="img" aria-labelledby="curve-title"></svg>
+        <figcaption id="curve-title">Share of wrong verdicts shipped (solid) and of all verdicts accepted (dashed),
+          at every threshold. The marker is your threshold.</figcaption>
+        <div id="tooltip" class="tooltip" hidden></div>
+      </figure>
+    </section>
+
+    <!-- 6. How it was tested ------------------------------------------------------>
+    <section id="method" class="chapter">
+      <p class="kicker">05 &middot; How it was tested</p>
+      <h2>From human votes to honest error bars.</h2>
+      <p class="lede">The whole pipeline, one step per box. Select a step to see what happens there.</p>
+      <div class="method-graph" id="m-graph">
+        <svg id="m-edges" aria-hidden="true"></svg>
+      </div>
+      <article class="window method-detail" id="m-detail" aria-live="polite"></article>
+      <p class="note">The full write-up, with every figure, table and confidence interval:
+        <a href="https://github.com/senguptashubham/judge-calibration/blob/main/REPORT.md">REPORT.md</a>.</p>
+    </section>
+  </main>
+
+  <!-- Credits --------------------------------------------------------------->
+  <footer id="credits" class="credits">
+    <h2>Data &amp; credits</h2>
+    <p>Every verdict, confidence and explanation on this page is what the judges actually produced in the recorded
+      runs; nothing is generated live. Numbers are computed by the project's own analysis code.</p>
+    <p class="byline">Built by <b>Shubham Sengupta</b> &middot; <a href="https://github.com/senguptashubham">GitHub</a> &middot;
+      <a href="https://www.linkedin.com/in/senguptashubham/">LinkedIn</a></p>
+    <p>Source, full report and data build: <a href="https://github.com/senguptashubham/judge-calibration">github.com/senguptashubham/judge-calibration</a>.
+      Code under the MIT licence; text and figures under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>,
+      &copy; 2026 Shubham Sengupta.</p>
+    <ul>
+      <li><b>Comparisons and human votes:</b>
+        <a href="https://huggingface.co/datasets/lmsys/mt_bench_human_judgments">lmsys/mt_bench_human_judgments</a>,
+        licensed <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>. From Zheng et al.,
+        <i>Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena</i> (NeurIPS 2023). Questions and answers are shown
+        as published; padded answers are a modification made for this study.</li>
+      <li><b>Judges:</b>
+        <a href="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct">Qwen2.5-7B-Instruct</a> (Apache-2.0),
+        <a href="https://huggingface.co/jaredpalmer/kev-8b">kev-8b</a> (Apache-2.0),
+        <a href="https://huggingface.co/GAIR/autoj-13b-GPTQ-4bits">auto-j-13b, GPTQ 4-bit</a> (Llama 2 based; Li et al.,
+        <i>Generative Judge for Evaluating Alignment</i>, ICLR 2024). Only their recorded outputs appear here.</li>
+      <li><b>Fonts:</b> <a href="https://github.com/rsms/inter">Inter</a> (The Inter Project Authors) and
+        <a href="https://github.com/JetBrains/JetBrainsMono">JetBrains Mono</a> (The JetBrains Mono Project Authors),
+        both under the <a href="https://openfontlicense.org">SIL Open Font License 1.1</a>; the licence texts ship with
+        the site in <code>fonts/</code>.</li>
+    </ul>
+  </footer>
+
+  <script src="data/site-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

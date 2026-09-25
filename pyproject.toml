@@ -1,7 +1,9 @@
 [project]
 name = "judge-calibration"
 version = "0.1.0"
-description = "Calibration and selective-evaluation study of Qwen2.5-7B-Instruct as an MT-Bench judge"
+description = "Do LLM judges know when they're wrong? Calibration and selective evaluation of three open-weight judges on MT-Bench"
+authors = [{ name = "Shubham Sengupta" }]
+readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     # Pinned from the first real `pip install -e .` resolve in the judge-calib
@@ -47,6 +49,18 @@ colab = [
     # own; just needs to be present.
     "ninja",
 ]
+# The static site (site/): Playwright for its end-to-end tests (also run
+# `playwright install chromium` once) and huggingface_hub for the Space deploy.
+# Local only, never needed by the pipeline. Pinned from the judge-calib env.
+site = [
+    "playwright==1.63.0",
+    "huggingface_hub==1.28.0",
+]
+
+
+[project.urls]
+Homepage = "https://senguptashubham.github.io/judge-calibration/"
+Repository = "https://github.com/senguptashubham/judge-calibration"
 
 [tool.setuptools]
 # src/ is imported as a flat package (`python -m src.data`, CLAUDE.md sec 7),

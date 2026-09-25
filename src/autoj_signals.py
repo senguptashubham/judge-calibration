@@ -42,10 +42,12 @@ def extract_autoj_verdict(raw_output: str) -> int:
 
 
 def build_calls_autoj(checkpoint_path: str | Path) -> pd.DataFrame:
-    """autoj.jsonl -> one row per call, with `pred_label` extracted.
-    Skipped (over-length) calls have no output, so their `pred_label` is
-    None - distinct from -1, which means the model answered but no decision
-    line was found.
+    """autoj.jsonl -> one row per call, with `pred_label` extracted and the
+    critique text kept (stripped of surrounding whitespace) for the demo site.
+    Skipped (over-length) calls have no output, so their `pred_label` and
+    `critique` are None - distinct from -1, which means the model answered
+    but no decision line was found. "Response 1" in a critique is whichever
+    answer was displayed first, i.e. model_b under BA.
     """
     rows = []
     with open(checkpoint_path, "r", encoding="utf-8") as f:
@@ -73,6 +75,7 @@ def build_calls_autoj(checkpoint_path: str | Path) -> pd.DataFrame:
                     "skip_reason": row.get("skip_reason"),
                     "finish_reason": row.get("finish_reason"),
                     "pred_label": pred_label,
+                    "critique": raw_output.strip() if (not skipped and raw_output is not None) else None,
                     "n_prompt_tokens": row.get("n_prompt_tokens"),
                     "n_out_tokens": row.get("n_out_tokens"),
                 }

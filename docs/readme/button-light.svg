@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="332" height="56" viewBox="0 0 332 56" role="img" aria-label="Open the interactive site">
+  <rect x="6" y="6" width="322" height="46" fill="#d03b3b"/>
+  <rect x="2" y="2" width="322" height="46" fill="#111110" stroke="#111110" stroke-width="2"/>
+  <text x="163" y="31" text-anchor="middle" font-family="'JetBrains Mono', 'Cascadia Mono', Consolas, Menlo, monospace" font-size="15" font-weight="700" fill="#f3efe6" letter-spacing="0.5">Open the interactive site  &#8594;</text>
+</svg>

@@ -922,6 +922,23 @@ def main_bayesian_comparison(config_path: str) -> None:
     print(table.to_string(index=False))
     print(f"Wrote {len(table)} rows to {table_path}")
 
+    # Per-item out-of-fold P(correct), averaged over the 10 repeats - the
+    # meta-model's own confidence, for analysis/auto_accept.py.
+    oof = pd.DataFrame(
+        {
+            "item_id": population["item_id"].to_numpy(),
+            "question_id": population["question_id"].to_numpy(),
+            "correct": population["correct"].to_numpy(),
+            "judge_verdict": population["judge_verdict"].to_numpy(),
+            "human_label": population["human_label"].to_numpy(),
+            "p_correct_bayesian": bayes["mean_oof_correct"],
+            "p_correct_logreg": freq["mean_oof_correct"],
+        }
+    )
+    oof_path = f"{config.paths.results_dir}/rq4_bayesian_oof_{config.model_slug}.csv"
+    oof.to_csv(oof_path, index=False)
+    print(f"Wrote {len(oof)} rows to {oof_path}")
+
     plot_reliability_diagram(
         confidences=bayes_p_wrong,
         correct=is_wrong,

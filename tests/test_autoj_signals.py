@@ -101,6 +101,7 @@ def test_build_calls_autoj_computes_pred_label_from_raw_output(tmp_path):
     df = build_calls_autoj(checkpoint)
     assert len(df) == 1
     assert df.iloc[0]["pred_label"] == 0
+    assert df.iloc[0]["critique"] == "Critique. So, the final decision is Response 1."
 
 
 def test_build_calls_autoj_skipped_row_has_no_pred_label(tmp_path):
@@ -114,6 +115,7 @@ def test_build_calls_autoj_skipped_row_has_no_pred_label(tmp_path):
     df = build_calls_autoj(checkpoint)
     assert bool(df.iloc[0]["skipped"]) is True
     assert pd.isna(df.iloc[0]["pred_label"])
+    assert df.iloc[0]["critique"] is None
 
 
 # --- judge_verdict_autoj / _canonical_verdict_ba_autoj / flipped_autoj ----

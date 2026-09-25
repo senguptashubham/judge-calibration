@@ -1324,6 +1324,97 @@ turn=2 one fit with a single divergence; worst R-hat 1.007, lowest ESS 410. Figu
 
 ---
 
+## What would auto-accepting cost? (post-hoc)
+
+**This section is a post-hoc, descriptive analysis.** It was not preregistered and
+tests no new hypothesis. It restates RQ1–RQ7's results in the terms a practitioner
+would use: *if a pipeline trusted this judge's confident verdicts, how many wrong
+verdicts would reach production?*
+
+**Setup.** A pipeline accepts every verdict whose confidence clears a threshold and
+sends the rest to a human. For each judge, signal and condition we measure four
+things (`src/metrics.py::auto_accept_stats`, `analysis/auto_accept.py`):
+
+- the **accepted share** (how much work the judge takes off humans);
+- the **slip-through**: the share of the judge's *wrong* verdicts that are accepted
+  unreviewed;
+- the error rate among accepted verdicts;
+- κ among accepted verdicts.
+
+Only probability-scaled signals are used, each scored against the verdict it
+belongs to (D7 amendment). A threshold on 1 − H has no meaning, and neither does
+scoring a confidence in the AB verdict against `verdict_bidir`. The meta-models
+enter through their out-of-fold P(correct) from RQ4. The 95% intervals are
+cluster-bootstrap intervals over `question_id`.
+
+**Read slip-through next to accepted share.** Any signal reaches zero slip-through by
+accepting nothing, so a lower slip-through is only a gain if the pipeline still
+accepts a useful share. The intervals are per-signal; no paired signal-vs-signal test
+was run here, so the comparisons below are descriptive.
+
+Headline threshold 0.90 (full curves 0.50–0.99 in `results/auto_accept_curves.csv`,
+0.80 and 0.95 in `results/auto_accept.csv`):
+
+| Judge | Signal | Inputs | Accepted | Wrong verdicts slipping through | Error among accepted | κ among accepted |
+|---|---|---|---|---|---|---|
+| Qwen2.5-7B | stated confidence | clean | 99.3% [99.0, 99.7] | **98.4% [97.3, 99.3]** | 24.1% | 0.52 |
+| Qwen2.5-7B | stated confidence | padded | 99.1% [98.6, 99.5] | **99.8% [99.3, 100.0]** | 23.4% | 0.53 |
+| Qwen2.5-7B | order-swap agreement | clean | 72.1% [69.1, 75.2] | 37.0% [31.7, 42.8] | 12.5% | 0.75 |
+| Qwen2.5-7B | order-swap agreement | padded | 80.4% [77.5, 83.3] | 55.2% [49.1, 61.1] | 15.9% | 0.68 |
+| Qwen2.5-7B | 3-prompt ensemble | clean | 57.2% [53.3, 61.1] | 21.1% [17.0, 25.4] | 9.0% | 0.82 |
+| Qwen2.5-7B | Bayesian meta-model | clean | 49.0% [44.7, 53.2] | 13.6% [9.7, 17.5] | 6.7% | 0.87 |
+| kev-8b | class probability | clean | 73.5% [70.2, 76.6] | 51.9% [46.5, 57.0] | 16.3% | 0.67 |
+| kev-8b | order-swap agreement | clean | 58.4% [53.2, 63.4] | 24.3% [18.5, 30.2] | 9.6% | 0.81 |
+| kev-8b | order-swap agreement | padded | 45.3% [40.7, 49.7] | 14.1% [10.5, 17.7] | 7.8% | 0.84 |
+| auto-j-13b | self-consistency | clean | 71.1% [66.7, 75.2] | 45.2% [38.4, 52.2] | 14.5% | 0.71 |
+| auto-j-13b | order-swap agreement (greedy) | clean | 86.8% [83.8, 89.7] | 72.3% [66.9, 78.0] | 18.7% | 0.63 |
+| auto-j-13b | order-swap agreement (greedy) | padded | 75.2% [70.7, 79.7] | 51.5% [43.1, 59.9] | 19.1% | 0.62 |
+
+![Slip-through and accepted share against the auto-accept threshold, per judge](results/figures/auto_accept.png)
+
+**What it shows.**
+
+1. **A gate on Qwen's stated confidence filters almost nothing.**
+   - At ≥ 0.90 it accepts 99% of verdicts and lets 98% of the wrong ones through.
+   - The error rate among accepted verdicts (24%) is the judge's overall error rate:
+     the gate is a no-op.
+   - Padding makes it worse: 99.8% of wrong verdicts pass.
+   - This is RQ1's overconfidence seen from the deployment side: Qwen states at least
+     0.90 on 99% of its verdicts, right or wrong.
+   - Qwen's verdict logprob behaves the same way (99.6% slip-through).
+2. **Signals that disagree with the judge's own verdict catch errors, at the cost of
+   escalating more.**
+   - Qwen's order-swap agreement lets 37% of wrong verdicts through while still
+     accepting 72%.
+   - The 3-prompt ensemble lets 21% through while accepting 57%.
+   - The Bayesian meta-model lets 14% through while accepting 49%. It is scored on
+     RQ4's N = 1,819, not 1,836.
+   - Each step down in slip-through is paid for by sending more verdicts to a human.
+     The intervals of adjacent rows overlap, so no ordering among these three is
+     claimed.
+3. **The padding attack reaches the gate for Qwen but not for kev-8b.**
+   - Qwen's order-swap gate goes from 37% to 55% slip-through under padding,
+     consistent with RQ3's calibration degradation. A threshold tuned on clean data
+     would silently let more errors through.
+   - kev-8b's order-swap gate lets *fewer* errors through when padded (24% → 14%).
+     It does so by accepting less (58% → 45%), so padding makes kev more hesitant,
+     not better. This matches RQ6's finding that kev's calibration holds up under
+     padding.
+4. **auto-j's numbers describe only the calls it answered.**
+   - Its padded turn-2 calls produce no verdict at all 39.8% of the time (RQ7), and
+     those calls are outside this population.
+   - A pipeline would have to route every non-answer to a human as well.
+
+**Limitations.** The threshold is illustrative: 0.90 is a round number a practitioner
+might pick, not a tuned value. The populations follow each RQ's:
+- kev-8b's coverage regimes and auto-j's turns are pooled here;
+- the meta-models use RQ4's out-of-fold predictions on clean inputs only.
+
+The interactive version of this analysis is section 04 of the
+[demo site](https://senguptashubham.github.io/judge-calibration/) (source in [`site/`](site/)).
+
+---
+
 ## Methods notes
 
 Small, dated empirical observations that inform a design decision but don't belong to

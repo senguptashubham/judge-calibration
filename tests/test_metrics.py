@@ -8,6 +8,7 @@ import pytest
 from sklearn.metrics import cohen_kappa_score
 
 from src.metrics import (
+    auto_accept_stats,
     aurc,
     auroc_error,
     brier,
@@ -475,3 +476,36 @@ def test_threshold_sweep_low_coverage_no_rows_dropped():
     assert result["n_kept"][0] == 2
     assert not np.isnan(result["kappa"][0])
     assert not np.isnan(result["ece"][0])
+
+
+# --- auto_accept_stats -------------------------------------------------------
+
+
+def test_auto_accept_stats_hand_computed():
+    # 8 items; threshold 0.9 accepts the first five (0.9 counts as accepted).
+    # Wrong items: #1 (accepted), #3 (accepted), #6 and #7 (escalated).
+    conf = [0.95, 0.99, 0.90, 0.92, 0.97, 0.60, 0.80, 0.50]
+    correct = [True, False, True, False, True, True, False, False]
+    stats = auto_accept_stats(conf, correct, threshold=0.9)
+    assert stats["n_accepted"] == 5
+    assert stats["n_escalated"] == 3
+    assert stats["accepted_share"] == pytest.approx(5 / 8)
+    assert stats["slip_through"] == pytest.approx(2 / 4)
+    assert stats["error_among_accepted"] == pytest.approx(2 / 5)
+
+
+def test_auto_accept_stats_empty_denominators_are_nan():
+    none_accepted = auto_accept_stats([0.5, 0.6], [True, False], threshold=0.9)
+    assert np.isnan(none_accepted["error_among_accepted"])
+    assert none_accepted["slip_through"] == 0.0
+    none_wrong = auto_accept_stats([0.95, 0.6], [True, True], threshold=0.9)
+    assert np.isnan(none_wrong["slip_through"])
+
+
+def test_auto_accept_stats_kappa_uses_accepted_items_only():
+    conf = [0.95, 0.95, 0.95, 0.95, 0.5]
+    correct = [True, True, False, False, False]
+    verdict = ["A", "B", "A", "B", "A"]
+    human = ["A", "B", "B", "A", "B"]
+    stats = auto_accept_stats(conf, correct, 0.9, verdict=verdict, human_label=human)
+    assert stats["kappa_among_accepted"] == pytest.approx(cohens_kappa(verdict[:4], human[:4]))

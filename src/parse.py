@@ -61,21 +61,20 @@ def parse_verdict_and_confidence(raw_output: str) -> dict:
     return {"parse_ok": True, "parse_failure_type": "none", "verdict": verdict, "verbalized_conf": float(confidence)}
 
 
-def reasoning_length(raw_output: str) -> int | None:
-    """Character length of the `"reasoning"` value alone (RQ4's
-    judge_output_len) - not len(raw_output), which would include the
-    ~40-char JSON wrapper around it.
+def reasoning_text(raw_output: str) -> str | None:
+    """The `"reasoning"` value of the judge's JSON output - the judge's own
+    explanation, shown on the demo site.
 
     Exact when raw_output parses as JSON. Otherwise falls back to a
     substring search between the `"reasoning": "` and `"verdict": "` keys,
-    which ignores escaped characters - an approximation used only on the
-    rare malformed rows, so they don't drop out of Tier B entirely.
-    None only if no reasoning value can be located at all.
+    which leaves escaped characters as written - an approximation used
+    only on the rare malformed rows. None only if no reasoning value can be
+    located at all.
     """
     try:
         parsed = json.loads(raw_output)
         if isinstance(parsed, dict) and isinstance(parsed.get("reasoning"), str):
-            return len(parsed["reasoning"])
+            return parsed["reasoning"]
     except json.JSONDecodeError:
         pass
 
@@ -95,7 +94,17 @@ def reasoning_length(raw_output: str) -> int | None:
     if reasoning_value_end == -1:
         return None
 
-    return reasoning_value_end - reasoning_value_start
+    return raw_output[reasoning_value_start:reasoning_value_end]
+
+
+def reasoning_length(raw_output: str) -> int | None:
+    """Character length of the `"reasoning"` value alone (RQ4's
+    judge_output_len) - not len(raw_output), which would include the
+    ~40-char JSON wrapper around it. Exact or approximate exactly as
+    reasoning_text() is.
+    """
+    text = reasoning_text(raw_output)
+    return None if text is None else len(text)
 
 
 def split_cot_and_verdict_tokens(
@@ -219,6 +228,7 @@ def build_calls_dataframe(
 
             record.update(parse_verdict_and_confidence(row["raw_output"]))
             record["reasoning_len"] = reasoning_length(row["raw_output"])
+            record["reasoning_text"] = reasoning_text(row["raw_output"])
 
             lp_path = logprobs_path(
                 runs_dir, row["item_id"], row["condition"], row["prompt_variant"], row["order"], row["sample_idx"]

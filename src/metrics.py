@@ -335,6 +335,55 @@ def aurc(coverage: npt.ArrayLike, risk: npt.ArrayLike) -> float:
     return float(np.trapezoid(y=risk_arr, x=coverage_arr))
 
 
+def auto_accept_stats(
+    confidences: npt.ArrayLike,
+    correct: npt.ArrayLike,
+    threshold: float,
+    verdict: npt.ArrayLike | None = None,
+    human_label: npt.ArrayLike | None = None,
+) -> dict:
+    """What an auto-accept pipeline would do: accept every verdict whose
+    confidence is >= `threshold`, escalate the rest to a human.
+
+        accepted_share      = |accepted| / n
+        slip_through        = |accepted AND wrong| / |wrong|
+        error_among_accepted = |accepted AND wrong| / |accepted|
+
+    slip_through is the pipeline's cost: the share of the judge's wrong
+    verdicts that nobody reviews. Unlike risk_coverage(), which ranks items
+    and ignores what the numbers say, a fixed threshold takes the stated
+    confidence at face value - so it only means something for a
+    probability-scaled signal (invariant 6), and it exposes miscalibration
+    directly: a judge that says ">= 0.9" but is right 76% of the time
+    accepts its errors along with everything else.
+
+    With `verdict` and `human_label`, also returns Cohen's kappa among the
+    accepted items (invariant 5: accepted-item accuracy alone is inflated
+    by the base rate). Ratios with an empty denominator are NaN.
+    """
+    conf_arr = np.asarray(confidences, dtype=float)
+    correct_arr = np.asarray(correct, dtype=bool)
+    accepted = conf_arr >= threshold
+    wrong = ~correct_arr
+    n_accepted = int(accepted.sum())
+    n_wrong = int(wrong.sum())
+    n_accepted_wrong = int((accepted & wrong).sum())
+
+    result = {
+        "n": len(conf_arr),
+        "n_accepted": n_accepted,
+        "n_escalated": len(conf_arr) - n_accepted,
+        "accepted_share": n_accepted / len(conf_arr) if len(conf_arr) else float("nan"),
+        "slip_through": n_accepted_wrong / n_wrong if n_wrong else float("nan"),
+        "error_among_accepted": n_accepted_wrong / n_accepted if n_accepted else float("nan"),
+    }
+    if verdict is not None and human_label is not None:
+        verdict_arr = np.asarray(verdict)[accepted]
+        human_arr = np.asarray(human_label)[accepted]
+        result["kappa_among_accepted"] = cohens_kappa(verdict_arr, human_arr) if n_accepted else float("nan")
+    return result
+
+
 def threshold_sweep(
     signal: npt.ArrayLike,
     correct: npt.ArrayLike,

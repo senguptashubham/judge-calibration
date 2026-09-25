@@ -13,6 +13,7 @@ from src.parse import (
     load_logprobs_record,
     parse_verdict_and_confidence,
     reasoning_length,
+    reasoning_text,
     split_cot_and_verdict_tokens,
 )
 
@@ -270,3 +271,14 @@ def test_load_logprobs_record_matches_judge_write_logprobs_contract(tmp_path):
         "A!", record["token_ids"], record["token_texts"], record["token_logprobs"]
     )
     assert result["n_cot_tokens"] == 2  # no '"reasoning": "' present -> falls back to "everything is CoT"
+
+
+# --- reasoning_text ----------------------------------------------------------
+
+
+def test_reasoning_text_exact_and_fallback_paths():
+    well_formed = '{"reasoning": "A is \\"better\\".", "verdict": "A", "confidence": 0.9}'
+    assert reasoning_text(well_formed) == 'A is "better".'
+    malformed = '{"reasoning": "A is better.", "verdict": "A", "confidence": 0.9'
+    assert reasoning_text(malformed) == "A is better."
+    assert reasoning_text('{"verdict": "A"}') is None

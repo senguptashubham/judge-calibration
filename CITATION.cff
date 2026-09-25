@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Do LLM Judges Know When They're Wrong? Calibration and selective evaluation of open-weight LLM judges"
+type: software
+authors:
+  - family-names: Sengupta
+    given-names: Shubham
+    website: "https://www.linkedin.com/in/senguptashubham/"
+repository-code: "https://github.com/senguptashubham/judge-calibration"
+url: "https://senguptashubham.github.io/judge-calibration/"
+license: MIT
+date-released: "2026-09-25"
+keywords:
+  - LLM-as-a-judge
+  - calibration
+  - uncertainty
+  - selective evaluation
+  - MT-Bench
+abstract: >-
+  An empirical study of whether small open-weight LLM judges know when they are
+  wrong. Three judges (Qwen2.5-7B-Instruct, kev-8b, auto-j-13b) are graded against
+  human votes on MT-Bench, on clean inputs and under answer-order swaps and
+  filler padding, with cluster-bootstrap intervals over questions.

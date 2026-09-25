@@ -290,10 +290,13 @@ A full RQ (`CLAUDE.md`, `PLAN.md` §8), numbered L1–L6 for the same reason as 
 ## Week 6 · Oct 5–11 · 12h — Demo + writeup
 
 - [ ] **6.1 [L]** Course: Gradio (`LEARNING.md` B3).
-- [ ] **6.2 [C]** Demo, offline-first: load `items_{model_slug}.parquet` (P1 rows), browse items, show all five signals (including `conf_ens`) and the verdict. **Build the "trick the judge" toggle first** — flip the response order or apply verbosity padding, watch the verdict change and the confidence not.
+  **Note (25 Sep 2026):** no longer needed for the demo — it is a static site, not a Gradio app (D29). Optional as learning only.
+- [x] **6.2 [C]** Demo, offline-first: load `items_{model_slug}.parquet` (P1 rows), browse items, show all five signals (including `conf_ens`) and the verdict. **Build the "trick the judge" toggle first** — flip the response order or apply verbosity padding, watch the verdict change and the confidence not.
   **DoD:** runs on the Nitro 5 with no network. The toggle demonstrates the thesis in under 10 seconds.
-- [ ] **6.3 [C]** Optional live call: 4-bit Qwen2.5-1.5B/3B via `bitsandbytes`, one item on demand.
+  **Closeout (25 Sep 2026):** built as a static site, `site/` (D29), not Gradio. It runs from disk with no network and no server. Swapping the order on the first example flips Qwen's verdict at 95% → 100% stated confidence, one click. It goes beyond the original scope, with five sections: Trick the judge (with random examples), You vs the judge, Three judges, Ship it? (the auto-accept simulator) and How it was tested. It has dark mode and a mobile layout, and is covered by `tests/test_site_e2e.py` and `tests/test_site_data.py`.
+- [x] **6.3 [C]** ~~Optional live call: 4-bit Qwen2.5-1.5B/3B via `bitsandbytes`, one item on demand.~~
   **DoD:** works, or is cleanly disabled by a config flag.
+  **Skipped by decision (owner, 25 Sep 2026, D29):** nothing on the site is generated live.
 - [ ] **6.4 [W]** Finish `REPORT.md` from the incremental draft: abstract, method, RQ1–RQ7, limitations, extensions.
   **DoD:** complete, every figure referenced.
 - [ ] **6.5 [W]** Slides. Anchor on the RQ2 thesis figure, the RQ4 coefficient plot, the RQ5 distillation result, and the three-judge comparison.

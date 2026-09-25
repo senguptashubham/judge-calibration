@@ -36,6 +36,12 @@ SIGNAL_LABELS = {
     "conf_sc_autoj": "self-consistency",
     "conf_sc_bpe_autoj": "order-swap agreement",
     "conf_sc_bpe_autoj_greedy": "order-swap agreement (greedy calls)",
+    "conf_ens_prob": "3-prompt ensemble",
+    "conf_kev_bpe_prob": "order-swap agreement",
+    "conf_sc_bpe_autoj_prob": "order-swap agreement",
+    "conf_sc_bpe_autoj_greedy_prob": "order-swap agreement (greedy calls)",
+    "p_correct_bayesian": "Bayesian meta-model",
+    "p_correct_logreg": "logistic-regression meta-model",
 }
 
 # Signals built from the same AB/BA pair that defines `flipped`: their
@@ -47,7 +53,14 @@ JUDGE_NAMES = {
     "kev_8b": "kev-8b",
     "autoj_13b_gptq_4bits": "auto-j-13b",
 }
-JUDGE_COLORS = {"Qwen2.5-7B": "tab:blue", "kev-8b": "tab:orange", "auto-j-13b": "tab:green"}
+# The site's palette (site/style.css), so the report, README and site agree. The
+# three judge colours and the red were validated together for colour-vision
+# separation; matplotlib's tab:orange/tab:green were nearly identical for
+# red-green colour-blind readers. Amber and teal sit under 3:1 on white, so
+# every figure that uses them also labels the judge in text.
+JUDGE_COLORS = {"Qwen2.5-7B": "#2a78d6", "kev-8b": "#eda100", "auto-j-13b": "#1baf7a"}
+ACCENT_RED = "#d03b3b"
+INK, INK_MUTED = "#111110", "#8a877e"
 
 _MUTED = "silver"
 
@@ -960,6 +973,54 @@ def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.
         ax.set_visible(False)
     fig.suptitle("Three judges, same items, same tests (95% cluster-bootstrap CIs)")
     return _save(fig, filename)
+
+
+# The signals drawn per judge in plot_auto_accept(); the CSV has them all.
+AUTO_ACCEPT_FIGURE_SIGNALS = {
+    "Qwen2.5-7B": ["conf_verb", "conf_bpe_prob", "conf_ens_prob", "p_correct_bayesian"],
+    "kev-8b": ["conf_kev", "conf_kev_bpe_prob"],
+    "auto-j-13b": ["conf_sc_autoj", "conf_sc_bpe_autoj_greedy_prob"],
+}
+
+
+def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Figure:
+    """One column per judge. Top: the share of the judge's wrong verdicts an
+    auto-accept pipeline lets through, against the confidence threshold it
+    accepts at. Bottom: the share of all verdicts it accepts at that
+    threshold - the price of a lower slip-through, since any signal reaches
+    zero slip-through by accepting nothing. Solid = clean inputs, dashed =
+    padded. Colours follow the site: red is the judge's naive confidence (the
+    signal that lets errors through), the judge's own colour its best signal,
+    ink and grey the ones in between.
+
+    `curves` is analysis/auto_accept.py's curve table (point estimates).
+    Saved to results/figures/auto_accept.png.
+    """
+    judges = [j for j in AUTO_ACCEPT_FIGURE_SIGNALS if j in set(curves["judge"])]
+    fig, axes = plt.subplots(2, len(judges), figsize=(5.2 * len(judges), 8), sharex=True, sharey="row", squeeze=False)
+    for col, judge in enumerate(judges):
+        signals = AUTO_ACCEPT_FIGURE_SIGNALS[judge]
+        middle = [INK_MUTED, INK][: len(signals) - 2]
+        colors = [ACCENT_RED, *middle, JUDGE_COLORS[judge]]
+        for color, signal in zip(colors, signals):
+            for condition, linestyle in [("clean", "-"), ("verbose", "--")]:
+                df = curves[(curves["judge"] == judge) & (curves["signal"] == signal) & (curves["condition"] == condition)]
+                if df.empty:
+                    continue
+                label = signal_label(signal) + ("" if condition == "clean" else " (padded)")
+                axes[0][col].plot(df["threshold"], df["slip_through"], color=color, linestyle=linestyle, label=label)
+                axes[1][col].plot(df["threshold"], df["accepted_share"], color=color, linestyle=linestyle)
+        for row in (0, 1):
+            axes[row][col].axvline(threshold_marker, color="gray", linestyle=":", linewidth=1)
+            axes[row][col].set_xlim(0.5, 1.0)
+            axes[row][col].set_ylim(0, 1.02)
+        axes[0][col].set_title(judge)
+        axes[0][col].legend(loc="lower left", fontsize=7)
+        axes[1][col].set_xlabel("auto-accept when confidence ≥")
+    axes[0][0].set_ylabel("share of WRONG verdicts accepted unreviewed")
+    axes[1][0].set_ylabel("share of ALL verdicts accepted")
+    fig.suptitle("If you auto-accept confident verdicts, how many errors slip through - and how much do you accept?")
+    return _save(fig, "auto_accept.png")
 
 
 if __name__ == "__main__":
