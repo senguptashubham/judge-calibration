@@ -67,7 +67,9 @@ three judges, and it is interactive in section 04 of the site.
      confidences cuts the gap to 4 points (0.038 [0.018, 0.059]).
 2. **Better signals exist, and they are cheap.**
    - An order-swap agreement signal (ask twice with the answers swapped, measure
-     how much the two calls agree) is the best error detector for every judge:
+     how much the two calls agree; SCOPE's
+     [Bidirectional Preference Entropy](https://arxiv.org/abs/2602.13110)) is the
+     best error detector for every judge:
      AUROC **0.794** for Qwen, 0.77–0.78 for kev-8b, 0.68 for auto-j.
    - Abstaining on the items it is least sure of cuts Qwen's error rate from 24%
      to 14% while keeping three quarters of the items, and to 8% keeping half.
@@ -107,7 +109,7 @@ site's "Trick the judge" section.*
 | | Judge | What it is | RQ | Signals |
 |---|---|---|---|---|
 | <img src="docs/readme/dot-qwen.svg" width="12" alt=""> | Qwen2.5-7B-Instruct | General-purpose instruction model, JSON-constrained output | RQ1–RQ5 | stated confidence, verdict logprob, self-consistency, order-swap agreement, 3-prompt ensemble |
-| <img src="docs/readme/dot-kev.svg" width="12" alt=""> | kev-8b | Open stand-in for an industry "calibrated decision model" claim; never trained to judge | RQ6 | class probability, order-swap agreement |
+| <img src="docs/readme/dot-kev.svg" width="12" alt=""> | kev-8b | Open model trained to give calibrated typed decisions, a stand-in for commercial "calibrated decision" judges; never trained to judge answer pairs | RQ6 | class probability, order-swap agreement |
 | <img src="docs/readme/dot-autoj.svg" width="12" alt=""> | auto-j-13b (GPTQ 4-bit) | Llama-2-13B fine-tuned specifically for pairwise judging | RQ7 | self-consistency, order-swap agreement |
 
 <picture>
@@ -124,6 +126,9 @@ site's "Trick the judge" section.*
 | Calls with no usable verdict under padding† | 0% | 0% | 13.6% / 39.8% |
 | Meta-model significantly beats best signal? | no | no | no |
 
+kev-8b is an open stand-in, and its results are not results about any commercial
+system; the commercial Jev has been evaluated directly by
+[Li et al. (2026)](https://arxiv.org/abs/2609.26550).
 kev-8b values are split by kev's training coverage (≤ / > 1,024 input tokens).
 auto-j values are split by turn 1 / turn 2. \*Among the calls auto-j actually
 answered. †Of the calls that ran; kev-8b and auto-j each skip a small number of
@@ -210,7 +215,7 @@ MT-Bench human votes ──► src/data.py ──► items_labels.parquet
 | [`REPORT.md`](REPORT.md) | Results and interpretation, one section per RQ |
 | [`site/`](site) | The interactive site: `index.html`, `style.css`, `app.js`, built data in `data/`, bundled fonts in `fonts/` |
 | [`PLAN.md`](PLAN.md) | Design rationale and the week plan |
-| [`DECISIONS.md`](DECISIONS.md) | Design decisions and their reasoning (D4–D29) |
+| [`DECISIONS.md`](DECISIONS.md) | Design decisions and their reasoning (D4–D30) |
 | [`PREREGISTRATION.md`](PREREGISTRATION.md) | Hypotheses and settings frozen before the main run |
 | [`TASKS.md`](TASKS.md) | Task list with definitions of done and closeout notes |
 | [`CLAUDE.md`](CLAUDE.md) | Statistical invariants, data schemas, layout, commands |

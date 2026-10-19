@@ -2,7 +2,7 @@
 
 Read this before doing anything in this repo. It is the contract, not a summary.
 
-**Also read `DECISIONS.md`** — D4–D29 (the Week-0 design review, the 31 Aug 2026 professor-feedback integration, the owner-initiated RQ6/RQ7 additions, and the demo site) override anything here that contradicts them.
+**Also read `DECISIONS.md`** — D4–D30 (the Week-0 design review, the 31 Aug 2026 professor-feedback integration, the owner-initiated RQ6/RQ7 additions, the demo site, and the literature check before the write-up) override anything here that contradicts them.
 
 ---
 
@@ -137,7 +137,7 @@ conf_lp             float  from sample_idx=0 ONLY (D6)
 conf_sc             float  fraction of the k_sc sampled verdicts matching the canonical
                            greedy verdict. clean/P1 ONLY - null elsewhere (D19, D21)
 conf_bpe            float  1 - entropy of mean p_a across both orders, WITHIN this
-                           (condition, prompt_variant) pair (SCOPE, 2026)
+                           (condition, prompt_variant) pair (SCOPE's BPE, ICML 2026; D30)
 conf_ens            float  1 - ens_entropy_total. clean ONLY - null for verbose,
                            which never collects P2/P3 (D20, D21)
                            ── calibration forms (D7 amendment) ── ECE/Brier/gap use these;
@@ -212,7 +212,7 @@ pyproject.toml   pinned deps; base install excludes vllm (`colab` extra adds it,
                  but includes numpyro/jax/arviz (D24)
 PLAN.md      design rationale, RQ definitions, week plan
 TASKS.md     atomic tasks with definition-of-done and closeout notes
-DECISIONS.md resolutions from the design reviews, D4–D29
+DECISIONS.md resolutions from the design reviews, D4–D30
 PREREGISTRATION.md   frozen before the Week 2 full run
 REPORT.md    written incrementally, not at the end
 LEARNING.md  reading / courses / skills tracker

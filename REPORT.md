@@ -32,6 +32,20 @@ overconfident, with every CI clear of zero.
 **Every signal is overconfident, by 4 to 24 points depending on which one you trust.**
 `conf_lp` (raw exp(verdict-token logprob)) is the worst — 0.242 overconfident under `judge_verdict`, worse than `conf_verb`. This traces directly to its distribution: 99.3% of `conf_lp` values sit at or above 0.99 (median is exactly 1.0) — the model is essentially always "sure" of the token it generated, regardless of whether the underlying judgment was right, a well-documented property of greedy-decoded token probabilities, not a bug in how it's computed.
 
+**The order-swap signal is SCOPE's Bidirectional Preference Entropy.** `conf_bpe`
+follows Badshah, Emami and Sajjad's BPE (*SCOPE*, ICML 2026, arXiv:2602.13110):
+average the probability that `model_a` wins across the two answer orders, then take
+its binary entropy. One construction detail differs:
+- **SCOPE** reads that probability from a single preference token, answered with no
+  rationale.
+- **Here** it is read at the verdict token *after* the judge's 2–4-sentence written
+  reasoning: `p_a = P(A) / (P(A) + P(B))` at that position. Constrained decoding does not
+  distort this ratio (D25).
+
+So the two are not interchangeable, and numbers should not be compared across the papers
+without that caveat. For example, SCOPE reports an AUROC of 0.685 for BPE with
+Qwen2.5-7B-Instruct on a different 2,000-item MT-Bench sample; RQ2 finds 0.794 here.
+
 **The order-swap signal needs its probability form to be scored for calibration.**
 `conf_bpe` = 1 − H(p), with p the order-averaged P(model_a wins). It ranks errors
 well (RQ2), but it is not a probability: a 50/50 split gives 1 − ln 2 = 0.307, not 0.5,
@@ -837,7 +851,8 @@ footnote: kev-8b was never trained on pairwise response judging.** TypeSafe
 AI's Jev is a proprietary, non-autoregressive "System One Model," RLCD-
 trained specifically to produce calibrated typed decisions, and publicly
 positioned as having solved the exact failure mode this project studies.
-It discloses no weights, size, or benchmarks. `kev-8b` (`jaredpalmer/kev`,
+It discloses no weights, size, or training data, and when this arm was
+designed (D27) no independent benchmark of it existed. `kev-8b` (`jaredpalmer/kev`,
 Apache-2.0) is an independently-built open stand-in — explicitly "inspired
 by the System One approach of TypeSafe's Jev," not a distillation, and
 benchmarked by its own authors against real Jev output (93.21% vs. 90.12%
@@ -852,6 +867,22 @@ AG News, customer-service tickets, NLI, spam — short-context
 classification/QA, never a pairwise judgment task. Every result below is
 an out-of-domain generalization test, not an apples-to-apples "best-in-
 class judge" comparison.
+
+**Update, October 2026: Jev itself has since been evaluated directly.**
+Li, Miao, Krishnan and Padman (*JEV-as-a-Judge*, arXiv:2609.26550, first
+posted 22 Sep 2026, the same day as D27) test Jev 1.13 through its hosted API
+against sixteen other judges on RewardBench, JudgeBench, HaluEval and RM-Bench.
+They find that:
+- it comes close to GPT-6 wherever a verdict can be read off the text;
+- its confidence is informative about its own errors (AUROC 0.73–0.88 by task);
+- it rarely reverses its verdict when the answers swap places (3.7% of
+  RewardBench pairs, 11.1% of JudgeBench pairs);
+- confidence routing works least well when a more elaborately written answer is
+  the wrong one. On those RM-Bench pairs, the error rate among verdicts given at
+  0.9 or more rises from 1.5% to 7.9%.
+
+**Those are findings about Jev. Everything in this section is about kev-8b, an
+out-of-domain open stand-in, and is not evidence about Jev.**
 
 *Population: 1,904 MT-Bench items, both AB/BA orders, `clean` and
 `verbose` conditions — the harness (`src/judge_kev.py`) reuses
@@ -1050,10 +1081,14 @@ modeling failure. Figures:
   cited as the actual finding; the earlier probe should be read only as
   the reason this test was prioritized, not as evidence in its own right.
 - **`kev-8b` is one open stand-in for one proprietary system.** Its own
-  authors' 90–93% agreement with real Jev output is the best available
-  evidence it is a fair proxy, but it is not a guarantee that every
-  finding here would replicate against Jev itself, which remains
-  untested and untestable given its proprietary status.
+  authors' 90–93% agreement with real Jev output was the best evidence
+  available when it was chosen (D27). Jev itself has since been evaluated
+  directly through its API (Li et al., 2026; see the update at the top of
+  this section), so claims about Jev should cite that study, not this one.
+  On position bias, the one axis the two studies both measure, the stand-in is
+  not a close proxy: kev-8b flips 21–25% of its verdicts when MT-Bench answers
+  swap places, against 3.7–11.1% for Jev on RewardBench and JudgeBench. The
+  benchmarks differ, so this is a warning, not a measured gap.
 
 ---
 
@@ -1409,6 +1444,22 @@ Headline threshold 0.90 (full curves 0.50–0.99 in `results/auto_accept_curves.
 might pick, not a tuned value. The populations follow each RQ's:
 - kev-8b's coverage regimes and auto-j's turns are pooled here;
 - the meta-models use RQ4's out-of-fold predictions on clean inputs only.
+
+**Related results.** Two papers that appeared during this project bear directly on this
+section:
+- **SCOPE** (Badshah et al., ICML 2026) calibrates the threshold by conformal risk
+  control, which guarantees the error among accepted verdicts stays below a chosen
+  target. The guarantee holds only while calibration and deployment data are
+  exchangeable.
+  - Its own limitations name distribution shift and strategic behaviour as threats.
+  - Its cross-benchmark appendix shows the guarantee failing when the benchmark
+    changes.
+  - The thresholds in this section are fixed, not conformally calibrated, so the
+    padding result above does not test that guarantee. Whether a threshold
+    calibrated on clean answers keeps its guarantee on padded ones is left open.
+- **JEV-as-a-Judge** (Li et al., 2026) finds the same direction in a commercial
+  judge: the error rate among its verdicts given at 0.9 or more rises from 1.5% to
+  7.9% on pairs where the wrong answer is more elaborately written.
 
 The interactive version of this analysis is section 04 of the
 [demo site](https://senguptashubham.github.io/judge-calibration/) (source in [`site/`](site/)).
