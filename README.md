@@ -109,7 +109,7 @@ site's "Trick the judge" section.*
 | | Judge | What it is | RQ | Signals |
 |---|---|---|---|---|
 | <img src="docs/readme/dot-qwen.svg" width="12" alt=""> | Qwen2.5-7B-Instruct | General-purpose instruction model, JSON-constrained output | RQ1–RQ5 | stated confidence, verdict logprob, self-consistency, order-swap agreement, 3-prompt ensemble |
-| <img src="docs/readme/dot-kev.svg" width="12" alt=""> | kev-8b | Open model trained to give calibrated typed decisions, a stand-in for commercial "calibrated decision" judges; never trained to judge answer pairs | RQ6 | class probability, order-swap agreement |
+| <img src="docs/readme/dot-kev.svg" width="12" alt=""> | kev-8b | Open decision model built in imitation of Jev, a commercial decision-only judge; returns one probability per answer and was never trained to judge answer pairs | RQ6 | class probability, order-swap agreement |
 | <img src="docs/readme/dot-autoj.svg" width="12" alt=""> | auto-j-13b (GPTQ 4-bit) | Llama-2-13B fine-tuned specifically for pairwise judging | RQ7 | self-consistency, order-swap agreement |
 
 <picture>
@@ -149,7 +149,7 @@ distinguishable for colour-blind readers.
 | RQ3 | Does uncertainty flag errors caused by position and verbosity bias, or is the fooled judge still confident? |
 | RQ4 | Can a cheap supervised meta-model beat the best single signal at predicting judge error? |
 | RQ5 | Does an ensemble over judge prompts improve uncertainty, and does that survive distillation to one call? |
-| RQ6 | Does kev-8b, a stand-in for an industry calibration claim, resist the same failure modes? |
+| RQ6 | Does kev-8b, an open stand-in for a commercial decision-only judge, resist the same failure modes? |
 | RQ7 | Does auto-j-13b, trained specifically to judge, resist them? |
 
 ## Why the numbers can be trusted
@@ -255,8 +255,9 @@ analysis to the site's data, is in [`CLAUDE.md`](CLAUDE.md) §7.
 
 ## Limitations
 
-- One benchmark (MT-Bench), 80 questions, and mostly 2–5 human votes per item,
-  so human disagreement is measured coarsely.
+- One benchmark (MT-Bench), 80 questions, and a single human vote behind most
+  labels (1,241 of the 1,836 labelled items), so human disagreement is measured
+  coarsely and only on the other 595.
 - kev-8b was never trained to judge, so RQ6 tests how far its calibration
   carries over to an unfamiliar task, not a like-for-like comparison.
 - auto-j-13b is run 4-bit quantized. Its signals are built from

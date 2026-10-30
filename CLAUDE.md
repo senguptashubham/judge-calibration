@@ -13,7 +13,7 @@ An empirical study of **whether small open-weight LLM judges know when they are 
 - **Primary judge model:** `Qwen2.5-7B-Instruct` (config key, never hardcoded). RQ6 and RQ7 add `kev-8b` and `auto-j-13b`.
 - **Data:** `lmsys/mt_bench_human_judgments`, `human` split (3,355 rows = one row per *human vote*, not per item)
 - **Compute:** Google Colab Pro (L4/A100 preferred), vLLM offline batch inference
-- **Deadline:** mid-October 2026. This is a certification capstone, not a paper. Working and honest beats clever.
+- **Deadline:** 7 November 2026. This is a certification capstone, not a paper. Working and honest beats clever.
 
 ### The research questions
 
@@ -24,14 +24,14 @@ An empirical study of **whether small open-weight LLM judges know when they are 
 | RQ3 | Does uncertainty flag bias-induced errors, or is the fooled judge confident? | flip rate, mean confidence on flipped vs unflipped, paired ΔECE/ΔAUROC |
 | RQ4 | Can a cheap supervised meta-model beat the best single signal at predicting judge error? | AUROC under repeated `StratifiedGroupKFold`, vs best-single-signal baseline and permutation null |
 | RQ5 | Does marginalizing over the judge prompt (an ensemble of 3 variants) improve uncertainty quality, and does that improvement survive distillation to single-call cost? | Ensemble vs single-call AUROC/ECE/entropy-quality gap; aleatoric-vs-`d_human` validation |
-| RQ6 | Does kev-8b — an open, RLCD-trained stand-in for the industry's "System One" calibration counterclaim (Jev/TypeSafe) — actually resist the same failure modes (position bias, verbosity degradation, exploitable residual structure) this project already found in a general-purpose LLM judge? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison (D22's Bayesian machinery reused) |
-| RQ7 | Does auto-j-13b — a model purpose-trained via GPT-4-distilled critique+verdict data specifically for pairwise response judging — still exhibit the same position-bias and verbosity-degradation failure modes found for a general-purpose judge (RQ1–RQ3) and an out-of-domain industry stand-in (RQ6)? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison, each split by turn=1/turn=2 |
+| RQ6 | Does kev-8b — an open stand-in for Jev, TypeSafe's commercial decision-only judge — actually resist the same failure modes (position bias, verbosity degradation, exploitable residual structure) this project already found in a general-purpose LLM judge? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison (D22's Bayesian machinery reused) |
+| RQ7 | Does auto-j-13b — a model purpose-trained via GPT-4-distilled critique+verdict data specifically for pairwise response judging — still exhibit the same position-bias and verbosity-degradation failure modes found for a general-purpose judge (RQ1–RQ3) and an out-of-domain open stand-in for a commercial judge (RQ6)? | ECE/overconfidence gap, flip rate, ΔECE/ΔAUROC under verbosity, meta-model-vs-best-single-signal comparison, each split by turn=1/turn=2 |
 
 RQ4 is the owner's own idea and is **not** optional. Protect it (`PLAN.md` §2). RQ5 came from professor feedback on 31 Aug 2026 (`DECISIONS.md` D18–D24, `PLAN.md` §6) and is equally binding.
 
 RQ6 and RQ7 are owner-initiated additions (`DECISIONS.md` D27/D28, `PLAN.md` §7–8), tracked in `TASKS.md`'s K- and L-blocks outside the W0–W7 numbering so they can be trimmed later without renumbering anything. Each evaluates a different judge model on the same MT-Bench items. Neither model has a prompt-ensemble axis, so invariant 14's `prompt_variant` filter does not apply to them.
 - **RQ6** splits its population by kev-8b's training coverage (`input_tokens` ≤ 1,024 vs above) and skips the 52 verbose items over kev's 8,160-token serving ceiling.
-- **RQ7** splits its population by `turn`. It skips the 4.75% of calls whose prompt exceeds auto-j's context (almost all verbose/turn=2), and auto-j produces no verdict at all on 39.8% of verbose/turn=2 calls (output truncated at `max_tokens`). That failure rate must be reported prominently wherever RQ7 is discussed.
+- **RQ7** splits its population by `turn`. It skips the calls whose prompt exceeds auto-j's context: 362 of 15,232 calls (181 of 3,808 item-conditions, 4.75%), almost all verbose/turn=2, and auto-j produces no verdict at all on 39.8% of verbose/turn=2 calls (output truncated at `max_tokens`). That failure rate must be reported prominently wherever RQ7 is discussed.
 
 ---
 
@@ -304,4 +304,4 @@ python scripts/deploy_space.py --repo-id shubhamsengupta/judge-calibration --dry
 
 ## 9. Current status
 
-RQ1–RQ7 are complete and written up in `REPORT.md`. GATE 5, GATE K, and GATE L are left unchecked in `TASKS.md` pending the owner's review. The interactive site (task 6.2, D29) and the post-hoc auto-accept section are done. Remaining: Week 6 (finishing `REPORT.md`'s framing sections, slides) and Week 7 (fresh-clone reproducibility check, `REPRODUCE.md`).
+RQ1–RQ7 are complete, and `REPORT.md` is complete: abstract, introduction, method, related work, every RQ, the three-judge comparison, the post-hoc auto-accept section, discussion, limitations, extensions and references. GATE 5, GATE K, and GATE L are passed, signed off by the owner. The interactive site (task 6.2, D29) is done and published on GitHub Pages and a Hugging Face Space. Remaining: slides (6.5) and Week 7 (fresh-clone reproducibility check, `REPRODUCE.md`).

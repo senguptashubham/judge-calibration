@@ -225,8 +225,8 @@ Closeout notes record the result and where it lives. The reasoning behind each c
 - [x] **5.11 [W]** `REPORT.md` RQ5 section: 5.9d, 5.9e, 5.9f.
   **DoD:** written (as 5.10).
 
-- ⛔ **GATE 5** — RQ4 answered against the permutation null and the best-single-signal baseline, for both frequentist and Bayesian models, with convergence diagnostics; H4 tested; RQ5 answered.
-  **Status:** all underlying conditions met; left unchecked pending the owner's review of the drafted report sections.
+- [x] ⛔ **GATE 5** — RQ4 answered against the permutation null and the best-single-signal baseline, for both frequentist and Bayesian models, with convergence diagnostics; H4 tested; RQ5 answered.
+  **Status:** passed, signed off by the owner.
 
 ---
 
@@ -252,8 +252,8 @@ A full RQ (`CLAUDE.md`, `PLAN.md` §7), numbered K1–K5 outside W0–W7 so it c
 - [x] **K5 [W]** `REPORT.md` RQ6 section, out-of-domain caveat stated up front.
   **DoD:** written, every claim traceable to a results file.
 
-- ⛔ **GATE K** — kev-8b tested against the same battery; out-of-domain caveat prominent.
-  **Status:** all conditions met; left unchecked pending the owner's review.
+- [x] ⛔ **GATE K** — kev-8b tested against the same battery; out-of-domain caveat prominent.
+  **Status:** passed, signed off by the owner.
 
 ---
 
@@ -282,8 +282,8 @@ A full RQ (`CLAUDE.md`, `PLAN.md` §8), numbered L1–L6 for the same reason as 
 - [x] **L6 [W]** `REPORT.md` RQ7 section: purpose-built framing up front, the turn=2 failure finding stated prominently, L5's numbers.
   **DoD:** written, every claim traceable to a results file.
 
-- ⛔ **GATE L** — auto-j-13b tested against the same battery; turn=2 finding prominent; three-way comparison stated as the headline.
-  **Status:** all conditions met; left unchecked pending the owner's review.
+- [x] ⛔ **GATE L** — auto-j-13b tested against the same battery; turn=2 finding prominent; three-way comparison stated as the headline.
+  **Status:** passed, signed off by the owner.
 
 ---
 
@@ -297,8 +297,9 @@ A full RQ (`CLAUDE.md`, `PLAN.md` §8), numbered L1–L6 for the same reason as 
 - [x] **6.3 [C]** ~~Optional live call: 4-bit Qwen2.5-1.5B/3B via `bitsandbytes`, one item on demand.~~
   **DoD:** works, or is cleanly disabled by a config flag.
   **Skipped by decision (owner, 25 Sep 2026, D29):** nothing on the site is generated live.
-- [ ] **6.4 [W]** Finish `REPORT.md` from the incremental draft: abstract, method, RQ1–RQ7, limitations, extensions.
+- [x] **6.4 [W]** Finish `REPORT.md` from the incremental draft: abstract, method, RQ1–RQ7, limitations, extensions.
   **DoD:** complete, every figure referenced.
+  **Closeout:** the owner wrote the abstract, introduction, discussion, limitations and extensions; Claude wrote the method, related work and three-judge sections and the references, then audited the whole report for cross-section consistency. All 44 figures are referenced. Claims about Jev are limited to what Li et al. (2026) report (D30).
 - [ ] **6.5 [W]** Slides. Anchor on the RQ2 thesis figure, the RQ4 coefficient plot, the RQ5 distillation result, and the three-judge comparison.
   **DoD:** delivered.
 - ⛔ **GATE 6** — demo runs offline; report complete, RQ1–RQ7 all covered.
@@ -309,5 +310,6 @@ A full RQ (`CLAUDE.md`, `PLAN.md` §8), numbered L1–L6 for the same reason as 
 
 - [ ] **7.1 [C]** Fresh clone, `pip install -e .`, run every stage from config (`CLAUDE.md` §7), confirm the headline numbers reproduce — NUTS results should reproduce the same conclusions, not necessarily bit-identical samples.
   **DoD:** a `REPRODUCE.md` with the exact commands and the expected numbers.
-- [ ] **7.2 [W]** README with the one-paragraph result.
+- [x] **7.2 [W]** README with the one-paragraph result.
+  **Closeout:** done with the site work: the README leads with the auto-accept result, then the key findings, the three-judge table and the safeguards.
 - [ ] **7.3** Leave the rest empty. This is re-run insurance, not spare capacity.

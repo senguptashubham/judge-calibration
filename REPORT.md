@@ -1,14 +1,299 @@
-# REPORT.md
+# Do LLM judges know when they're wrong?
 
-Written incrementally as results land, per `CLAUDE.md` §4 — not assembled at the end.
+**Calibration and selective evaluation of open-weight LLM judges on MT-Bench human judgments**
+
+Shubham Sengupta · capstone report · October 2026 ·
+[code](https://github.com/senguptashubham/judge-calibration) ·
+[interactive site](https://senguptashubham.github.io/judge-calibration/)
+
+---
+
+## Abstract
+
+Using an LLM judge in a production pipeline raises two questions: how confident is
+the judge in each verdict, and can that confidence be trusted to decide which verdicts
+go through without a human? There are several ways to get a confidence out of a judge,
+such as asking it to state one, reading the probability of its verdict token, sampling
+it several times, or checking whether its verdict survives swapping the two answers.
+Calibration metrics such as ECE and the Brier score measure how well each one tracks
+accuracy. Less is known about whether these signals hold up when the judge is misled,
+for example by the order of the answers or by padding one answer to make it longer.
+
+I study this empirically for Qwen2.5-7B-Instruct on 1,836 human-labelled pairwise
+comparisons from MT-Bench. I ask whether the judge's stated confidence matches its
+accuracy, whether any cheap uncertainty signal detects its errors better than chance,
+and whether those signals flag errors caused by position and length bias. I then test
+whether a frequentist or Bayesian meta-model beats the best single signal, whether
+averaging over three judge prompts improves uncertainty, and whether the findings hold
+for two other judges, kev-8b and auto-j-13b.
+
+The judge's stated confidence overstates its accuracy by 0.19. The best signal,
+agreement between the two answer orders, detects errors with AUROC 0.79 (stated
+confidence: 0.64), but 27.8% of verdicts flip when the answers swap, and padding makes
+it worse calibrated. No meta-model beats it, and the prompt ensemble does not
+improve on it. All three judges are overconfident. In practice, auto-accepting verdicts
+stated at 90% confidence or more would let 98.4% of the judge's wrong verdicts through.
+
+## Contents
+
+- [Introduction](#introduction)
+- [Method](#method)
+- [Related work](#related-work)
+- [RQ1 — Is the judge's stated confidence calibrated?](#rq1--is-the-judges-stated-confidence-calibrated)
+- [RQ2 — Is any cheap uncertainty signal informative about error?](#rq2--is-any-cheap-uncertainty-signal-informative-about-error)
+- [RQ3 — Does uncertainty flag bias-induced errors?](#rq3--does-uncertainty-flag-bias-induced-errors-or-is-the-fooled-judge-confident)
+- [RQ4 — Can a cheap meta-model beat the best single signal?](#rq4--can-a-cheap-supervised-meta-model-beat-the-best-single-signal-at-predicting-judge-error)
+- [RQ5 — Does a prompt ensemble help, and does it survive distillation?](#rq5--does-marginalizing-over-the-judge-prompt-improve-uncertainty-quality-and-does-that-improvement-survive-distillation-to-single-call-cost)
+- [RQ6 — kev-8b](#rq6--an-open-stand-in-for-a-decision-only-judge-kev-8b)
+- [RQ7 — auto-j-13b](#rq7--generalizing-across-training-objective-auto-j-13b)
+- [Three judges side by side](#three-judges-side-by-side)
+- [What would auto-accepting cost? (post-hoc)](#what-would-auto-accepting-cost-post-hoc)
+- [Discussion](#discussion) · [Limitations](#limitations) · [Extensions](#extensions)
+- [Methods notes](#methods-notes) · [References](#references)
+
+---
+
+## Introduction
+
+As software has moved from deterministic systems to probabilistic ones, many outputs
+no longer have a single correct answer to test against. An LLM's open-ended answer, a
+RAG system's summary or an agent's plan has to be judged, and human judgment has two
+problems: it is expensive, and it becomes the bottleneck as the system scales. Using
+one LLM to judge another (LLM-as-a-judge) has therefore become common, and more so with
+the growth of RAG and agent-driven workflows. MT-Bench (Zheng et al., 2023) made it
+standard practice for pairwise comparison: two answers to the same question are rated
+by human evaluators and by an LLM judge, and the judge is trusted to the extent that
+it agrees with the humans. Small open-weight judges are attractive in this role
+because they are cheap and can be self-hosted.
+
+A judge does not have to agree with humans every time to be useful. Humans do not
+always agree with each other either, and Zheng et al. found GPT-4's agreement with
+experts to be about as high as the experts' agreement with each other. Qwen2.5-7B,
+the main judge studied here, disagrees with the human majority on about a quarter of
+the items. That is acceptable if the judge can say when it is unsure. A pipeline could
+then accept its confident verdicts and pass the rest to a human: selective evaluation,
+or abstain-and-escalate. The open question is whether the judge's confidence can be
+trusted for that decision. In testing terms, a judge is an automated oracle, and an oracle is only useful if you know when not to trust it.
+
+Prior work has mostly measured judge accuracy and bias (Zheng et al., 2023; Shi et
+al., 2025). Calibration has been measured on objective-answer benchmarks across many
+judges (Tian et al., 2025), and there is little evidence for a small open-weight judge
+scored against human labels. The selective-evaluation methods that set a confidence
+threshold (Jung et al., 2025; SCOPE) do not test answers modified to look better than
+they are. It is therefore unclear whether a judge's uncertainty catches the errors
+caused by bias, or whether a misled judge stays confident. Finally, judges trained
+specifically to judge, and decision-only judges that return a probability for each
+label instead of text, are now available, which raises the question of whether they
+avoid these failures.
+
+This study asks seven questions:
+
+1. Is the judge's stated confidence calibrated?
+2. Is any cheap uncertainty signal informative about its errors?
+3. Does that uncertainty flag errors caused by position and length bias, or is the
+   misled judge confident?
+4. Can a cheap meta-model, frequentist or Bayesian, beat the best single signal?
+5. Does averaging over three judge prompts improve uncertainty, and does the
+   improvement survive distillation to a single call?
+6. Does kev-8b, an open model built in imitation of Jev, a commercial decision-only
+   judge, resist the same failures?
+7. Does auto-j-13b, a judge trained specifically for pairwise judging, resist them?
+
+To make the results trustworthy, the design was preregistered before the full run.
+The 1,836 items come from only 80 questions, so every confidence interval resamples
+questions rather than items, and the 1,836 are never treated as independent. Every
+accuracy is reported with Cohen's κ.
+
+This study makes the following contributions:
+
+1. a comparison of four confidence signals on one judge, scored against human labels;
+2. a bias stress test, showing whether each signal catches the errors that answer
+   order and padding cause;
+3. a test of whether a meta-model or a prompt ensemble improves on the best single
+   signal;
+4. a comparison of three judges on the same benchmark;
+5. released code, result tables and an interactive site for exploring the results.
+
+The rest of this report is organised as follows. The Method section describes the data,
+the judges, the confidence signals and the statistics, and Related work places the
+study in the literature. One section per research question follows, then a side-by-side
+comparison of the three judges and a post-hoc analysis of what auto-accepting confident
+verdicts would cost. The report closes with the Discussion, Limitations and Extensions.
+
+---
+
+## Method
+
+The design was frozen in `PREREGISTRATION.md` before the full run. Every design
+decision and its reasoning is in `DECISIONS.md` (D4–D30), cited below by number.
+
+### Data
+
+- **Source.** `lmsys/mt_bench_human_judgments`, `human` split: 3,355 expert votes
+  comparing the answers of six models (GPT-4, GPT-3.5-turbo, Claude-v1,
+  Vicuna-13B, Alpaca-13B, LLaMA-13B) to MT-Bench's 80 two-turn questions
+  (Zheng et al., 2023). Each row is one vote, not one item.
+- **Items.** An item is one (question, model pair, turn); the votes collapse to
+  2,396 items. An item is a **tie** when tie votes strictly outnumber both
+  sides (D1, chosen against three alternatives on the real vote distribution);
+  ties are excluded, leaving **1,904 non-tie items**. Of those, 68 split exactly
+  50/50 and have no majority label, leaving **N = 1,836** labelled items. That is
+  the population for RQ1–RQ3 and for the calibration checks in RQ6 and RQ7. RQ4
+  and RQ5 use N = 1,819, dropping 17 items whose length features are undefined.
+- **Human consensus.** `d_human = |frac_prefer_a − 0.5|` measures how strongly the
+  voters agreed (D9). An item is `human_agreed` only if it is unanimous *and* has
+  at least two votes (D16), since a single vote is trivially unanimous. Agreement
+  between human voters is κ = 0.683 (N = 536, task 0.9), the ceiling a judge's κ
+  is read against.
+- **Clustering.** The 1,836 items come from only 80 questions, and items from the
+  same question share a prompt and often the same answers. The effective sample
+  size for any between-question variation is therefore about 80, not 1,836, and
+  every interval and every cross-validation split below is grouped by question.
+
+### Conditions
+
+Every item is judged under two conditions, each in both answer orders:
+
+- **`clean`** — the original answers.
+- **`verbose`** — each answer padded with Zheng et al.'s "repetitive list" attack
+  (`src/perturb.py::verbose_pad`): the answer is kept verbatim, then its own
+  sentences are restated as a numbered list three times. This adds length and no
+  information.
+- **Order.** Each condition is judged with the answers shown as (A, B) and again
+  swapped as (B, A). Order is an axis of every condition, not a condition of its
+  own (D5).
+
+### Judges
+
+| | Qwen2.5-7B-Instruct (primary) | kev-8b (RQ6) | auto-j-13b (RQ7) |
+|---|---|---|---|
+| What it is | general instruction-tuned model | open decision model built in imitation of Jev, returning one probability per option; trained on short classification tasks, **never on judging** | Llama-2-13B fine-tuned on GPT-4 critiques for **pairwise response judging** (Li et al., 2024) |
+| How it was run | vLLM 0.28.0, offline batch, Colab GPU; output constrained to JSON `{reasoning, verdict, confidence}`, reasoning first and 2–4 sentences | its own HTTP server; one deterministic forward pass returning a probability per option | vLLM, 4-bit GPTQ weights; its own prompt format, a free-text critique ending in a decision |
+| Calls per item | greedy (T = 0) in both orders for each condition and each of three prompts; 4 samples at T = 0.7 for clean/P1 in AB order | one per condition and order | greedy in both orders for each condition; 4 samples at T = 0.7 for clean in AB order |
+| Exclusions | none | 52 padded items over its 8,160-token serving limit | 181 of 3,808 item-conditions (362 calls) over a 7,168-token prompt limit, almost all padded turn-2 |
+| Split reported by | — | input ≤ 1,024 tokens (its training range) vs above | turn 1 vs turn 2 |
+
+The primary judge also runs three rubric variants on `clean` (D19): **P1**, the
+general MT-Bench rubric, which RQ1–RQ4 use alone; **P2**, correctness first; and
+**P3**, helpfulness first. Only one sentence differs between them
+(`src/prompts.py`). Prompt templates are frozen and hashed, and every call row
+records its model, prompt hash, git commit, seed, condition, order and sample
+index (`src/judge.py`).
+
+### Verdicts and labels
+
+- **`judge_verdict`** is the greedy verdict with the answers in their original
+  order, and `correct` means it matches the human majority.
+- **`verdict_bidir`** averages the judge's probability for each side across the
+  two orders and takes the larger (D7). It is reported as a second verdict, never
+  substituted for the first.
+
+### Confidence signals
+
+All signals are computed from the recorded calls in `src/signals.py` (and
+`src/kev_signals.py`, `src/autoj_signals.py`); analysis code never reads raw
+model output.
+
+| signal | what it is | judges |
+|---|---|---|
+| stated confidence (`conf_verb`) | the number the judge writes in its answer | Qwen |
+| verdict probability (`conf_lp`, `conf_kev`) | the probability of the chosen letter at the verdict token; for kev-8b, its class probability | Qwen, kev-8b |
+| self-consistency (`conf_sc`, `conf_sc_autoj`) | share of the 4 sampled verdicts that match the greedy one | Qwen, auto-j |
+| order-swap agreement (`conf_bpe` and analogues) | SCOPE's Bidirectional Preference Entropy (Badshah et al., 2026): average P(answer 1 wins) over both orders, score 1 − its binary entropy | all three |
+| 3-prompt ensemble (`conf_ens`) | the same entropy over the average of P1, P2 and P3, split into aleatoric and epistemic parts (D20) | Qwen |
+| meta-models | logistic regression, gradient boosting and a Bayesian hierarchical logistic regression predicting `correct` from the signals and item features (RQ4) | all three |
+
+An entropy score ranks errors but is not a probability (a 50/50 split scores
+0.307), so every calibration number is computed on a signal's probability form,
+scored against the verdict it is a confidence in (D7 amendment; methods note
+"Calibration forms").
+
+### Statistics
+
+- **Intervals.** 95% intervals come from a cluster bootstrap with B = 2,000:
+  resample questions with replacement and keep all their items (`src/boot.py`).
+  A row-level bootstrap would treat the 1,836 items as independent and give
+  intervals that are too narrow.
+- **Paired comparisons.** When the same items are scored two ways (clean vs
+  padded, one verdict vs another, one feature set vs another), the interval is on
+  the per-item difference, from a paired cluster bootstrap.
+- **Calibration.** ECE uses equal-mass bins, or exact per-value bins when a signal
+  takes ten or fewer values (D14). It is always reported with accuracy, Cohen's κ,
+  AUROC and the signed overconfidence gap (mean confidence − accuracy), because a
+  judge that always says 0.5 has perfect ECE and no use (figure
+  `results/figures/ece_auroc_orthogonal.png`, two hand-built cases: one ranks
+  perfectly and is miscalibrated, the other is calibrated and ranks nothing).
+  Accuracy never appears without κ, including along a risk–coverage curve, since
+  dropping items changes the base rate.
+- **Error detection.** AUROC of uncertainty against error, the risk–coverage
+  curve and its area (AURC; Geifman and El-Yaniv, 2017).
+- **Meta-models (RQ4).** `StratifiedGroupKFold(5)` grouped by question, repeated
+  over 10 seeds; the spread across repeats is the headline uncertainty (D8).
+  Hyperparameters are fixed in advance, with no tuning: `LogisticRegression(C=1.0)`,
+  `HistGradientBoostingClassifier(max_depth=3, max_iter=200, learning_rate=0.05)`.
+  Every AUROC is compared with a permutation null that shuffles `correct` within
+  each question.
+- **Bayesian model (D22).** Logistic regression with one random intercept per
+  question, fitted by NUTS in NumPyro (2 chains, 500 warm-up and 2,000 draws each).
+  It reports R-hat, effective sample size and divergences with every fit. A held-out
+  question's intercept is drawn from the population prior, never fitted, so no
+  information leaks across folds.
+
+---
+
+## Related work
+
+**LLM-as-a-judge and its biases.** Zheng et al. (2023) introduced MT-Bench and
+the human judgments used here, found that GPT-4's agreement with experts matches
+the experts' agreement with each other, and documented position, verbosity and
+self-enhancement bias. Their "repetitive list" attack is this project's `verbose`
+condition. Shi et al. (2025) measured position bias in 15 judges on MT-Bench and
+DevBench. It varied by judge and task, was strongly affected by the quality gap
+between the two answers, and only weakly by their length. Norman, Rivera and Hughes (2026) evaluated 21 judges on
+MT-Bench, JudgeBench and RewardBench. Raw agreement overstated chance-corrected
+agreement by 33.8–41.3 points on MT-Bench for every judge, which is why κ
+accompanies every accuracy here. Measured as the correlation between length and
+verdict on unmodified pairs, verbosity bias was small across their cohort.
+
+**Calibration of judges.** Tian et al. (2025) evaluated 14 judges on JudgeBench
+with stated, sampled and token-probability confidence and found all three
+overconfident in most models. They propose an ensemble that fuses several judges'
+verdicts and critiques. This project measures the same three kinds of confidence
+for a single small open judge, against human rather than objective labels.
+
+**Selective evaluation.** Jung, Brahman and Choi (2025) choose a confidence
+threshold on a small calibration set by fixed-sequence testing, guaranteeing a
+chosen level of human agreement among the verdicts accepted. They build confidence
+by simulating diverse annotators, and escalate from Mistral-7B to GPT-3.5 and
+GPT-4. The guarantee held when calibration and test pairs came from disjoint sets
+of models. The items their judges abstained on had lower human agreement, which
+RQ2 and RQ5 test for here through `d_human`. Badshah, Emami and Sajjad (2026,
+SCOPE) introduce the order-swap signal used here (Bidirectional Preference
+Entropy) and set the threshold by conformal risk control, which bounds the error
+among accepted verdicts while calibration and deployment data are exchangeable.
+Neither paper tests answers modified to look better than they are.
+
+**Judges trained to judge, or trained to be calibrated.** auto-j (Li et al., 2024)
+is a 13B judge fine-tuned on GPT-4 critiques of Chatbot Arena pairs; RQ7 evaluates
+it. Jev, a proprietary model from TypeSafe AI, is a decision-only judge: it returns a
+probability for every label and no generated text. Li, Miao, Krishnan and Padman
+(2026) evaluated it directly as a judge, noting that a typed probability output does
+not by itself make a judge accurate or calibrated. It rarely reverses a verdict when the answers swap, and its confidence is
+informative about its errors. But on pairs where the wrong answer is more
+elaborately written, the error among its confident verdicts rises. kev-8b, the
+open stand-in RQ6 evaluates, was built in imitation of Jev and is not Jev.
+
+**Uncertainty decomposition.** The split of the ensemble's entropy into an
+aleatoric part (the average entropy of each prompt) and an epistemic part (the
+extra entropy from the prompts disagreeing) is the mutual-information
+decomposition behind BALD (Houlsby et al., 2011), applied here to prompts instead
+of model weights.
 
 ---
 
 ## RQ1 — Is the judge's stated confidence calibrated?
 
-*Written 17 Sep 2026, paths updated 18 Sep 2026 (output filenames now carry
-`Config.model_slug`, `src/config.py`, so a second judge model's results never
-overwrite this one's). Data: `results/items_qwen2.5_7b_instruct.parquet`, filtered to `condition == "clean" AND prompt_variant == "P1"` (invariant 14) and `human_label` non-null — this drops 68 of the 1904 non-tie items, each a genuine 50/50 non-tie human split with no majority label (`data.py::build_items()`; not a data bug), leaving **N = 1836**. Analysis: `analysis/rq1.py`. Figures: `results/figures/reliability_{conf_verb,conf_lp,conf_sc,conf_bpe}_qwen2.5_7b_instruct.png`. All CIs are cluster bootstraps, B=2000, grouped on `question_id` (invariant 2).*
+*Data: `results/items_qwen2.5_7b_instruct.parquet`, filtered to `condition == "clean" AND prompt_variant == "P1"` (invariant 14) and `human_label` non-null — this drops 68 of the 1904 non-tie items, each a genuine 50/50 non-tie human split with no majority label (`data.py::build_items()`; not a data bug), leaving **N = 1836**. Analysis: `analysis/rq1.py`. Figures: `results/figures/reliability_{conf_verb,conf_lp,conf_sc,conf_bpe}_qwen2.5_7b_instruct.png`. All CIs are cluster bootstraps, B=2000, grouped on `question_id` (invariant 2).*
 
 **Headline: the judge is measurably overconfident.** Its own verbalized confidence
 (`conf_verb`) overstates its actual accuracy by **0.192 [0.172, 0.213]** when scored
@@ -78,14 +363,13 @@ pairs with *no real content difference to judge* (0.970 identical, 0.973 empty) 
 RQ1's overconfidence finding and the vacuum test's false-confidence finding are two independent measurements pointing at the same underlying problem: the judge's stated confidence tracks something other than its actual likelihood of being right.
 
 **Caveat for `conf_lp`/`conf_bpe`'s `reliability`/`resolution` numbers specifically.**
-`brier_decomposition()`'s reconstruction identity (`brier = reliability - resolution + uncertainty`) is exact only when every bin shares one literal confidence value — true for the two discrete signals here (`conf_verb`: 4 unique values, `conf_sc`: 5), so their reconstruction matches `brier()` to floating-point precision. The continuous ones (`conf_lp`, `conf_bpe_prob`, `conf_lp_bidir`) fall through `ece()`'s `"auto"` strategy to quantile binning instead, where `reliability`/`resolution` are computed from each bin's *mean* confidence rather than each item's own value — a real, expected "grouping loss" gap from `brier()`, not a bug. `results/rq1_table_{model_slug}.csv` reports `reliability`/`resolution` alongside `ece`/`mce`/`brier` (computed directly, unaffected by this); treat the former two as describing the *binned* forecast for these signals, not a claim they reconstruct `brier()` to the letter.
+`brier_decomposition()`'s reconstruction identity (`brier = reliability - resolution + uncertainty`) is exact only when every bin shares one literal confidence value — true for the two discrete signals here (`conf_verb`: 4 unique values, `conf_sc`: 5), so their reconstruction matches `brier()` to floating-point precision. The continuous ones (`conf_lp`, `conf_bpe_prob`, `conf_lp_bidir`) fall through `ece()`'s `"auto"` strategy to quantile binning instead, where `reliability`/`resolution` are computed from each bin's *mean* confidence rather than each item's own value — a real, expected "grouping loss" gap from `brier()`, not a bug. `results/rq1_table_qwen2.5_7b_instruct.csv` reports `reliability`/`resolution` alongside `ece`/`mce`/`brier` (computed directly, unaffected by this); treat the former two as describing the *binned* forecast for these signals, not a claim they reconstruct `brier()` to the letter.
 
 ---
 
 ## RQ2 — Is any cheap uncertainty signal informative about error?
 
-*Written 17 Sep 2026, paths updated 18 Sep 2026 (model-namespaced filenames -
-see RQ1's metadata line). Data: same population as RQ1 — `results/items_qwen2.5_7b_instruct.parquet` filtered
+*Data: same population as RQ1 — `results/items_qwen2.5_7b_instruct.parquet` filtered
 to `(clean, P1)` and `human_label` non-null, **N = 1836** (invariant 14). Analysis:
 `analysis/rq2.py` (per-signal risk-coverage) and `analysis/rq5.py` (entropy threshold
 sweep, task 3.2b). Figures: `results/figures/risk_coverage_qwen2.5_7b_instruct.png` (the thesis figure),
@@ -165,7 +449,9 @@ is correctly out of scope (`n_contested = 31` in this population, below D9's
 `n_contested = 123`, which was computed on the full 2396-item corpus).
 
 Both `correct` and `conf_verb` rise with `d_human` (i.e. are lower on more-contested
-items), CI-backed under both a linear and a rank-only assumption:
+items), CI-backed under both a linear and a rank-only assumption
+(`results/figures/human_disagreement_qwen2.5_7b_instruct.png`, table
+`results/human_disagreement_table_qwen2.5_7b_instruct.csv`):
 
 | target | OLS slope | Spearman ρ |
 |---|---|---|
@@ -215,8 +501,7 @@ either way).
 
 ## RQ3 — Does uncertainty flag bias-induced errors, or is the fooled judge confident?
 
-*Written 18 Sep 2026, RQ3b added same day once the `verbose` run (task 4.2) landed.
-RQ3a data: same population as RQ1/RQ2 — `results/items_qwen2.5_7b_instruct.parquet`
+*RQ3a data: same population as RQ1/RQ2 — `results/items_qwen2.5_7b_instruct.parquet`
 filtered to `(clean, P1)` and `human_label` non-null, **N = 1836**. This is a
 deliberate scope choice, not a data requirement: flip rate and confidence-on-flipped
 don't need `human_label` at all (they're pure judge-behavior signals, nothing to do
@@ -265,10 +550,9 @@ direction.
 **`conf_bpe`'s near-total collapse (0.307 vs. 0.998) is expected by construction,
 not an independent discovery.** `conf_bpe = 1 - entropy(mean p_a across both
 orders)` — it is *built from* cross-order agreement, so it is close to definitionally
-minimized exactly when the two orders disagree (a flip). This is the same caveat
-RQ1 already raised for `verdict_bidir`'s own suspiciously strong showing: a signal
-scored against (or, here, computed directly from) the same order-machinery it's
-being evaluated on will look artificially good on that specific axis. `conf_sc`'s
+minimized exactly when the two orders disagree (a flip). A signal computed directly
+from the same order machinery it is being evaluated on will look artificially good
+on that specific axis. `conf_sc`'s
 gap (−0.11) is real and worth noting but sits in between — self-consistency
 sampling doesn't use cross-order information directly, so its correlation with
 flipping is a genuine empirical finding, not a mechanical one.
@@ -323,7 +607,7 @@ reliability without any accuracy-side symptom to warn it.
 
 ## RQ4 — Can a cheap supervised meta-model beat the best single signal at predicting judge error?
 
-*Written 22 Sep 2026. Framed per `PLAN.md` §2.2's reframe — the question this
+*Framed per `PLAN.md` §2.2's reframe — the question this
 section actually answers is **which feature family carries the signal**, not
 "how good is my model." Three feature tiers (`src/features.py`): **Tier A** (8
 cols) — the judge's own uncertainty signals (`conf_verb`, `conf_lp`, `conf_sc`,
@@ -413,11 +697,11 @@ is not statistically real at this sample size, for either model, at any
 step. Honest reading: Tier A's own uncertainty signals already capture
 whatever surface and token-distribution features have to offer — adding
 them neither measurably helps nor measurably hurts. Figures:
-`rq4_ablation_{model_slug}.png` (every cell next to the baseline, with the permutation-null range shaded),
-`rq4_progression_{model_slug}.png` (forest plot of the 6 paired deltas),
-`rq4_permutation_nulls_{model_slug}.png` (every null AUROC against the observed one, per cell). Tables:
-`rq4_ablation_{model_slug}.csv`, `rq4_ablation_progression_{model_slug}.csv`,
-`rq4_ablation_null_{model_slug}.csv`.
+`rq4_ablation_qwen2.5_7b_instruct.png` (every cell next to the baseline, with the permutation-null range shaded),
+`rq4_progression_qwen2.5_7b_instruct.png` (forest plot of the 6 paired deltas),
+`rq4_permutation_nulls_qwen2.5_7b_instruct.png` (every null AUROC against the observed one, per cell). Tables:
+`rq4_ablation_qwen2.5_7b_instruct.csv`, `rq4_ablation_progression_qwen2.5_7b_instruct.csv`,
+`rq4_ablation_null_qwen2.5_7b_instruct.csv`.
 
 ### H4 — does the predictor's edge track human consensus? (5.6)
 
@@ -438,12 +722,12 @@ zero comfortably, H4 holds.** The predictor's edge genuinely grows with
 human consensus: judge error is learnable where humans agree (epistemic,
 reducible) and much less so where they don't (aleatoric, irreducible) — a
 clean positive result, in real contrast to the tier ablation's null finding
-above. No figure was required by the DoD; `h4_interaction_{model_slug}.png`
+above. No figure was required by the DoD; `h4_interaction_qwen2.5_7b_instruct.png`
 was added anyway (two panels, probability and log-odds) after the
 probability-space panel alone visually undersold the effect — sigmoid
 saturation compresses the slope difference exactly where most of the real
 data sits (high `oof_score`), while the log-odds panel shows it undistorted.
-Table: `rq4_h4_interaction_{model_slug}.csv`.
+Table: `rq4_h4_interaction_qwen2.5_7b_instruct.csv`.
 
 ### Transfer test 1 — train on clean, test on verbose (5.7)
 
@@ -475,7 +759,7 @@ that *combines* `conf_verb`/`conf_lp`/`conf_bpe` appears to buy real
 robustness no single signal has on its own, since AUROC only needs the
 combined rank-ordering to survive, not each signal's own calibration.
 Figure (not required by the DoD, added on request):
-`rq4_transfer_{model_slug}.png`.
+`rq4_transfer_qwen2.5_7b_instruct.png`.
 
 ### Transfer test 2 — `LeaveOneGroupOut` over category (5.8)
 
@@ -498,9 +782,9 @@ across task types rather than learning a "coding is hard" shortcut.
 `PLAN.md` §2.4's own "coding is hard" framing turned out, on inspection, to
 be an unexamined illustrative phrase carried into the plan text, not a
 reasoned hypothesis about this specific judge/dataset — the figure
-(`rq4_category_transfer_{model_slug}.png`, categories sorted
+(`rq4_category_transfer_qwen2.5_7b_instruct.png`, categories sorted
 weakest-to-strongest) deliberately does not single `coding` out, for the
-same reason. Table: `rq4_category_transfer_{model_slug}.csv`.
+same reason. Table: `rq4_category_transfer_qwen2.5_7b_instruct.csv`.
 
 ### Meta-model calibration and coefficients (5.9)
 
@@ -534,12 +818,12 @@ weight from Tier A. From Tier B: `abs_len_diff`, `longer_is_chosen`, and
 `category_reasoning` (negative — the `reasoning` category's own dummy). From
 Tier C: **nothing** — not one of the 13 CoT/token-distribution features
 clears zero, at the coefficient level, exactly matching the tier-level
-null. Figures: `rq4_coefficients_{model_slug}.png` (the 8 significant
+null. Figures: `rq4_coefficients_qwen2.5_7b_instruct.png` (the 8 significant
 coefficients only — the full 37-row version was unusably tall for a slide
 at the annotated forest-plot spacing, ~35in — kept as a dense, unannotated
-appendix, `rq4_coefficients_full_{model_slug}.png`) and
-`reliability_rq4_meta_model_{model_slug}.png`. Table:
-`rq4_coefficients_{model_slug}.csv` (all 37 rows).
+appendix, `rq4_coefficients_full_qwen2.5_7b_instruct.png`) and
+`reliability_rq4_meta_model_qwen2.5_7b_instruct.png`. Table:
+`rq4_coefficients_qwen2.5_7b_instruct.csv` (all 37 rows).
 
 ### The Bayesian model joins RQ4 (5.9b, 5.9c)
 
@@ -561,7 +845,7 @@ runtime for the full 5-fold×10-repeat protocol (not extrapolated): about
 **9 minutes**, N=1819, Tier A — `n_repeats=10` used as originally planned.
 Every fit uses 2 chains × 2,000 draws after 500 warmup. Convergence at that
 full scale: **0/50 fold-fits flagged** — worst R-hat 1.008, lowest ESS 611,
-no divergences — visible in `rq4_bayesian_convergence_{model_slug}.png`
+no divergences — visible in `rq4_bayesian_convergence_qwen2.5_7b_instruct.png`
 (R-hat per real fold-fit, D22's 1.01 threshold line). At 1,000 draws, 13/50
 fits sat just above 1.01 (worst 1.016); an earlier count of 1/50 came from
 R-hat values rounded to two decimals (D22 amendment). Features are standardized on each
@@ -598,9 +882,9 @@ on Tier A. What it adds is structural: the frequentist model has no native
 posterior, so NLL and credible-interval coverage don't exist for it, and the
 posterior draws are what RQ5's meta-model-level entropy decomposition is
 built from. Table:
-`rq4_bayesian_comparison_{model_slug}.csv`. Figures:
-`reliability_rq4_bayesian_meta_model_{model_slug}.png`,
-`rq4_bayesian_convergence_{model_slug}.png`.
+`rq4_bayesian_comparison_qwen2.5_7b_instruct.csv`. Figures:
+`reliability_rq4_bayesian_meta_model_qwen2.5_7b_instruct.png`,
+`rq4_bayesian_convergence_qwen2.5_7b_instruct.png`.
 
 ### Limitations carried forward from RQ4 into RQ5's Bayesian-model sections
 
@@ -619,7 +903,7 @@ has been empirically stress-tested either.
 
 ## RQ5 — Does marginalizing over the judge prompt improve uncertainty quality, and does that improvement survive distillation to single-call cost?
 
-*Written 22 Sep 2026. RQ5's threshold-sweep task (3.2b — does epistemic
+*RQ5's threshold-sweep task (3.2b — does epistemic
 thresholding beat total thresholding on AURC?) is already written up inside
 RQ2's own section above, where it sits naturally alongside RQ2's other
 risk-coverage work; it is not repeated here. This section covers the three
@@ -692,12 +976,29 @@ depending on how the question is phrased. The Bayesian model's captures the
 *meta-model's own task-targeted parameter uncertainty* — how confident is a
 model trained specifically to predict error about its prediction for this
 item. The task-targeted signal wins decisively, even though it costs a
-third as much to obtain. Figure: `rq5_distillation_{model_slug}.png`
+third as much to obtain.
+
+**Why the comparison is fair although the two signals measure different
+things.** AUROC does not ask whether two signals measure the same quantity. It
+asks only whether a signal ranks the judge's wrong verdicts above its right
+ones, and it depends only on that ranking, not on the signal's scale or units.
+That is exactly the job both signals are offered for here: a per-item score that
+decides which verdicts to escalate to a human. A practitioner choosing between
+them needs to know which one does that job better, whatever each one measures,
+so comparing them by AUROC on the same items is the right test. The result also
+has a plausible explanation. The ensemble's epistemic signal measures something
+related to error only indirectly (whether rewording the prompt changes the
+verdict), and three prompts can agree and still be wrong together, as RQ2's
+threshold sweep showed. The Bayesian model's signal comes from a model trained
+directly to predict error, so it targets the quantity the triage decision needs.
+What the comparison does not show is that one kind of uncertainty is better in
+general: the ECE comparison above, unlike AUROC, does depend on scale, and favours
+the model that was trained and calibrated for the purpose. Figure: `rq5_distillation_qwen2.5_7b_instruct.png`
 (the Bayesian AUROC is deliberately shown as a point without an interval,
 rather than borrowing 5.9c's differently-typed D8-across-repeat-spread
 interval and implying a false equivalence with the ensemble's own
-cluster-bootstrap CI). Tables: `rq5_distillation_{model_slug}.csv`, and the paired gaps in
-`rq5_distillation_gaps_{model_slug}.csv`.
+cluster-bootstrap CI). Tables: `rq5_distillation_qwen2.5_7b_instruct.csv`, and the paired gaps in
+`rq5_distillation_gaps_qwen2.5_7b_instruct.csv`.
 
 ### Human-disagreement validation (5.9e)
 
@@ -738,11 +1039,11 @@ does track real human disagreement. Epistemic shows no such relationship
 used throughout holds up against this independent, model-free check: real
 human votes were never used to build the entropy decomposition, and it
 still lines up with them exactly the way the vocabulary claims it should.
-Figure: `d_human_correlations_ensemble_entropy_{model_slug}.png` (extends
+Figure: `d_human_correlations_ensemble_entropy_qwen2.5_7b_instruct.png` (extends
 `plot_d_human_correlations()`, task 3.4's own figure function, via a new
 `filename_suffix` parameter added specifically so this call couldn't
 silently overwrite 3.4's existing figure under the same base filename).
-Table: `rq5_human_disagreement_{model_slug}.csv`.
+Table: `rq5_human_disagreement_qwen2.5_7b_instruct.csv`.
 
 ### Verbose-shift validation (5.9f)
 
@@ -800,9 +1101,9 @@ Separately notable: epistemic's absolute scale (~0.004 nats) is roughly
 simple 3-feature model's parameter uncertainty is nearly negligible next
 to the irreducible per-item noise, a real finding about the model itself,
 not a side effect of the shift test. Figure:
-`rq5_verbose_shift_{model_slug}.png` (each gap with its CI, on separate
+`rq5_verbose_shift_qwen2.5_7b_instruct.png` (each gap with its CI, on separate
 axes, since epistemic's scale is ~100× smaller than aleatoric's). Table:
-`rq5_verbose_shift_{model_slug}.csv`.
+`rq5_verbose_shift_qwen2.5_7b_instruct.csv`.
 
 **Reading: this Bayesian model's meta-model-level epistemic signal does not
 correctly recognize the verbose distribution shift.** If anything, both
@@ -838,27 +1139,24 @@ that its Bayesian construction is supposed to provide close to "for free."
 
 ---
 
-## RQ6 — Stress-testing the industry's calibration counterclaim (kev-8b)
+## RQ6 — An open stand-in for a decision-only judge (kev-8b)
 
-*Added 22–23 Sep 2026, owner-initiated (not professor feedback) —
-`DECISIONS.md` D27, `PLAN.md` §7, `TASKS.md`'s own K1–K5/GATE K addendum
-block, kept outside the W0–W7 numbering specifically so it can be trimmed
-without renumbering anything else if later feedback says to scope it
-down.*
+*An owner-initiated addition to the original five questions (`DECISIONS.md` D27,
+`PLAN.md` §7).*
 
 **Out-of-domain caveat, stated here first because it must never be a
 footnote: kev-8b was never trained on pairwise response judging.** TypeSafe
-AI's Jev is a proprietary, non-autoregressive "System One Model," RLCD-
-trained specifically to produce calibrated typed decisions, and publicly
-positioned as having solved the exact failure mode this project studies.
-It discloses no weights, size, or training data, and when this arm was
-designed (D27) no independent benchmark of it existed. `kev-8b` (`jaredpalmer/kev`,
-Apache-2.0) is an independently-built open stand-in — explicitly "inspired
-by the System One approach of TypeSafe's Jev," not a distillation, and
-benchmarked by its own authors against real Jev output (93.21% vs. 90.12%
-agreement on 324 held-out examples, vs. 66.36% for the untrained base
-model) — the strongest evidence among three candidates considered that it
-is a fair proxy. Two other open stand-ins (`Bespoke-Nimble-9B`,
+AI's Jev is a proprietary decision-only judge: it returns a probability for
+every label and no generated text. Its size, training recipe and data are
+not public (Li et al., 2026), and when this arm was designed (D27) no
+independent evaluation of it existed. `kev-8b` (`jaredpalmer/kev`,
+Apache-2.0) is an independently built open model that its README describes
+as inspired by Jev. It is not a distillation of Jev. The README also reports
+its agreement with Jev's output on 324 held-out examples (93.21% and 90.12%
+in two settings, against 66.36% for the untrained base model). These are
+the authors' own figures, not a peer-reviewed result, but they were the
+strongest evidence among the candidates considered that it is a reasonable
+proxy. Two other open stand-ins (`Bespoke-Nimble-9B`,
 `circuit-8b`) and a fourth candidate (`SemIf`, a cluster of non-canonical
 hobbyist repos with unverifiable benchmark claims) were evaluated and
 rejected on token-cap and evidentiary grounds — full comparison in
@@ -868,7 +1166,7 @@ classification/QA, never a pairwise judgment task. Every result below is
 an out-of-domain generalization test, not an apples-to-apples "best-in-
 class judge" comparison.
 
-**Update, October 2026: Jev itself has since been evaluated directly.**
+**Jev itself has since been evaluated directly.**
 Li, Miao, Krishnan and Padman (*JEV-as-a-Judge*, arXiv:2609.26550, first
 posted 22 Sep 2026, the same day as D27) test Jev 1.13 through its hosted API
 against sixteen other judges on RewardBench, JudgeBench, HaluEval and RM-Bench.
@@ -931,7 +1229,8 @@ ECE, Brier and the gap for `conf_kev_bpe` use `conf_kev_bpe_prob`; AUROC uses
 | out-of-coverage | `conf_kev_bpe` | **0.0619** | [0.0442, 0.1062] | **+0.0547** | **0.7806** | [0.7231, 0.8313] |
 
 **`conf_kev_bpe` beats `conf_kev` on every metric, in both regimes.** This
-replicates, on a completely different non-autoregressive architecture, the
+replicates, on a completely different kind of model (one forward pass, one
+probability per option, no generated text), the
 exact pattern this project already found for the primary Qwen judge — its
 own bidirectional-entropy signal, `conf_bpe`, was RQ1/RQ2's best performer
 too. Both signals are overconfident: `conf_kev` by +0.13 to +0.15,
@@ -1061,7 +1360,7 @@ modeling failure. Figures:
 
 - **Every result here is an out-of-domain generalization test, restated:**
   kev-8b was never trained on pairwise response judging. A weaker
-  or absent effect could mean the counterclaim holds, or could mean the
+  or absent effect could mean this kind of model resists the failure, or could mean the
   task is simply unfamiliar to the model in a way that has nothing to do
   with calibration quality — this project cannot fully separate the two
   explanations, and neither should any reading of the results above.
@@ -1094,10 +1393,8 @@ modeling failure. Figures:
 
 ## RQ7 — Generalizing across training objective (auto-j-13b)
 
-*Added 23–24 Sep 2026, owner-initiated (not professor feedback) —
-`DECISIONS.md` D28, `PLAN.md` §8, `TASKS.md`'s own L1–L6/GATE L addendum
-block, kept outside the W0–W7 numbering for the same reason the K-block
-is: isolable/trimmable later without renumbering anything else.*
+*An owner-initiated addition to the original five questions (`DECISIONS.md` D28,
+`PLAN.md` §8).*
 
 **Purpose-built-for-judging framing, stated here first — the inverse of
 RQ6's own caveat.** Where kev-8b (RQ6) was never trained on pairwise
@@ -1203,7 +1500,7 @@ unchanged). N=1,770 (`clean`, human-labeled, `flipped` present).*
 | turn=2 | " | " | `conf_sc_bpe_autoj` | **−0.5512** | [−0.5754, −0.5233] |
 
 **The standout result of this arm: auto-j's own flip rate (12.5%/13.8%)
-is roughly half the primary judge's (27.8%) and kev-8b's (23.7–24.6%) on
+is roughly half the primary judge's (27.8%) and kev-8b's (21.1–24.6%) on
 the identical test.** This is the first evidence in this project that
 purpose-built judge training can *reduce* position bias itself, not just
 report it more honestly after the fact — every other cross-architecture
@@ -1359,6 +1656,38 @@ turn=2 one fit with a single divergence; worst R-hat 1.007, lowest ESS 410. Figu
 
 ---
 
+## Three judges side by side
+
+Each judge's order-swap agreement signal is the one signal all three have, and the
+best error-ranker for each. Figure `results/figures/judge_comparison.png` (a
+dark-theme copy, `judge_comparison_dark.png`, is for the README) puts the four
+headline tests side by side. Every value and interval is copied from the RQ table
+that reported it (`analysis/compare_judges.py`, table `results/judge_comparison.csv`).
+kev-8b is split by coverage regime and auto-j by turn, as in RQ6 and RQ7; auto-j's
+padding row uses the greedy-only form of its signal.
+
+| judge (population) | AUROC (error detection) | overconfidence gap | flip rate | Δ ECE, padded − clean |
+|---|---|---|---|---|
+| Qwen2.5-7B | 0.794 [0.767, 0.819] | 0.103 [0.086, 0.122] | 0.278 [0.248, 0.308] | **+0.043 [0.011, 0.052]** |
+| kev-8b, in coverage | 0.772 [0.741, 0.800] | 0.066 [0.047, 0.087] | 0.246 [0.195, 0.300] | −0.029 [−0.045, −0.002] |
+| kev-8b, out of coverage | 0.781 [0.723, 0.831] | 0.055 [0.022, 0.091] | 0.211 [0.155, 0.282] | −0.006 [−0.060, 0.039] |
+| auto-j-13b, turn 1 | 0.683 [0.647, 0.721] | 0.134 [0.099, 0.170] | 0.125 [0.090, 0.162] | −0.025 [−0.063, 0.011] |
+| auto-j-13b, turn 2 | 0.681 [0.637, 0.722] | 0.100 [0.070, 0.132] | 0.138 [0.108, 0.169] | −0.034 [−0.067, 0.012] |
+
+![Three judges compared on error detection, overconfidence, position bias and the padding attack](results/figures/judge_comparison.png)
+
+- Every judge is overconfident on this signal; every interval is above zero.
+- auto-j flips about half as often as the other two when the answers swap.
+- Only Qwen's calibration gets significantly worse under padding.
+- auto-j's padding row covers only the calls that produced a verdict (RQ7: up to
+  39.8% did not).
+
+The intervals are per judge. No judge-vs-judge test was run, and the populations
+differ (kev-8b skips 52 padded items; auto-j skips over-length prompts and loses
+non-answers), so the rows are compared descriptively.
+
+---
+
 ## What would auto-accepting cost? (post-hoc)
 
 **This section is a post-hoc, descriptive analysis.** It was not preregistered and
@@ -1367,7 +1696,7 @@ would use: *if a pipeline trusted this judge's confident verdicts, how many wron
 verdicts would reach production?*
 
 **Setup.** A pipeline accepts every verdict whose confidence clears a threshold and
-sends the rest to a human. For each judge, signal and condition we measure four
+sends the rest to a human. For each judge, signal and condition I measure four
 things (`src/metrics.py::auto_accept_stats`, `analysis/auto_accept.py`):
 
 - the **accepted share** (how much work the judge takes off humans);
@@ -1466,13 +1795,154 @@ The interactive version of this analysis is section 04 of the
 
 ---
 
+## Discussion
+
+**Does the judge know when it is wrong? Partly, but not from what it says.** Its
+stated confidence is of little use: it is overconfident (RQ1) and only weakly ranks
+its own errors (AUROC 0.64, RQ2). The probability of its verdict token is no
+better calibrated, even more overconfident, though it ranks errors somewhat better.
+Both read the judge at a single moment, and at that moment the judge almost always
+sounds sure, consistent with Tian et al.'s finding that stated and token-probability
+confidence are overconfident in most judges. What works best is the judge's
+behaviour: whether its verdict survives swapping the order of the two answers. That
+signal does not ask the judge how sure it is. It checks whether the judge gives the
+same answer twice, and so measures instability directly.
+
+**The best signal is also the one the attack breaks.** Position bias is partly
+caught: the flips are exactly what the order-swap signal measures, while the judge's
+stated confidence drops by only about 2 points on the items whose verdict flipped
+(RQ3a). Padding is worse. It does not produce more wrong verdicts, but it quietly
+degrades every signal meant to flag them, and the order-swap signal's calibration is
+the one that gets significantly worse (RQ3b). The misled judge stays confident. The
+threshold-setting methods (Jung et al., 2025; SCOPE) rely on the data used to choose
+the threshold resembling the data the judge sees in deployment, and a padded answer
+breaks that assumption without any visible sign. Li et al. (2026) found errors rising
+for Jev on pairs where the wrong answer was more elaborately written, which suggests
+the weakness is not specific to one judge. One result points the other way: a
+meta-model that combines the signals, trained on clean answers only, ranked errors on
+padded answers as well as on clean ones (RQ4, transfer test 1). Combining signals
+bought a robustness no single signal had on its own.
+
+**More machinery did not buy better ranking, but it did buy calibration.** The
+meta-models (RQ4) and the three-prompt ensemble (RQ5) all land near the best single
+signal. The judge's own signals already carry what is recoverable, so none of the
+added machinery uncovers a new one. One reading is that the remaining errors sit
+where the labels themselves are uncertain. The judge agrees with the human majority
+at κ = 0.514, against 0.683 for humans with each other, and it is less often right on
+items where the human votes were split. The meta-model's own results point the same
+way: its edge in predicting errors grows with how strongly the humans agreed (RQ4,
+H4). The data are consistent with this reading, but do not prove it. The silver lining is the single-call Bayesian model. It keeps
+almost all of the ensemble's ranking at a third of the cost and is better calibrated.
+It failed, though, at the one thing it was specifically meant to do: recognising when
+the inputs had shifted.
+
+**Training a judge to judge changes its failures but does not remove them.** All
+three judges are overconfident. auto-j, trained specifically for pairwise judging,
+flips about half as often as the other two when the answers swap (RQ7), but it is
+worse at detecting its own errors, and it brings a failure neither other judge
+showed: on padded inputs it often produces no verdict at all, 39.8% of the time on
+turn-2 items. The judge's output ran past its 1,024-token limit before it reached a 
+verdict, sometimes because a long critique ran out of room and sometimes because the 
+output degenerated into repetition. kev-8b, built in imitation of Jev, is less 
+overconfident than the primary judge, and its calibration survives the padding attack 
+(RQ6). The takeaway is that a "calibrated" label, from a vendor or a training recipe, 
+is a claim to test on one's own data, not a property to assume.
+
+**What a practitioner should do.**
+
+1. Never auto-accept on stated confidence. At a 0.9 threshold, 98.4% of the primary
+   judge's wrong verdicts would get through.
+2. Run both answer orders and use their agreement as the confidence, or a model
+   recalibrated on it.
+3. Report Cohen's κ alongside raw accuracy, never accuracy alone. Raw agreement
+   overstates how good a judge is.
+4. Set the acceptance threshold on held-out data, and stress-test it with padded
+   answers before trusting it.
+
+## Limitations
+
+Each RQ section ends with its own limitations. This section covers the ones that apply
+to the whole study.
+
+1. **One small benchmark.** Everything rests on MT-Bench: 80 questions, pairwise
+   comparisons, in English. The answers being judged come from six models of 2023
+   (GPT-4, GPT-3.5-turbo, Claude-v1, Vicuna-13B, Alpaca-13B and LLaMA-13B). Only the
+   80 questions are independent, so the confidence intervals are honest but wide.
+   Where the study finds "no significant difference", as in RQ4 and RQ5, read it as
+   not detected, rather than absent. The results may not carry over to RAG, agent or
+   code evaluation, or to answers written by current models.
+
+2. **Noisy labels, with the hardest items removed.** The human majority is treated as
+   ground truth, but 1,241 of the 1,836 labelled items rest on a single human vote,
+   which is one person's opinion rather than a consensus. Items where the human votes
+   tied were dropped (the strict tie policy, D1), because a tie gives no majority
+   label to score the judge's A-or-B verdict against, and 68 more items with an exact
+   50/50 split had no majority label. The study therefore measures the judge on the
+   clearer items. The real-world error rate, and the difficulty of flagging errors,
+   are probably higher than reported.
+
+3. **Few judges, each in one setup.** Qwen2.5-7B, the primary judge, was run with one
+   main prompt and JSON-formatted output, and its confidence may depend on that
+   wording; only three prompt variants were tried. kev-8b was built in imitation of
+   Jev and is not Jev, so RQ6 says nothing directly about Jev. auto-j ran 4-bit
+   quantized, which may explain some of its repetitive output and missing verdicts; a
+   full-precision model might do better. The three judges are compared descriptively:
+   their item populations differ (kev-8b skips 52 padded items, auto-j skips
+   over-length prompts and loses its non-answers), and no judge-versus-judge test was
+   run.
+
+4. **Only two manipulations.** The bias tests cover answer-order swapping and one
+   padding style, the repetitive list from Zheng et al. (2023). Real manipulation is
+   broader: flattery, appeals to authority, confident wording, prompt injection. The
+   study shows that padding degrades the best signal; it does not show that any judge
+   or signal is robust to the attacks it did not test.
+
+5. **Post-hoc analysis and possible training-data overlap.** The auto-accept analysis
+   is post-hoc and descriptive. Its thresholds are fixed values applied to the same
+   data, not chosen on held-out data as a deployed system would choose them, so its
+   numbers describe the judge rather than predict deployment. MT-Bench and its GPT-4
+   judgments have been public since 2023, so any of the judges may have seen them in
+   training. This cannot be checked from the outside. If it happened, it would make
+   the judges look more accurate here than on new data.
+
+
+## Extensions
+
+Each extension below addresses one of the limitations above.
+
+1. **More benchmarks and current models.** Repeat the study on other human-labelled
+   pairwise data, and on answers written by current models, to test whether the
+   findings hold beyond MT-Bench's 80 questions and 2023 answers (limitation 1).
+
+2. **More manipulation types.** Add the attacks this study did not test, such as
+   flattery, appeals to authority, confident wording and prompt injection, to see
+   whether the order-swap signal fails under them the way it does under padding
+   (limitation 4).
+
+3. **Jev itself, and fairer setups.** Replace kev-8b with Jev, which Li et al. (2026)
+   evaluated through its hosted API, or with one of the open decision models they
+   found to match Jev's accuracy on their benchmarks. Not every model of this kind
+   qualifies: in the same study, the open-weight Laya models were at chance on
+   preference pairs and their confidence carried no information about their errors.
+   Run auto-j in full
+   precision to separate its own behaviour from the effects of quantization, and
+   choose a primary judge of comparable size and generation, so the three-judge
+   comparison measures the judges rather than their setups (limitation 3).
+
+4. **Thresholds chosen on held-out data, with a guarantee.** Choose the auto-accept
+   threshold on a separate calibration set, by fixed-sequence testing (Jung et al., 2025)
+   or conformal risk control (SCOPE), and test whether the promised error rate
+   holds on the remaining items, clean and padded. This turns the post-hoc auto-accept
+   analysis into a prospective one, and tests directly whether padding breaks the
+   guarantee (limitation 5).
+
+---
+
 ## Methods notes
 
-Small, dated empirical observations that inform a design decision but don't belong to
-a specific RQ section yet. Promoted into the relevant RQ section once that section is
-written.
+Empirical checks behind specific design decisions. The RQ sections above refer to them.
 
-### Temperature scaling invalidates `p_a` for `sample_idx > 0` (D6) — confirmed empirically, 8 Sep 2026
+### Temperature scaling invalidates `p_a` for `sample_idx > 0` (D6) — confirmed empirically
 
 **Claim (D6):** `p_a` (renormalised P(A) from top-K logprobs) is only valid for the
 canonical greedy call (`sample_idx == 0`, T=0). Sampled draws (`sample_idx > 0`, T=0.7)
@@ -1502,34 +1972,30 @@ it doesn't change the model's actual decision. `conf_lp`/`p_a` correctly come fr
 Analysis script: ad hoc, not checked in (see `runs/judge_clean.jsonl` + `runs/logprobs/`
 from task 1.6's pilot for the underlying data).
 
-### Verbose prompt-token multiplier, throwaway padding — 8 Sep 2026
+### How much longer the padded prompts are
 
-**Purpose:** an early, rough read on how much longer `verbose` condition prompts get,
-to sanity-check the GPU-budget extrapolation ahead of the real `verbose_pad()` (task
-4.1, W4). Deliberately throwaway - the padding used here (a fixed filler sentence
-repeated 5x, appended to each assistant turn) is not the real repetitive-list-attack
-design from Zheng et al. §3.3 that task 4.1 will implement.
+**Purpose:** the size of the padding attack, measured on the prompts the primary
+judge actually received. It is the context for RQ3b, and for the length limits that
+excluded padded items from kev-8b (RQ6) and auto-j (RQ7).
 
-**Method:** 10 items sampled from the dataset (seed 1234), `P1`/`AB` prompts rendered
-both clean and with the throwaway padding applied to both sides' conversations, real
-token counts via `Qwen/Qwen2.5-7B-Instruct`'s own tokenizer (not a character-count
-approximation).
+**Method:** for each of the 1,904 items, the prompt token count of the greedy P1 call
+in AB order, `verbose` against `clean`, as recorded by vLLM in
+`calls_qwen2.5_7b_instruct.parquet`.
 
-**Result:** multiplier ranged 1.07x–1.44x across the 10 items, mean **1.19x**.
+**Result:** padding multiplies the prompt length by 2.9 on average (median 3.1, range
+1.1–4.3), 2.8 for turn-1 items and 3.3 for turn-2 items. The median prompt grows from
+849 to 2,473 tokens, and the longest padded prompt is 11,746 tokens.
 
-**Conclusion:** consistent with `TASKS.md` task 1.6's own stated expectation
-("+20-40% wall-clock, not 2-3x - padding lengthens the prompt, and prefill is cheap
-next to decode"), now backed by a real tokenizer measurement rather than an assumption.
-The real `verbose_pad()` (task 4.1) may land at a different multiplier - this is a
-sanity check on the current GPU-budget estimate's order of magnitude, not a
-substitute for re-extrapolating once the real perturbation exists.
+**Conclusion:** the attack roughly triples what the judge has to read without adding
+information. Turn-2 prompts grow most, because both answers in the conversation are
+padded, which is why the length-limited judges lose mostly padded turn-2 items.
 
-### Vacuum test — "dark current" (task 1.8, LEARNING.md A8) — 10 Sep 2026
+### Vacuum test — "dark current" (task 1.8)
 
 **Purpose:** does the judge express a spurious preference when there is genuinely no
-content difference to base one on? Our JSON schema forces a binary `verdict` with no
-tie option (unlike the Dark Current paper's own `DC(J) = count(J(o) != 'tie') / N`
-metric), so "does it pick a winner" is trivially 100% by construction - the
+content difference to base one on? My JSON schema forces a binary `verdict` with no
+tie option (unlike the dark-current metric of Usami et al. (2026),
+`DC(J) = count(J(o) != 'tie') / N`), so "does it pick a winner" is trivially 100% by construction - the
 informative question is *how* it picks, not whether.
 
 **Method:** 40 pairs of identical responses (`vacuum_identical()` - one real item's
@@ -1573,9 +2039,9 @@ W1 sanity check, not a powered study) - treat the specific percentages as descri
 not as a precise population estimate of the judge's true positional bias rate.
 
 Analysis script: `analysis/vacuum.py` (reads `runs/{model_slug}/vacuum.jsonl`, written by
-`src/vacuum_test.py`). Table: `vacuum_{model_slug}.csv`.
+`src/vacuum_test.py`). Table: `vacuum_qwen2.5_7b_instruct.csv`.
 
-### Decoding ablation — constrained vs. free-form (task 4.5, D25) — 18 Sep 2026
+### Decoding ablation — constrained vs. free-form (task 4.5, D25)
 
 **Purpose:** D25 found that JSON-schema-constrained decoding renormalizes the
 verdict-position logprobs, inflating `conf_lp`. That's a known, bounded distortion of
@@ -1628,7 +2094,7 @@ some branch point, not sampling noise.
    the `vllm` pin (for `logprobs_mode="raw_logprobs"`) in a future run, not something to
    act on inside this project's remaining timeline.
 
-### Calibration forms and convergence counts — corrected 24 Sep 2026
+### Calibration forms and convergence counts — corrected
 
 Two errors in earlier drafts of this report, both found while reviewing the
 figures, and what changed after fixing them.
@@ -1668,3 +2134,37 @@ cleared almost all of them (D22 amendment); AUROC, ECE and every conclusion
 moved only in the third or fourth decimal. The Bayesian result tables now
 also record worst R-hat, lowest ESS and divergence counts, not just the
 number of flagged fits.
+
+
+---
+
+## References
+
+- Badshah, S., Emami, A. and Sajjad, H. (2026). SCOPE: selective conformal
+  optimized pairwise LLM judging. ICML 2026. arXiv:2602.13110.
+- Geifman, Y. and El-Yaniv, R. (2017). Selective classification for deep neural
+  networks. NeurIPS 2017.
+- Houlsby, N., Huszár, F., Ghahramani, Z. and Lengyel, M. (2011). Bayesian active
+  learning for classification and preference learning. arXiv:1112.5745.
+- Jung, J., Brahman, F. and Choi, Y. (2025). Trust or escalate: LLM judges with
+  provable guarantees for human agreement. ICLR 2025. arXiv:2407.18370.
+- Li, J., Sun, S., Yuan, W., Fan, R.-Z., Zhao, H. and Liu, P. (2024). Generative
+  judge for evaluating alignment (auto-j). ICLR 2024. arXiv:2310.05470.
+- Li, Y., Miao, Y., Krishnan, R. and Padman, R. (2026). JEV-as-a-Judge: accept
+  when confident, escalate when unsure. arXiv:2609.26550.
+- Norman, J. D., Rivera, M. U. and Hughes, D. A. (2026). Reliability without
+  validity: a systematic, large-scale evaluation of LLM-as-a-judge models across
+  agreement, consistency, and bias. arXiv:2606.19544.
+- Shi, L., Ma, C., Liang, W., Diao, X., Ma, W. and Vosoughi, S. (2025). Judging
+  the judges: a systematic study of position bias in LLM-as-a-judge. IJCNLP-AACL
+  2025. arXiv:2406.07791.
+- Tian, Z., Han, Z., Chen, Y., Xu, H., Yang, X., Xuan, R., Wang, H. and Liao, L.
+  (2025). Overconfidence in LLM-as-a-judge: diagnosis and confidence-driven
+  solution. AAAI 2026. arXiv:2508.06225.
+- Usami, H., Hara, K., Tsuboi, A. and Matsuda, N. (2026). LLM judges have dark
+  current: a psychometric datasheet for LLM-as-a-judge evaluation.
+  arXiv:2606.15610.
+- Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z., Zhuang, Y., Lin, Z.,
+  Li, Z., Li, D., Xing, E., Zhang, H., Gonzalez, J. E. and Stoica, I. (2023).
+  Judging LLM-as-a-judge with MT-Bench and Chatbot Arena. NeurIPS 2023 Datasets
+  and Benchmarks. arXiv:2306.05685.

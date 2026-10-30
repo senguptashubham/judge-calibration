@@ -274,6 +274,13 @@ Train the Bayesian model on `clean`, evaluate on `verbose`. Preregistered predic
 
 ## 7. RQ6 — stress-testing the industry's calibration counterclaim *(added 22–23 Sep 2026, owner-initiated)*
 
+> **Correction (D30).** The description of Jev in this section came from TypeSafe's own
+> materials when the arm was designed. No published paper describes Jev as RLCD-trained,
+> non-autoregressive or a "System One" model; the one direct evaluation (Li et al., 2026,
+> arXiv:2609.26550) describes it only as a decision-only judge that returns a probability
+> for every label, and states that its size, training recipe and data are not public.
+> `REPORT.md` RQ6 makes only the claims that paper supports.
+
 ### 7.1 Positioning
 
 TypeSafe AI's Jev is a proprietary "System One Model" — a non-autoregressive, RLCD-trained model that outputs typed decisions with claimed calibrated probabilities, publicly positioned as having solved the exact failure mode this project studies. It discloses no weights, size, or benchmarks. `kev-8b` (`jaredpalmer/kev`, Apache-2.0) is an independently-built open stand-in, explicitly "inspired by the System One approach of TypeSafe's Jev" (not a distillation) and benchmarked by its own authors against real Jev output (93.21% vs. 90.12% agreement on 324 held-out examples, vs. 66.36% for the untrained base model) — the strongest available evidence of the three candidates considered that it's a fair proxy. Two other open stand-ins (`Bespoke-Nimble-9B`, `circuit-8b`) and a fourth candidate (`SemIf`, a cluster of non-canonical hobbyist repos with unverifiable benchmark claims) were evaluated and rejected — see `DECISIONS.md` D27 for the full comparison. This is not literature-backed the way RQ4/RQ5 are (there's no peer-reviewed prior work on this specific comparison to position against) — the positioning here is entirely primary-source verification against the actual repos and code, not citations.

@@ -1055,7 +1055,7 @@
         "It was also re-asked four more times at a higher sampling temperature, and with two reworded prompts, to measure how stable its verdicts are.",
         `Recorded: ${num(M.verdicts["Qwen2.5-7B"])} main verdicts across the four presentations.`] },
     { id: "kev", col: 3, judge: "kev-8b", bar: "04 · judge", title: "kev-8b", sub: `${num(M.verdicts["kev-8b"])} verdicts`,
-      body: ["An 8B model trained to give calibrated probabilities, used as an open stand-in for commercial judges that claim to know when they are wrong. It returns a probability for each answer and writes no explanation. Its results are about kev-8b only: the commercial Jev has been evaluated separately (Li et al., 2026, arXiv:2609.26550).",
+      body: ["An open 8B decision model built in imitation of Jev, a commercial decision-only judge, used here as its stand-in. It returns a probability for each answer and writes no explanation. Its results are about kev-8b only: the commercial Jev has been evaluated separately (Li et al., 2026, arXiv:2609.26550).",
         `Recorded: ${num(M.verdicts["kev-8b"])} verdicts; the other ${num(totalCalls - M.verdicts["kev-8b"])} prompts were over its length limit.`] },
     { id: "autoj", col: 3, judge: "auto-j-13b", bar: "04 · judge", title: "auto-j-13b", sub: `${num(M.verdicts["auto-j-13b"])} verdicts`,
       body: ["A 13B model trained specifically to judge pairs of answers, on critiques distilled from GPT-4. It writes a critique and a decision but no confidence, so its confidence comes from agreement across repeated samples and swapped orders.",

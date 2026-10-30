@@ -1,5 +1,5 @@
-# kev-8b comparison arm (DECISIONS.md D27) - the open stand-in for Jev's
-# "System One" calibration claim. Separate config, separate (smaller)
+# kev-8b comparison arm (DECISIONS.md D27) - an open stand-in for Jev, a
+# commercial decision-only judge. Separate config, separate (smaller)
 # KevConfig dataclass in src/judge_kev.py - src/config.py's Config validates
 # fields (temperature_sc > 0, "P1" in prompt_variants) that don't apply to
 # kev's one-forward-pass, no-prompt-ensemble architecture at all.
