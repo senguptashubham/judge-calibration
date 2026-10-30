@@ -215,6 +215,7 @@ TASKS.md     atomic tasks with definition-of-done and closeout notes
 DECISIONS.md resolutions from the design reviews, D4–D30
 PREREGISTRATION.md   frozen before the Week 2 full run
 REPORT.md    written incrementally, not at the end
+REPRODUCE.md fresh-clone commands, runtimes and expected numbers (task 7.1)
 LEARNING.md  reading / courses / skills tracker
 ```
 
@@ -304,4 +305,4 @@ python scripts/deploy_space.py --repo-id shubhamsengupta/judge-calibration --dry
 
 ## 9. Current status
 
-RQ1–RQ7 are complete, and `REPORT.md` is complete: abstract, introduction, method, related work, every RQ, the three-judge comparison, the post-hoc auto-accept section, discussion, limitations, extensions and references. GATE 5, GATE K, and GATE L are passed, signed off by the owner. The interactive site (task 6.2, D29) is done and published on GitHub Pages and a Hugging Face Space. Remaining: slides (6.5) and Week 7 (fresh-clone reproducibility check, `REPRODUCE.md`).
+RQ1–RQ7 are complete, and `REPORT.md` is complete: abstract, introduction, method, related work, every RQ, the three-judge comparison, the post-hoc auto-accept section, discussion, limitations, extensions and references. GATE 5, GATE K, and GATE L are passed, signed off by the owner. The interactive site (task 6.2, D29) is done and published on GitHub Pages and a Hugging Face Space. The fresh-clone reproducibility check (7.1) passed: every tracked output regenerated identically, and `REPRODUCE.md` records the commands and the expected numbers. Remaining: slides (6.5).
