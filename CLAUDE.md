@@ -206,7 +206,8 @@ tests/       one test file per src/ module. analysis/ scripts are verified again
 notebooks/   Colab session records of the GPU inference runs (01 Qwen, 02 kev, 03 auto-j), outputs kept.
              They only install, pull, and call src/ — no logic lives there.
 learning/    study exercises, not part of the pipeline
-runs/        per-model checkpoints and logprobs/ (gitignored)
+runs/        per-model checkpoints and logprobs/ (gitignored; published as the HF dataset
+             shubhamsengupta/judge-calibration-runs, see REPRODUCE.md)
 results/     parquet tables (gitignored); per-RQ CSVs and figures/ (tracked - REPORT.md's evidence, D17 amendment)
 pyproject.toml   pinned deps; base install excludes vllm (`colab` extra adds it, D17)
                  but includes numpyro/jax/arviz (D24)

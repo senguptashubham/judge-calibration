@@ -11,24 +11,44 @@ the second half was checked from a fresh clone, as described below.
 ## What you need
 
 - Python 3.11.
-- The checkpoints in `runs/`, about 1.7 GB in total. They are gitignored, so a clone does not include them:
-
-  | Folder | Contents | Size | Produced by |
-  |---|---|---|---|
-  | `runs/qwen2.5_7b_instruct/` | `judge_clean.jsonl`, `judge_verbose.jsonl`, `vacuum.jsonl`, `ablation_decoding.jsonl`, `logprobs/` | ~400 MB | `notebooks/01_qwen_inference.ipynb` |
-  | `runs/kev_8b/` | `kev.jsonl` | ~3 MB | `notebooks/02_kev_inference.ipynb` |
-  | `runs/autoj_13b_gptq_4bits/` | `autoj.jsonl`, `logprobs/` | ~1.3 GB | `notebooks/03_autoj_inference.ipynb` |
-
-  To regenerate them, run the three notebooks on a Colab GPU. They install the `colab` extra in a fresh venv and call `src/judge.py`, `src/judge_kev.py` and `src/judge_autoj.py`, and they keep their outputs as a record of the original runs. vLLM sampling on a GPU is not bit-exact across hardware, so regenerated checkpoints can differ slightly from the originals.
+- The judge checkpoints in `runs/`, about 1.6 GB. They are gitignored, so a clone does not include them. They are published as the Hugging Face dataset [`shubhamsengupta/judge-calibration-runs`](https://huggingface.co/datasets/shubhamsengupta/judge-calibration-runs) under CC BY 4.0. See [Getting the checkpoints](#getting-the-checkpoints).
 - The MT-Bench human judgments (`lmsys/mt_bench_human_judgments`). `src.data` downloads them from Hugging Face on the first run. `analysis.demo_bundle` then reads them offline from the local cache.
+
+## Getting the checkpoints
+
+From the repo root, after `pip install -e .`, which installs `huggingface_hub`:
+
+```bash
+hf download shubhamsengupta/judge-calibration-runs --repo-type dataset --local-dir runs
+tar -xf runs/qwen2.5_7b_instruct/logprobs.tar -C runs/qwen2.5_7b_instruct
+tar -xf runs/autoj_13b_gptq_4bits/logprobs.tar -C runs/autoj_13b_gptq_4bits
+```
+
+The two `logprobs/` folders hold one small file per call (22,908 and 14,870 files),
+so they are stored as `.tar` archives. Once they are extracted, you can delete the
+archives and the downloaded `runs/README.md`, which is the dataset card. Neither is
+read by the pipeline.
+
+| Folder | Contents | Produced by |
+|---|---|---|
+| `runs/qwen2.5_7b_instruct/` | `judge_clean.jsonl`, `judge_verbose.jsonl`, `vacuum.jsonl`, `ablation_decoding.jsonl`, `logprobs/` | `notebooks/01_qwen_inference.ipynb` |
+| `runs/kev_8b/` | `kev.jsonl` | `notebooks/02_kev_inference.ipynb` |
+| `runs/autoj_13b_gptq_4bits/` | `autoj.jsonl`, `logprobs/` | `notebooks/03_autoj_inference.ipynb` |
+
+You can also regenerate the checkpoints yourself by running the three notebooks on a
+Colab GPU. They install the `colab` extra in a fresh venv and call `src/judge.py`,
+`src/judge_kev.py` and `src/judge_autoj.py`. vLLM sampling on a GPU is not
+bit-exact across hardware, so regenerated checkpoints can differ slightly from the
+published ones, and so can every number downstream.
 
 ## Commands
 
-From the repo root, with `runs/` in place:
+From the repo root:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e .
+# then download and extract runs/ as above
 
 Q=configs/run.yaml; K=configs/run_kev.yaml; A=configs/run_autoj.yaml
 
@@ -111,7 +131,7 @@ Because the NUTS seeds are fixed, the Bayesian results came out bit-identical on
 **Setup:**
 - a fresh `git clone` of `github.com/senguptashubham/judge-calibration`, with code identical to `9e64375`;
 - a new venv on Python 3.11.15 and `pip install -e .`;
-- `runs/` copied in from the original runs.
+- `runs/` copied in from the original runs. The same files, byte for byte, are the ones published in the dataset.
 
 **Result:**
 - Every command above exited with code 0.

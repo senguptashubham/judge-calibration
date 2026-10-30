@@ -201,6 +201,11 @@ MT-Bench human votes ──► src/data.py ──► items_labels.parquet
   `02_kev_inference`, `03_autoj_inference`.
 - **Everything else** (parsing, signals, statistics, Bayesian models, figures,
   the site's data) runs locally on CPU.
+- **The raw checkpoints** (`runs/`, 1.6 GB) are published as a Hugging Face
+  dataset,
+  [`shubhamsengupta/judge-calibration-runs`](https://huggingface.co/datasets/shubhamsengupta/judge-calibration-runs).
+  With them, you can reproduce every result without a GPU; see
+  [`REPRODUCE.md`](REPRODUCE.md).
 - Every call is checkpointed, so runs resume after a disconnect. Every row
   records the model, prompt hash, git SHA and seed.
 - **The site** ([`site/`](site)) is plain HTML, CSS and JavaScript with no
@@ -213,6 +218,7 @@ MT-Bench human votes ──► src/data.py ──► items_labels.parquet
 | Path | Contents |
 |---|---|
 | [`REPORT.md`](REPORT.md) | Results and interpretation, one section per RQ |
+| [`REPRODUCE.md`](REPRODUCE.md) | Reproducing every result from the published checkpoints: commands, runtimes, expected numbers |
 | [`site/`](site) | The interactive site: `index.html`, `style.css`, `app.js`, built data in `data/`, bundled fonts in `fonts/` |
 | [`PLAN.md`](PLAN.md) | Design rationale and the week plan |
 | [`DECISIONS.md`](DECISIONS.md) | Design decisions and their reasoning (D4–D30) |
@@ -250,8 +256,9 @@ Colab (judge inference only), inside a fresh venv:
 pip install -e ".[colab]"
 ```
 
-The full command sequence, from building the item table through each RQ's
-analysis to the site's data, is in [`CLAUDE.md`](CLAUDE.md) §7.
+To reproduce the results, follow [`REPRODUCE.md`](REPRODUCE.md). It covers
+downloading the checkpoints and the full command sequence, from building the item
+table through each RQ's analysis to the site's data.
 
 ## Limitations
 
@@ -286,7 +293,9 @@ GitHub's "Cite this repository" button gives the same in APA and BibTeX
   licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), from Zheng
   et al., *Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena* (NeurIPS
   2023). The site shows the questions and answers as published; the padded
-  answers are a modification made for this study.
+  answers are a modification made for this study. The judges' raw outputs
+  ([`judge-calibration-runs`](https://huggingface.co/datasets/shubhamsengupta/judge-calibration-runs))
+  are released under the same licence.
 - **Judges:**
   [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) (Apache-2.0),
   [kev-8b](https://huggingface.co/jaredpalmer/kev-8b) (Apache-2.0) and
