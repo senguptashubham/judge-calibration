@@ -1,5 +1,5 @@
 """RQ7: does purpose-built judge training (auto-j-13b) resist the same
-failure modes? (D28, PLAN.md §8)
+failure modes? (D28)
 
 `python -m analysis.rq7 --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}`
 

@@ -3,16 +3,18 @@ quality, and does that survive distillation to a single call? (D20, D23)
 
 `python -m analysis.rq5 --config configs/run.yaml --task {threshold_sweep,distillation,human_disagreement}`
 
-threshold_sweep (task 3.2b) - RQ1's population. threshold_sweep() over
+threshold_sweep - RQ1's population. threshold_sweep() over
 each of ens_entropy_{total,aleatoric,epistemic} (already uncertainty-typed,
 no 1 - x flip), with ECE on the retained set always scored against
 conf_ens_prob so the three curves answer one comparable question. Tests the
 preregistered prediction that epistemic thresholding beats total (a
-paired cluster-bootstrap on the AURC gap - one item set, two signals).
+paired cluster-bootstrap on the AURC gap - one item set, two signals). The
+figure and the AURCs use risk_coverage() on each entropy, like RQ2, so the
+AURC here and in RQ2 is the same quantity.
 Writes results/rq5_threshold_sweep_table_{model_slug}.csv and
 results/figures/entropy_threshold_sweep_{model_slug}.png.
 
-distillation (task 5.9d) - RQ4's population (N=1,819, a strict subset of
+distillation - RQ4's population (N=1,819, a strict subset of
 RQ5's 1,836), so both arms are scored on the same items. Teacher: the
 3-call ensemble's conf_ens and ens_entropy_epistemic. Student: the 1-call
 Bayesian meta-model (analysis/rq4.py::compute_bayesian_arm, Tier A) and
@@ -21,11 +23,10 @@ cluster-bootstrap CIs; ECE is reported side by side. "% of the edge
 retained" measures AUROC above chance (0.5). Writes
 results/rq5_distillation_{model_slug}.csv and a figure.
 
-human_disagreement (task 5.9e) - human_disagreement.py's N=595
+human_disagreement - human_disagreement.py's N=595
 population. Spearman of the ensemble's aleatoric and epistemic entropy
 against d_human. d_human = |frac_prefer_a - 0.5| is CONSENSUS strength, so
-"aleatoric tracks human disagreement" means a NEGATIVE correlation
-(TASKS.md's original wording had the direction backwards). Writes
+"aleatoric tracks human disagreement" means a NEGATIVE correlation. Writes
 results/rq5_human_disagreement_{model_slug}.csv and a figure.
 """
 
@@ -102,11 +103,11 @@ def main_threshold_sweep(config_path: str) -> None:
     curves = {}
     aurc_by_signal = {}
     for signal in ENTROPY_SIGNALS:
-        table = compute_entropy_sweep(items, signal, config.n_bins)
-        tables.append(table)
+        tables.append(compute_entropy_sweep(items, signal, config.n_bins))
 
-        coverage = table["coverage"].to_numpy()
-        risk = 1 - table["accuracy"].to_numpy()
+        coverage, risk = risk_coverage(
+            items[signal].to_numpy(dtype=float), items["correct"].to_numpy()
+        )
         curves[signal] = (coverage, risk)
         aurc_by_signal[signal] = aurc(coverage, risk)
 
@@ -135,7 +136,7 @@ def main_threshold_sweep(config_path: str) -> None:
     )
 
 
-# --- Task 5.9d: distillation ----------------------------------------------
+# --- Distillation ----------------------------------------------
 
 
 def compute_ensemble_metrics(items: pd.DataFrame, n_bins: int, seed: int) -> dict:
@@ -288,7 +289,7 @@ def main_distillation(config_path: str) -> None:
     )
 
 
-# --- Task 5.9e: human-disagreement validation -------------------------------
+# --- Human-disagreement validation -------------------------------
 
 DISAGREEMENT_VALIDATION_SIGNALS = ["ens_entropy_aleatoric", "ens_entropy_epistemic"]
 

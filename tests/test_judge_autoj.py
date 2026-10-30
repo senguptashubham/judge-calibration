@@ -1,8 +1,7 @@
 """Tests for src/judge_autoj.py's locally-testable logic: D28's schedule
 (clean/verbose, no prompt_variant axis), checkpoint dedup/resumability
 (invariant 9), and the prompt renderer - especially the turn=2 flattening
-design D28 flags as the one genuinely novel piece L4b's own validity check
-exists to catch problems in. Deliberately does not import vllm - none of
+design D28 flags as the one genuinely novel piece. Deliberately does not import vllm - none of
 this logic touches it (same "only touches the external thing inside one
 boundary function" split judge.py/judge_kev.py's own tests already use).
 """
@@ -72,7 +71,7 @@ def _items_df():
 
 
 def test_pending_calls_skips_completed_keys_running_twice_does_not_duplicate():
-    # CLAUDE.md invariant 9, directly.
+    # CONTRIBUTING.md invariant 9, directly.
     specs = [AutojCallSpec("clean", "AB", 0), AutojCallSpec("clean", "BA", 0)]
     items_df = _items_df()
 
@@ -183,8 +182,7 @@ def test_build_autoj_prompt_turn2_shared_prompt_field_has_no_model_specific_cont
 def test_build_autoj_prompt_turn2_folds_each_sides_own_turn1_answer_into_its_own_response():
     # Each side's own turn-1 answer must appear in ITS OWN response field
     # (a two-part trajectory), not in the other side's or in the shared
-    # prompt field - this is the property L4b's spot-check is specifically
-    # there to confirm still produces coherent judging in practice.
+    # prompt field.
     conv_a, conv_b = _turn2_conversations()
     prompt = build_autoj_prompt("clean", "AB", conv_a, conv_b, turn=2)
     response_1_block, response_2_block = prompt.split("[Response 2]:")

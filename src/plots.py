@@ -1,5 +1,5 @@
 """Matplotlib figures, one per function, each saved to results/figures/ under
-a deterministic, model_slug-suffixed name (CLAUDE.md §5, D26).
+a deterministic, model_slug-suffixed name (CONTRIBUTING.md §5, D26).
 
 Figures use plain-language names for signals and judges (SIGNAL_LABELS,
 JUDGE_NAMES) so they read without the code; the CSVs keep the column names.
@@ -102,7 +102,7 @@ def _significance_colors(ci_low: np.ndarray, ci_high: np.ndarray, color: str = "
 
 
 def plot_ece_auroc_orthogonal() -> Figure:
-    """LEARNING.md C4: two hand-built 6-item examples showing ECE and AUROC
+    """Two hand-built 6-item examples showing ECE and AUROC
     measure different things (invariant 6).
 
     A: correct items at confidence 0.9, wrong at 0.5 - perfect ranking
@@ -264,8 +264,9 @@ def plot_risk_coverage(
     also keeps at every coverage; the oracle shows the headroom.
 
     Below 5% coverage a point rests on fewer than ~90 items, so that strip
-    is shaded as noisy. A discrete signal's curve stops early: tied items
-    can't be split, so it has no point below its largest tie group.
+    is shaded as noisy. Inside a tied group the curve is the expected risk
+    under a random tie-break (risk_coverage()), so a discrete signal's
+    curve is flat across its most-confident group rather than missing.
 
     Args:
         curves: {name: (coverage, risk)}.
@@ -335,7 +336,7 @@ def plot_human_disagreement(
     n_bins: int,
     model_slug: str,
 ) -> Figure:
-    """Task 3.3 (D9): accuracy (left) and stated confidence (right) at each
+    """Human disagreement (D9): accuracy (left) and stated confidence (right) at each
     level of human consensus d_human, labelled with how many items each
     level holds. No fitted line: d_human takes only three values here, one
     of them with a handful of items, so a line would overstate the shape.
@@ -465,8 +466,8 @@ def plot_d_human_correlations(
     filename_suffix: str = "",
     title: str = "Does confidence track human consensus?",
 ) -> Figure:
-    """Forest plot of signals' Spearman correlation with d_human (task 3.4;
-    reused by 5.9e). A second caller with a different signal set must pass
+    """Forest plot of signals' Spearman correlation with d_human (also used
+    by RQ5). A second caller with a different signal set must pass
     a `filename_suffix`, or it overwrites the first caller's figure.
 
     Saved to results/figures/d_human_correlations{filename_suffix}_{model_slug}.png.
@@ -554,7 +555,7 @@ def plot_rq4_ablation(
     model_slug: str,
     null_means: np.ndarray | None = None,
 ) -> Figure:
-    """Task 5.5: AUROC of each (tier, model) meta-model next to the best
+    """RQ4 tier ablation: AUROC of each (tier, model) meta-model next to the best
     single signal, on a zoomed axis - the differences are hundredths.
     Tier intervals are D8's across-repeat spread; the baseline's is a 95%
     cluster-bootstrap CI. `null_means`, if given, shades the range of the
@@ -596,7 +597,7 @@ def plot_rq4_progression(
     ci_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.5: forest plot of each tier step's paired AUROC change. A CI
+    """RQ4 tier ablation: forest plot of each tier step's paired AUROC change. A CI
     excluding 0 means that step is real; muted points are not.
 
     Saved to results/figures/rq4_progression_{model_slug}.png.
@@ -620,7 +621,7 @@ def plot_rq4_permutation_nulls(
     null_distributions: list[np.ndarray],
     model_slug: str,
 ) -> Figure:
-    """Task 5.5: for each (tier, model) cell, every permutation-null AUROC
+    """RQ4 tier ablation: for each (tier, model) cell, every permutation-null AUROC
     (grey dots, labels shuffled within each question) and the observed
     AUROC (red diamond), on one shared axis.
 
@@ -655,7 +656,7 @@ def plot_h4_interaction(
     log_odds_curves: list[np.ndarray],
     model_slug: str,
 ) -> Figure:
-    """Task 5.6: predicted P(correct) vs the predictor's OOF score, one curve
+    """H4: predicted P(correct) vs the predictor's OOF score, one curve
     per d_human level. Left: probability scale, with a rug of the real
     scores. Right: log-odds, where the model is linear and the interaction
     is simply the slope difference - on the probability scale, sigmoid
@@ -702,7 +703,7 @@ def plot_rq4_transfer(
     transfer_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.7: per model, in-domain AUROC (clean CV, D8 across-repeat
+    """Transfer test (clean -> verbose): per model, in-domain AUROC (clean CV, D8 across-repeat
     spread) next to transfer AUROC (fit on clean, evaluated on verbose, 95%
     cluster-bootstrap CI), on a zoomed axis.
 
@@ -729,7 +730,7 @@ def plot_rq4_category_transfer(
     auroc: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Task 5.8: held-out AUROC per category (LeaveOneGroupOut), one marker
+    """Category transfer: held-out AUROC per category (LeaveOneGroupOut), one marker
     per model, categories sorted weakest to strongest. No category is
     singled out in advance; the dashed line marks chance. Each value is one
     deterministic split, so there is no interval.
@@ -792,7 +793,7 @@ def plot_rq4_coefficients(
     family: list[str],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9's headline figure: only the coefficients whose CI excludes
+    """RQ4's coefficient figure: only the coefficients whose CI excludes
     0, colored by feature family (all ~37 rows would be too tall for a slide;
     plot_rq4_coefficients_full() and the CSV have them). Takes the FULL
     table and filters here, so "significant" has one definition. With no
@@ -891,7 +892,7 @@ def plot_rq5_distillation(
     epistemic_auroc_bayesian_ci: tuple[float, float],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9d: the 3-call ensemble vs the 1-call Bayesian model on error
+    """RQ5 distillation: the 3-call ensemble vs the 1-call Bayesian model on error
     detection (AUROC) and on how well each one's own epistemic signal
     detects errors.
 
@@ -935,7 +936,7 @@ def plot_rq5_verbose_shift(
     epistemic_gap_ci: tuple[float, float],
     model_slug: str,
 ) -> Figure:
-    """Task 5.9f: the change in mean aleatoric and epistemic entropy from
+    """Verbose-shift check: the change in mean aleatoric and epistemic entropy from
     clean to verbose, for the one Bayesian model fit on clean, with the
     paired-bootstrap CI the preregistered verdict rests on. Two panels on
     separate axes - epistemic is ~100x smaller than aleatoric. The

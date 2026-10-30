@@ -1,4 +1,4 @@
-"""Task 1.8's vacuum test: does the judge express a preference when there is
+"""Vacuum test: does the judge express a preference when there is
 no content difference to judge? 40 pairs of identical responses and 20 pairs
 of empty responses, clean/P1/AB/greedy. Colab only (needs vllm, D17).
 

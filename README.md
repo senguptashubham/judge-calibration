@@ -176,7 +176,7 @@ so items are not independent. The main safeguards:
 - **Negative results are reported as such.** Two preregistered predictions
   failed (RQ5) and are written up as failures.
 
-The full list of statistical rules is in [`CLAUDE.md`](CLAUDE.md) §2. Every
+The full list of statistical rules is in [`CONTRIBUTING.md`](CONTRIBUTING.md) §2. Every
 non-obvious choice and its reasoning is in [`DECISIONS.md`](DECISIONS.md).
 
 ## How it runs
@@ -220,17 +220,18 @@ MT-Bench human votes ──► src/data.py ──► items_labels.parquet
 | [`REPORT.md`](REPORT.md) | Results and interpretation, one section per RQ |
 | [`REPRODUCE.md`](REPRODUCE.md) | Reproducing every result from the published checkpoints: commands, runtimes, expected numbers |
 | [`site/`](site) | The interactive site: `index.html`, `style.css`, `app.js`, built data in `data/`, bundled fonts in `fonts/` |
-| [`PLAN.md`](PLAN.md) | Design rationale and the week plan |
-| [`DECISIONS.md`](DECISIONS.md) | Design decisions and their reasoning (D4–D30) |
+| [`DECISIONS.md`](DECISIONS.md) | Design decisions and their reasoning (D1–D30) |
 | [`PREREGISTRATION.md`](PREREGISTRATION.md) | Hypotheses and settings frozen before the main run |
-| [`TASKS.md`](TASKS.md) | Task list with definitions of done and closeout notes |
-| [`CLAUDE.md`](CLAUDE.md) | Statistical invariants, data schemas, layout, commands |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | Statistical invariants, data schemas, layout, commands |
 | `src/` | Pipeline: data, prompts, judges, parsing, signals, metrics, bootstrap, predictors, Bayesian model, plots |
 | `analysis/` | One CLI script per RQ, the supporting checks, the three-judge comparison, the auto-accept analysis and the site's data build |
 | `results/` | Every result table (CSV) and figure (`figures/`) that `REPORT.md` cites |
 | `tests/` | One test file per `src/` module with hand-computed reference cases, plus end-to-end tests of the site |
 | `notebooks/` | Colab sessions for the three GPU inference runs |
 | `configs/` | One YAML per judge |
+
+The development-phase planning documents (week plan, task log, full decision history)
+are kept at the git tag `dev-phase-end`.
 
 ## Setup
 

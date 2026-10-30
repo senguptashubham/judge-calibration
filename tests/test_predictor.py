@@ -1,5 +1,5 @@
 """Tests for src/predictor.py: the repeated StratifiedGroupKFold
-protocol (D8/CLAUDE.md invariant 1), feature encoding, and the
+protocol (D8/CONTRIBUTING.md invariant 1), feature encoding, and the
 permutation null (invariant 12).
 """
 

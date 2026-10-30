@@ -65,7 +65,7 @@ def _items_df():
 
 
 def test_pending_calls_skips_completed_keys_running_twice_does_not_duplicate():
-    # CLAUDE.md invariant 9, directly: simulate "run once, then run again
+    # CONTRIBUTING.md invariant 9, directly: simulate "run once, then run again
     # with the same checkpoint" and confirm nothing repeats.
     specs = [KevCallSpec("clean", "AB"), KevCallSpec("clean", "BA")]
     items_df = _items_df()

@@ -1,4 +1,4 @@
-"""Task 1.8's vacuum test ("dark current", LEARNING.md A8): does the judge
+"""Vacuum test ("dark current", after Dark Current, 2026): does the judge
 express a preference when there is no content difference to judge?
 
 `python -m analysis.vacuum --config configs/run.yaml`

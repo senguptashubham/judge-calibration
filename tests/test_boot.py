@@ -28,7 +28,7 @@ def _correlated_dataset(seed=42, n_groups=40, rows_per_group=5):
 
 def _naive_row_bootstrap(df, stat_fn, n=2000, seed=0):
     """Comparison baseline only - plain row-level bootstrap with no group
-    awareness, exactly the approach CLAUDE.md invariant 2 forbids. Exists
+    awareness, exactly the approach CONTRIBUTING.md invariant 2 forbids. Exists
     purely so test_cluster_bootstrap_wider_than_naive_row_bootstrap has a
     "too narrow" CI to compare against.
     """

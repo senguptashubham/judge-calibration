@@ -8,7 +8,7 @@ dataset: lmsys/mt_bench_human_judgments
 # "strict" (tie must strictly outnumber both sides) over "lenient" (tie only
 # needs to tie for most common) because lenient discarded real signal on
 # items where the tie count merely equaled the leading side's count.
-# Full comparison table: PREREGISTRATION.md (task 0.10).
+# Full comparison table: PREREGISTRATION.md §4.
 tie_policy: mark_tie_strict
 
 temperature_canonical: 0.0   # sample_idx = 0, greedy, reproducible (DECISIONS.md D6)

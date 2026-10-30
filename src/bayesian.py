@@ -31,7 +31,7 @@ from src.features import load_rq4_population
 from src.predictor import TIER_BUILDERS, build_xyg, make_fold_splits
 
 # NUTS settings for every fit. 2,000 draws per chain: at 1,000, 10-15 of each
-# run's 50 fold-fits landed just above R-hat 1.01 (D22 amendment).
+# run's 50 fold-fits landed just above R-hat 1.01 (D22).
 NUM_WARMUP = 500
 NUM_SAMPLES = 2000
 NUM_CHAINS = 2
@@ -80,7 +80,7 @@ def hierarchical_logit_model(
     sigma_q in the sampled space. The centered form produces Neal's funnel
     (when sigma_q is small the plausible alpha_q region narrows sharply and
     NUTS's step size can't follow); on real data it gave R-hat 1.07 and
-    ESS 21, against 1.01 and 791 non-centered (D22 amendment).
+    ESS 21, against 1.01 and 791 non-centered (D22).
 
     Handed to NUTS (y given, fitting) or Predictive (y=None, sampling); the
     sample sites are the output. Uses jax.numpy throughout, since the
@@ -199,7 +199,7 @@ def predict_held_out(
     Use only for genuinely held-out questions (cross-validation). For rows
     whose questions WERE in training (the verbose-shift check), use
     predict_in_sample(): marginalizing a real fitted intercept away both
-    discards information and inflates spread on any input (D21 amendment).
+    discards information and inflates spread on any input (D21).
 
     Returns (n_draws, n_test_rows) - every draw kept, not averaged.
     """
@@ -228,7 +228,7 @@ def predict_in_sample(
 
     Keeping the same fitted alpha_q for both conditions means only the
     feature values differ between them, which is the variable the test is
-    about (D21 amendment). `question_id_to_index` must be the TRAINING
+    about (D21). `question_id_to_index` must be the TRAINING
     mapping; a fresh build_group_index() on the evaluation rows would number
     questions differently. An unmapped question raises KeyError.
 
@@ -373,7 +373,7 @@ if __name__ == "__main__":
     X, y, groups = build_xyg(population, TIER_BUILDERS[args.tier])
 
     print(
-        f"Tier {args.tier}, Bayesian hierarchical logit (non-centered, D22 amended 21 Sep 2026), "
+        f"Tier {args.tier}, Bayesian hierarchical logit (non-centered, D22), "
         f"N={len(population)}, {args.n_repeats} repeats, "
         f"num_warmup={args.num_warmup}, num_samples={args.num_samples}, num_chains={args.num_chains}"
     )

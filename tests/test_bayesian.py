@@ -268,7 +268,7 @@ def test_predict_held_out_does_not_use_training_alpha_q(fitted_mcmc_and_held_out
     assert np.array_equal(probs_with_alpha_q, probs_without_alpha_q)
 
 
-# --- predict_in_sample: the real-alpha_q counterpart (task 5.9f) -------
+# --- predict_in_sample: the real-alpha_q counterpart (verbose shift) ---
 
 
 def test_predict_in_sample_matches_manual_computation_with_real_alpha_q():

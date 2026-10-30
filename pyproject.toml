@@ -7,10 +7,10 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     # Pinned from the first real `pip install -e .` resolve in the judge-calib
-    # conda env (2026-08-26). Only the 8 direct deps are pinned here, not the
+    # conda env. Only the 8 direct deps are pinned here, not the
     # transitive closure pip freeze also reported (requests, tqdm, filelock,
     # etc. come along automatically via datasets/pandas and don't need their
-    # own pins) — see CLAUDE.md sec 5 and DECISIONS.md D17.
+    # own pins) — see DECISIONS.md D17.
     "datasets==5.0.1",
     "pandas==3.0.5",
     "pyarrow==25.0.1",
@@ -63,7 +63,7 @@ Homepage = "https://senguptashubham.github.io/judge-calibration/"
 Repository = "https://github.com/senguptashubham/judge-calibration"
 
 [tool.setuptools]
-# src/ is imported as a flat package (`python -m src.data`, CLAUDE.md sec 7),
+# src/ is imported as a flat package (`python -m src.data`, CONTRIBUTING.md sec 7),
 # not a src/<package_name>/ layout.
 packages = ["src"]
 

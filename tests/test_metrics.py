@@ -1,5 +1,5 @@
 """Tests for src/metrics.py, including the hand-computed ECE reference case
-(CLAUDE.md sec 5: expected 0.222) and the discrete-signal ECE case
+(CONTRIBUTING.md sec 5: expected 0.222) and the discrete-signal ECE case
 (DECISIONS.md D14).
 """
 
@@ -14,6 +14,7 @@ from src.metrics import (
     brier,
     brier_decomposition,
     cohens_kappa,
+    coverage_weights,
     ece,
     mce,
     oracle_risk_coverage,
@@ -41,7 +42,7 @@ def test_truncated_entropy_hand_computed_renormalizes_truncated_mass():
 
 
 def test_ece_reference():
-    # CLAUDE.md sec 5's hand-computed case: two bins,
+    # CONTRIBUTING.md sec 5's hand-computed case: two bins,
     # (conf 0.9, acc 0.75, weight 0.4) and (conf 0.6, acc 0.33, weight 0.6)
     # -> ECE = 0.4*0.15 + 0.6*0.27 = 0.222.
     # N=500 (200 + 300) is the smallest 40/60 split that lands accuracy
@@ -94,7 +95,7 @@ def test_ece_auto_falls_back_to_quantile_for_many_unique_values():
 
 
 def test_kappa_balanced():
-    # CLAUDE.md sec 5's hand-computed case: p_o=0.85, p_e=0.5 -> kappa=0.70.
+    # CONTRIBUTING.md sec 5's hand-computed case: p_o=0.85, p_e=0.5 -> kappa=0.70.
     # p_e depends only on each rater's OWN marginal - if rater a's labels
     # are an exact 50/50 split, p_e = 0.5*P_b(A) + 0.5*P_b(B) = 0.5*1 = 0.5
     # regardless of what b's own marginal looks like. So: make a exactly
@@ -248,28 +249,23 @@ def test_auroc_error_raises_when_only_one_class_present():
         auroc_error([0.1, 0.2, 0.3], [True, True, True])
 
 
-# --- risk_coverage, oracle_risk_coverage, aurc -----------------------------
+# --- risk_coverage, oracle_risk_coverage, aurc, coverage_weights ----------
 #
-# risk_coverage()/oracle_risk_coverage()/aurc() reference case, hand-computed
-# during planning. n=5, with a tied pair at uncertainty=0.3 specifically to
-# exercise the unique-threshold stepping (both items must enter coverage
-# together, not split across two steps):
+# Hand-computed reference case. n=5, with a tied pair at uncertainty=0.3 so
+# the cut at k=3 falls inside a tied group:
 #
 #   uncertainty = [0.1, 0.2, 0.3, 0.3, 0.9]
 #   correct     = [T,   T,   F,   T,   F  ]
 #
-#   threshold=0.1: kept={0}       -> correct=[T]         -> cov=1/5=0.2, risk=1-1/1=0.0
-#   threshold=0.2: kept={0,1}     -> correct=[T,T]        -> cov=2/5=0.4, risk=1-2/2=0.0
-#   threshold=0.3: kept={0,1,2,3} -> correct=[T,T,F,T]    -> cov=4/5=0.8, risk=1-3/4=0.25
-#   threshold=0.9: kept={0..4}    -> correct=[T,T,F,T,F]  -> cov=5/5=1.0, risk=1-3/5=0.4
+#   k=1: kept {0.1}                    errors 0             -> risk 0/1 = 0
+#   k=2: kept {0.1, 0.2}               errors 0             -> risk 0/2 = 0
+#   k=3: + one of the 0.3 pair         expected errors 1/2  -> risk 0.5/3 = 1/6
+#        (the pair has 1 error in 2; either member is equally likely)
+#   k=4: + both of the pair            errors 1             -> risk 1/4
+#   k=5: everything                    errors 2             -> risk 2/5
 #
-#   coverage = [0.2, 0.4, 0.8, 1.0], risk = [0.0, 0.0, 0.25, 0.4]
-#
-#   AURC = trapezoid(y=risk, x=coverage):
-#     (0.2->0.4): width 0.2, avg height (0+0)/2=0        -> area 0.0
-#     (0.4->0.8): width 0.4, avg height (0+0.25)/2=0.125  -> area 0.05
-#     (0.8->1.0): width 0.2, avg height (0.25+0.4)/2=0.325 -> area 0.065
-#     total = 0.115
+#   coverage = [0.2, 0.4, 0.6, 0.8, 1.0]
+#   AURC = mean(risk) = (0 + 0 + 1/6 + 1/4 + 2/5) / 5 = 49/300 ~ 0.16333
 
 
 def test_risk_coverage_reference():
@@ -278,103 +274,150 @@ def test_risk_coverage_reference():
 
     coverage, risk = risk_coverage(uncertainty, correct)
 
-    # 4 unique thresholds, not 5 items - the tied pair at 0.3 collapses into
-    # one step, which is the whole point of stepping by unique value.
-    assert len(coverage) == 4
-    np.testing.assert_allclose(coverage, [0.2, 0.4, 0.8, 1.0])
-    np.testing.assert_allclose(risk, [0.0, 0.0, 0.25, 0.4])
+    np.testing.assert_allclose(coverage, [0.2, 0.4, 0.6, 0.8, 1.0])
+    np.testing.assert_allclose(risk, [0.0, 0.0, 1 / 6, 0.25, 0.4])
 
 
 def test_aurc_reference():
-    coverage = np.array([0.2, 0.4, 0.8, 1.0])
-    risk = np.array([0.0, 0.0, 0.25, 0.4])
+    coverage, risk = risk_coverage([0.1, 0.2, 0.3, 0.3, 0.9], [True, True, False, True, False])
 
-    assert aurc(coverage, risk) == pytest.approx(0.115, abs=1e-9)
+    assert aurc(coverage, risk) == pytest.approx(49 / 300, abs=1e-12)
 
 
-def test_aurc_swapped_axes_gives_a_different_wrong_answer():
-    # Regression guard for the x/y swap bug found during development:
-    # aurc(coverage, risk) and the backwards trapezoid(y=coverage, x=risk)
-    # must not silently agree.
-    coverage = np.array([0.2, 0.4, 0.8, 1.0])
-    risk = np.array([0.0, 0.0, 0.25, 0.4])
+def test_risk_coverage_matches_brute_force_random_tie_breaks():
+    # Independent check of the expected-value formula: average the plain
+    # sorted curve over many random tie-break orders. Heavy ties (3 values)
+    # make any mistake in the within-group expectation visible.
+    rng = np.random.default_rng(seed=3)
+    n = 60
+    uncertainty = rng.integers(0, 3, size=n).astype(float)
+    correct = rng.random(n) < 0.7
 
-    correct_aurc = aurc(coverage, risk)
-    swapped = float(np.trapezoid(y=coverage, x=risk))
+    _, risk = risk_coverage(uncertainty, correct)
 
-    assert correct_aurc != pytest.approx(swapped)
+    sims = []
+    for _ in range(20000):
+        order = np.lexsort((rng.random(n), uncertainty))  # by uncertainty, ties random
+        wrong = ~correct[order]
+        sims.append(np.cumsum(wrong) / np.arange(1, n + 1))
+    np.testing.assert_allclose(risk, np.mean(sims, axis=0), atol=0.01)
+
+
+def test_risk_coverage_ignores_row_order():
+    # A tied signal must give the same curve however the rows are sorted -
+    # the row-order dependence a stable-sort cut would have.
+    rng = np.random.default_rng(seed=4)
+    uncertainty = rng.integers(0, 4, size=200).astype(float)
+    correct = rng.random(200) < 0.6
+    perm = rng.permutation(200)
+
+    _, risk = risk_coverage(uncertainty, correct)
+    _, risk_shuffled = risk_coverage(uncertainty[perm], correct[perm])
+
+    np.testing.assert_allclose(risk, risk_shuffled)
+
+
+def test_aurc_of_constant_signal_is_the_error_rate():
+    # Regression guard for integrating only from a curve's first point: a
+    # signal with a single value carries no ranking, so every coverage level
+    # has the base error rate and the area must be that rate - not 0, which
+    # is what a one-point curve integrated from its own start would give.
+    correct = np.array([True] * 7 + [False] * 3)
+
+    coverage, risk = risk_coverage(np.zeros(10), correct)
+
+    assert aurc(coverage, risk) == pytest.approx(0.3, abs=1e-12)
+
+
+def test_aurc_starts_at_zero_coverage():
+    # A curve that starts late is charged its first risk from coverage 0.
+    assert aurc([0.5, 1.0], [0.2, 0.4]) == pytest.approx(0.5 * 0.2 + 0.5 * 0.4)
 
 
 def test_oracle_risk_coverage_reference():
-    # Same 5-item correct/incorrect split as above, but oracle ignores the
-    # uncertainty column entirely - it only ever produces 2 points, at
-    # coverage=accuracy and coverage=1.0.
-    correct = [True, True, False, True, False]  # accuracy = 3/5 = 0.6
+    # Same 5-item correct/incorrect split as above, ignoring the uncertainty
+    # column: the 3 correct items first, then the 2 wrong ones.
+    correct = [True, True, False, True, False]
 
     coverage, risk = oracle_risk_coverage(correct)
 
-    assert len(coverage) == 2
-    np.testing.assert_allclose(coverage, [0.6, 1.0])
-    np.testing.assert_allclose(risk, [0.0, 0.4])
+    np.testing.assert_allclose(coverage, [0.2, 0.4, 0.6, 0.8, 1.0])
+    np.testing.assert_allclose(risk, [0.0, 0.0, 0.0, 0.25, 0.4])
 
 
 def test_oracle_aurc_matches_closed_form():
-    # AURC of the oracle curve has a closed form: (1 - accuracy)^2 / 2,
-    # from its exact two-point shape (coverage=accuracy -> risk=0,
-    # coverage=1.0 -> risk=1-accuracy): a right triangle of base
-    # (1-accuracy) and height (1-accuracy).
+    # Oracle AURC = (1/n) * sum over k > n_correct of (k - n_correct) / k,
+    # which tends to (1 - acc) + acc * ln(acc) as n grows.
     rng = np.random.default_rng(seed=0)
     correct = rng.random(500) < 0.6
-    accuracy = correct.mean()
+    n, n_correct = len(correct), int(correct.sum())
 
-    coverage, risk = oracle_risk_coverage(correct)
-    computed = aurc(coverage, risk)
-    closed_form = (1 - accuracy) ** 2 / 2
+    computed = aurc(*oracle_risk_coverage(correct))
+    k = np.arange(n_correct + 1, n + 1)
+    closed_form = np.sum((k - n_correct) / k) / n
 
-    assert computed == pytest.approx(closed_form, abs=1e-9)
+    assert computed == pytest.approx(closed_form, abs=1e-12)
+    accuracy = n_correct / n
+    assert computed == pytest.approx((1 - accuracy) + accuracy * np.log(accuracy), abs=2e-3)
 
 
 def test_oracle_dominates_noisy_real_signal():
-    # DoD for task 3.1: "oracle dominates every real signal by construction."
-    # Build an uncertainty signal correlated with wrongness but with noise
-    # mixed in, so it's a realistic imperfect signal, not already the oracle.
+    # The oracle dominates every real signal by construction, point by point
+    # on the shared k/n grid.
     rng = np.random.default_rng(seed=1)
     n = 300
     correct = rng.random(n) < 0.7
-    noise = rng.normal(0, 0.5, size=n)
-    uncertainty = (~correct).astype(float) + noise
+    uncertainty = (~correct).astype(float) + rng.normal(0, 0.5, size=n)
 
     oracle_coverage, oracle_risk = oracle_risk_coverage(correct)
     signal_coverage, signal_risk = risk_coverage(uncertainty, correct)
 
-    # Different signals produce different numbers of unique thresholds, so
-    # compare on a common coverage grid via interpolation rather than
-    # assuming the two curves line up point-for-point.
-    grid = np.linspace(oracle_coverage.min(), 1.0, 50)
-    oracle_interp = np.interp(grid, oracle_coverage, oracle_risk)
-    signal_interp = np.interp(grid, signal_coverage, signal_risk)
-
-    assert np.all(oracle_interp <= signal_interp + 1e-9)
+    np.testing.assert_allclose(oracle_coverage, signal_coverage)
+    assert np.all(oracle_risk <= signal_risk + 1e-12)
     assert aurc(oracle_coverage, oracle_risk) <= aurc(signal_coverage, signal_risk)
 
 
 def test_risk_coverage_uninformative_signal_stays_near_base_error_rate():
-    # A signal uncorrelated with correctness shouldn't be able to improve
-    # risk as coverage drops - every "kept" subset is effectively a random
-    # sample of the full population, so risk should hover near the overall
-    # error rate at every coverage level, not trend downward.
+    # A signal uncorrelated with correctness can't improve risk as coverage
+    # drops: every kept subset is effectively a random sample.
     rng = np.random.default_rng(seed=2)
     n = 2000
     correct = rng.random(n) < 0.65
-    uncertainty = rng.uniform(0, 1, size=n)  # independent of correct
+    uncertainty = rng.uniform(0, 1, size=n)
 
     coverage, risk = risk_coverage(uncertainty, correct)
     base_error_rate = 1 - correct.mean()
 
-    grid = np.array([0.25, 0.5, 0.75, 1.0])
-    risk_at_grid = np.interp(grid, coverage, risk)
-
+    risk_at_grid = np.interp([0.25, 0.5, 0.75, 1.0], coverage, risk)
     np.testing.assert_allclose(risk_at_grid, base_error_rate, atol=0.05)
+
+
+def test_coverage_weights_split_the_boundary_tie_group():
+    # 6 items, keep 50% -> k=3. One item above the cut (0.9); the cut falls
+    # inside the 0.5 group of 4, which shares the 2 remaining places.
+    confidence = [0.9, 0.5, 0.5, 0.5, 0.5, 0.1]
+
+    weights = coverage_weights(confidence, 0.5)
+
+    np.testing.assert_allclose(weights, [1.0, 0.5, 0.5, 0.5, 0.5, 0.0])
+    assert weights.sum() == pytest.approx(3)
+
+
+def test_coverage_weights_no_ties_is_the_top_k():
+    weights = coverage_weights([0.3, 0.9, 0.1, 0.7], 0.5)
+
+    np.testing.assert_allclose(weights, [0.0, 1.0, 0.0, 1.0])
+
+
+def test_weighted_kappa_equals_kappa_on_the_kept_items_for_0_1_weights():
+    rng = np.random.default_rng(seed=5)
+    a = rng.choice(["A", "B"], size=50)
+    b = np.where(rng.random(50) < 0.8, a, rng.choice(["A", "B"], size=50))
+    keep = rng.random(50) < 0.6
+
+    weighted = cohens_kappa(a, b, weights=keep.astype(float))
+
+    assert weighted == pytest.approx(cohens_kappa(a[keep], b[keep]), abs=1e-12)
 
 
 # --- threshold_sweep --------------------------------------------------------

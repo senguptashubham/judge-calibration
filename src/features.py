@@ -1,4 +1,4 @@
-"""RQ4 feature tiers (PLAN.md §2.2). Each tier strictly adds to the last:
+"""RQ4 feature tiers (DECISIONS.md, "RQ4 framing"). Each tier strictly adds to the last:
 
     A: the judge's own uncertainty signals
     B: A + surface properties of the input/output the judge doesn't use

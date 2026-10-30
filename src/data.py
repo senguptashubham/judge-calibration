@@ -118,7 +118,7 @@ def build_items(votes: pd.DataFrame, tie_policy: str) -> pd.DataFrame:
 
 
 def summarize_items(items: pd.DataFrame) -> dict:
-    """Gate 0's summary counts, as a dict."""
+    """Summary counts of the item table, as a dict."""
     return {
         "n_total": len(items),
         "n_non_tie": int((~items["is_tie"]).sum()),
@@ -163,7 +163,7 @@ if __name__ == "__main__":
     votes = load_votes(config.dataset)
     items = build_items(votes, tie_policy=config.tie_policy)
     kappa, N = human_human_kappa(votes)
-    print(f"Got {N} human-human comparisons with {kappa} score")
+    print(f"Human-human Cohen's kappa: {kappa:.3f} over {N} item pairs")
 
     Path(config.paths.items_labels_parquet).parent.mkdir(parents=True, exist_ok=True)
     items.to_parquet(config.paths.items_labels_parquet)

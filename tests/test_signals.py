@@ -180,7 +180,7 @@ def test_conf_lp_hand_computed():
 
 
 def test_conf_lp_never_reads_from_sample_idx_nonzero():
-    # TASKS.md task 1.7's own required assertion, made concrete: a
+    # D6, made concrete: a
     # sample_idx=1 row present with a DIFFERENT logprob must not leak in.
     rows = [
         _call("AB", 0, verdict_token_logprob=math.log(0.9)),

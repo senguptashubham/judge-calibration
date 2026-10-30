@@ -1,6 +1,6 @@
 """Input perturbations: verbose_pad (RQ3's verbosity attack) and the two
-vacuum inputs (task 1.8). Order is not a perturbation - it lives in
-prompts.py (D5). attribution() is cut (D18).
+vacuum inputs. Order is not a perturbation - it lives in
+prompts.py (D5). There is no attribution condition (D18).
 """
 
 import re

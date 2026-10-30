@@ -27,7 +27,7 @@ _LEAKAGE_COLUMNS = {"correct", "correct_bidir", "human_label", "frac_prefer_a"}
 
 def _fake_items(n: int = 3, **overrides) -> pd.DataFrame:
     """One synthetic items.parquet row per index 0..n-1, every column the
-    real table carries (CLAUDE.md §3's schema) with deterministic, always-
+    real table carries (CONTRIBUTING.md §3's schema) with deterministic, always-
     defined values - including every Tier A/B/C column and the four
     leakage columns that must never appear in a tier.
 

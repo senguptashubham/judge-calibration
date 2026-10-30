@@ -118,12 +118,19 @@ def _quantile_edges(confidences: np.ndarray, n_bins: int) -> np.ndarray:
     return edges
 
 
-def cohens_kappa(a: npt.ArrayLike, b: npt.ArrayLike) -> float:
+def cohens_kappa(
+    a: npt.ArrayLike, b: npt.ArrayLike, weights: npt.ArrayLike | None = None
+) -> float:
     """Cohen's kappa: chance-corrected agreement between two raters.
 
         kappa = (p_o - p_e) / (1 - p_e)
         p_o   = fraction of items where a and b agree
         p_e   = sum over labels c of P_a(c) * P_b(c)
+
+    With `weights`, every fraction is a weighted share (item i counts
+    w_i). coverage_weights() uses this to score the expected kept set
+    when a coverage cut falls inside a tied group: kappa of the expected
+    confusion matrix.
 
     p_e is the agreement expected from each rater's own label frequencies
     alone. When both raters share a bias (both mostly say "A"), p_e is high
@@ -136,15 +143,17 @@ def cohens_kappa(a: npt.ArrayLike, b: npt.ArrayLike) -> float:
     """
     a_arr = np.asarray(a)
     b_arr = np.asarray(b)
+    w = None if weights is None else np.asarray(weights, dtype=float)
 
-    p_o = float(np.mean(a_arr == b_arr))
+    def share(mask: np.ndarray) -> float:
+        return float(np.mean(mask)) if w is None else float(np.sum(w * mask) / w.sum())
+
+    p_o = share(a_arr == b_arr)
 
     labels = np.union1d(np.unique(a_arr), np.unique(b_arr))
     p_e = 0.0
     for label in labels:
-        p_a = np.mean(a_arr == label)
-        p_b = np.mean(b_arr == label)
-        p_e += float(p_a * p_b)
+        p_e += share(a_arr == label) * share(b_arr == label)
 
     if p_e >= 1.0 - 1e-12:
         return 0.0
@@ -284,31 +293,49 @@ def risk_coverage(
     correct: npt.ArrayLike,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Risk-coverage curve: if the judge abstains on its least-confident
-    items, how much does accuracy improve on the rest? At each threshold t:
+    items, how much does accuracy improve on the rest? One point per
+    coverage level, keeping the k least-uncertain items, k = 1..n:
 
-        coverage(t) = |{i : uncertainty_i <= t}| / n
-        risk(t)     = 1 - mean(correct_i for uncertainty_i <= t)
+        coverage_k = k / n
+        risk_k     = E[errors among the k kept] / k
 
-    Thresholds step through each unique uncertainty value, so a tied group
-    (conf_sc has 5 values) enters the kept set in one step. A per-item sort
-    would split ties by row order - an artifact, not a ranking.
+    The expectation is over random tie-breaks. Tied items are
+    indistinguishable to the signal, so when the cut falls inside a tied
+    group every subset of it is equally likely, and the expected errors
+    taken from it are proportional to how many are taken:
+
+        E[errors among the k kept] = E_before + j * e_group / m_group
+
+    E_before counts the errors in all strictly less uncertain groups, j is
+    how many items the cut takes from the boundary group, and that group
+    has m_group items and e_group errors. Breaking ties by row order instead
+    would make the curve depend on how the file happens to be sorted. A
+    signal without ties gives the plain sorted curve.
+
+    Every signal gets the same n-point grid starting at 1/n, so aurc()
+    integrates them all over the same range - a signal with few distinct
+    values (conf_sc has 5) is not let off its low-coverage region.
 
     Takes an uncertainty-typed signal (higher = abstain first), like
-    auroc_error(). Returns (coverage, risk), ascending in coverage, one
-    point per unique uncertainty value.
+    auroc_error(). Returns (coverage, risk), ascending in coverage.
     """
     uncertainty_arr = np.asarray(uncertainty, dtype=float)
-    correct_arr = np.asarray(correct, dtype=bool)
+    wrong = ~np.asarray(correct, dtype=bool)
     n = len(uncertainty_arr)
 
-    un_thresholds = np.unique(uncertainty_arr)
-    coverages = []
-    risks = []
-    for threshold in un_thresholds:
-        kept = uncertainty_arr <= threshold
-        coverages.append(kept.sum() / n)
-        risks.append(1 - correct_arr[kept].mean())
-    return np.array(coverages), np.array(risks)
+    _, group, group_size = np.unique(uncertainty_arr, return_inverse=True, return_counts=True)
+    group_errors = np.bincount(group, weights=wrong.astype(float), minlength=len(group_size))
+    errors_before = np.concatenate([[0.0], np.cumsum(group_errors)[:-1]])
+    kept_before = np.concatenate([[0], np.cumsum(group_size)[:-1]])
+
+    k = np.arange(1, n + 1)
+    group_of_k = np.repeat(np.arange(len(group_size)), group_size)
+    taken_from_group = k - kept_before[group_of_k]
+    expected_errors = (
+        errors_before[group_of_k]
+        + taken_from_group * group_errors[group_of_k] / group_size[group_of_k]
+    )
+    return k / n, expected_errors / k
 
 
 def oracle_risk_coverage(correct: npt.ArrayLike) -> tuple[np.ndarray, np.ndarray]:
@@ -318,21 +345,55 @@ def oracle_risk_coverage(correct: npt.ArrayLike) -> tuple[np.ndarray, np.ndarray
     signal go through identical accounting and any gap between them is a
     property of the signal.
 
-    Always two points: coverage = (accuracy, 1.0), risk = (0, 1 - accuracy).
+    Risk is 0 up to coverage = accuracy, then (k - n_correct) / k.
     """
     correct_arr = np.asarray(correct, dtype=bool)
     return risk_coverage(uncertainty=(~correct_arr).astype(float), correct=correct_arr)
 
 
 def aurc(coverage: npt.ArrayLike, risk: npt.ArrayLike) -> float:
-    """Area under the risk-coverage curve, by the trapezoid rule, from the
-    lowest observed coverage to 1.0 (risk at coverage 0 is undefined).
-    Lower is better. For the oracle curve it has the closed form
-    (1 - accuracy)^2 / 2.
+    """Area under the risk-coverage curve, integrated from coverage 0:
+
+        AURC = sum_i risk_i * (coverage_i - coverage_{i-1}),  coverage_0 = 0
+
+    On risk_coverage()'s grid (coverage_k = k/n) this is the mean of risk_k
+    over k = 1..n, the definition of Geifman and El-Yaniv. Each point's
+    risk covers the coverage step that ends at it, so the area always starts
+    at 0: a curve that began late and was integrated only from its first
+    point would skip its low-coverage region and look better than it is.
+    Lower is better. For the oracle it is
+    (1/n) * sum_{k > n_correct} (k - n_correct) / k, which tends to
+    (1 - accuracy) + accuracy * ln(accuracy) as n grows.
     """
     coverage_arr = np.asarray(coverage, dtype=float)
     risk_arr = np.asarray(risk, dtype=float)
-    return float(np.trapezoid(y=risk_arr, x=coverage_arr))
+    widths = np.diff(coverage_arr, prepend=0.0)
+    return float(np.sum(risk_arr * widths))
+
+
+def coverage_weights(confidence: npt.ArrayLike, coverage: float) -> np.ndarray:
+    """Each item's probability of being kept when the judge keeps its
+    `coverage` share of most-confident items, k = round(coverage * n).
+
+    Items strictly above the cut get 1, items below it get 0, and the tied
+    group the cut falls inside shares what is left equally:
+
+        w_boundary = (k - n_above) / m_boundary
+
+    That is the inclusion probability under a random tie-break, so any
+    weighted mean over these weights (accuracy, the shares inside kappa) is
+    the expected value at exactly `coverage`, independent of row order. The
+    weights sum to k.
+    """
+    confidence_arr = np.asarray(confidence, dtype=float)
+    n = len(confidence_arr)
+    k = max(1, round(coverage * n))
+    boundary_value = np.sort(confidence_arr)[::-1][k - 1]
+    above = confidence_arr > boundary_value
+    at_boundary = confidence_arr == boundary_value
+    weights = above.astype(float)
+    weights[at_boundary] = (k - above.sum()) / at_boundary.sum()
+    return weights
 
 
 def auto_accept_stats(

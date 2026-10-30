@@ -9,7 +9,7 @@ through unreviewed (src/metrics.py::auto_accept_stats). A post-hoc,
 descriptive analysis - not preregistered, and not a new hypothesis test.
 
 Only probability-scaled signals are used, each scored against the verdict
-it is a confidence in (D7 amendment): a threshold is meaningless on 1 - H.
+it is a confidence in (D7): a threshold is meaningless on 1 - H.
 The Bayesian and logistic-regression meta-models enter through their
 out-of-fold P(correct) (analysis/rq4.py, RQ4's N=1,819, clean only).
 Populations are those of RQ1/RQ3b, RQ6 and RQ7, with every item that has a

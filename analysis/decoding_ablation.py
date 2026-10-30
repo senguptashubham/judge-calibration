@@ -1,4 +1,4 @@
-"""Task 4.5: does constraining generation to a JSON schema (vs free-form)
+"""Decoding ablation: does constraining generation to a JSON schema (vs free-form)
 change the parse rate or the judge's verdict? (D25)
 
 `python -m analysis.decoding_ablation --config configs/run.yaml`

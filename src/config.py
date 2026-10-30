@@ -1,6 +1,6 @@
 """Typed config for the primary judge's entrypoints. Nothing else in src/
 reads configs/*.yaml directly or hardcodes a model name, path, threshold,
-or k value (CLAUDE.md §5). The RQ6/RQ7 harnesses have their own smaller
+or k value (CONTRIBUTING.md §5). The RQ6/RQ7 harnesses have their own smaller
 config classes (judge_kev.KevConfig, judge_autoj.AutojConfig).
 """
 
@@ -51,8 +51,8 @@ class Config:
             )
         if "attribution" in self.conditions:
             raise ValueError(
-                "'attribution' was dropped as a condition on 31 Aug 2026 "
-                "(DECISIONS.md D18) - it is not coming back via config."
+                "'attribution' is not a condition in this study "
+                "(DECISIONS.md D18)."
             )
         if "P1" not in self.prompt_variants:
             raise ValueError(

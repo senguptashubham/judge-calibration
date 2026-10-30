@@ -26,7 +26,7 @@ _CATEGORY_DATASET = "philschmid/mt-bench"
 
 def parse_verdict_and_confidence(raw_output: str) -> dict:
     """`verdict` and `verbalized_conf` from a call's raw JSON text, with
-    CLAUDE.md §3's failure taxonomy: none|no_verdict|no_confidence|
+    CONTRIBUTING.md §3's failure taxonomy: none|no_verdict|no_confidence|
     malformed_json|truncated.
 
     `no_verdict` is checked before `no_confidence`: a row with no verdict is

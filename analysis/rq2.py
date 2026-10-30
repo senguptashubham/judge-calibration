@@ -23,7 +23,9 @@ import pandas as pd
 from analysis.rq1 import SIGNALS, load_rq1_items
 from src.boot import cluster_bootstrap
 from src.config import Config
-from src.metrics import auroc_error, aurc, cohens_kappa, oracle_risk_coverage, risk_coverage
+from src.metrics import (
+    auroc_error, aurc, cohens_kappa, coverage_weights, oracle_risk_coverage, risk_coverage,
+)
 from src.plots import judge_name, plot_risk_coverage
 
 COVERAGE_TARGETS = [0.90, 0.75, 0.50]
@@ -43,30 +45,18 @@ def _bootstrap_battery(items: pd.DataFrame, metric_fns: dict, seed: int) -> dict
     return result
 
 
-def _top_k_mask(confidences: np.ndarray, coverage: float) -> np.ndarray:
-    """Mask for the `coverage` fraction of most-confident items.
-
-    A rank cut, unlike the tie-safe value thresholds risk_coverage() uses
-    for the plotted curve: those admit tied groups whole, so the curve's
-    coverage levels rarely land exactly on 0.90/0.75/0.50. A rank cut always
-    hits the target exactly, at the cost of a deterministic (stable-sort)
-    tie-break at the boundary - the right trade-off for a single scalar
-    query, and cheap enough to run 2000 times per bootstrap.
-    """
-    n = len(confidences)
-    k = max(1, round(coverage * n))
-    order = np.argsort(-confidences, kind="stable")  # descending confidence
-    kept = np.zeros(n, dtype=bool)
-    kept[order[:k]] = True
-    return kept
-
-
 def compute_signal_rq2_metrics(
     items: pd.DataFrame, signal: str, correct_col: str, verdict_col: str, seed: int
 ) -> dict:
     """AURC, AUROC(uncertainty -> error), and accuracy/κ at each of
     COVERAGE_TARGETS for one signal, each with a cluster-bootstrap CI.
     Uncertainty = 1 - signal throughout.
+
+    Accuracy and κ at a coverage level are expected values over random
+    tie-breaks (coverage_weights()): conf_verb and conf_sc have only 4-5
+    distinct values, so the cut usually falls inside a tied group, and
+    taking that group's items in row order would tie the result to how
+    the file is sorted.
     """
     def _aurc(df: pd.DataFrame) -> float:
         uncertainty = 1 - df[signal].to_numpy(dtype=float)
@@ -83,13 +73,13 @@ def compute_signal_rq2_metrics(
         pct = round(target * 100)
 
         def _accuracy_at(df: pd.DataFrame, target=target) -> float:
-            kept = _top_k_mask(df[signal].to_numpy(dtype=float), target)
-            return df[correct_col].to_numpy()[kept].astype(float).mean()
+            weights = coverage_weights(df[signal].to_numpy(dtype=float), target)
+            return float(np.average(df[correct_col].to_numpy(dtype=float), weights=weights))
 
         def _kappa_at(df: pd.DataFrame, target=target) -> float:
-            kept = _top_k_mask(df[signal].to_numpy(dtype=float), target)
+            weights = coverage_weights(df[signal].to_numpy(dtype=float), target)
             return cohens_kappa(
-                df[verdict_col].to_numpy()[kept], df["human_label"].to_numpy()[kept]
+                df[verdict_col].to_numpy(), df["human_label"].to_numpy(), weights=weights
             )
 
         metric_fns[f"accuracy_at_{pct}"] = _accuracy_at

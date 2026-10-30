@@ -1,18 +1,18 @@
 """RQ4: can a cheap meta-model beat the best single signal at predicting
-judge error? (PLAN.md §2) - plus the Bayesian arm's RQ5 verbose-shift check.
+judge error? - plus the Bayesian arm's RQ5 verbose-shift check.
 
 `python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration,bayesian_comparison,verbose_shift}`
 
 Each task is its own invocation; several run hundreds of model fits.
 
-  ablation             5.5  tier A -> B -> C on human_agreed items (N=556),
-                            with permutation nulls and paired tier steps
-  h4                   5.6  correct ~ oof_score * d_human, cluster bootstrap
-  transfer             5.7  train on clean, evaluate frozen on verbose
-  category             5.8  LeaveOneGroupOut over the 8 categories
-  calibration          5.9  meta-model reliability + Tier C coefficients
-  bayesian_comparison  5.9c LogReg vs Bayesian hierarchical model, Tier A
-  verbose_shift        5.9f Bayesian epistemic/aleatoric, clean vs verbose
+  ablation             tier A -> B -> C on human_agreed items (N=556),
+                       with permutation nulls and paired tier steps
+  h4                   correct ~ oof_score * d_human, cluster bootstrap
+  transfer             train on clean, evaluate frozen on verbose
+  category             LeaveOneGroupOut over the 8 categories
+  calibration          meta-model reliability + Tier C coefficients
+  bayesian_comparison  LogReg vs Bayesian hierarchical model, Tier A
+  verbose_shift        Bayesian epistemic/aleatoric, clean vs verbose
 
 Populations differ by task on purpose - each function's docstring says
 which and why. The "rq5_" output name of verbose_shift reflects the RQ it
@@ -78,7 +78,7 @@ from src.predictor import (
 )
 
 
-# --- Task 5.5: tier ablation ----------------------------------------------
+# --- Tier ablation ----------------------------------------------
 
 
 def load_ablation_population(items_parquet: str) -> pd.DataFrame:
@@ -215,7 +215,7 @@ def compare_tier_progression(population: pd.DataFrame, baseline_signal: str, see
     return pd.DataFrame.from_records(rows)
 
 
-# --- Task 5.6: H4 --------------------------------------------------------
+# --- H4 --------------------------------------------------------
 
 
 def load_h4_population(items_parquet: str) -> pd.DataFrame:
@@ -353,7 +353,7 @@ def main_h4(config_path: str) -> None:
     )
 
 
-# --- Task 5.7: transfer clean -> verbose -------------------------------------
+# --- Transfer clean -> verbose -------------------------------------
 #
 # Does an abstention layer trained on clean data still work when the judge
 # is attacked? Population: RQ3b's paired clean/verbose items (N=1,836).
@@ -459,7 +459,7 @@ def main_transfer(config_path: str) -> None:
     )
 
 
-# --- Task 5.8: LeaveOneGroupOut over category ------------------------------
+# --- LeaveOneGroupOut over category ------------------------------
 
 
 def compute_category_held_out_auroc(population: pd.DataFrame, model_name: str, seed: int) -> pd.DataFrame:
@@ -607,7 +607,7 @@ def main_ablation(config_path: str) -> None:
     )
 
 
-# --- Task 5.9: meta-model calibration and coefficients -----------------------
+# --- Meta-model calibration and coefficients -----------------------
 #
 # RQ4 base population (N=1,819), Tier C + logreg: the only tier holding all
 # three feature families, and the only model with directly readable
@@ -785,7 +785,7 @@ def main_calibration(config_path: str) -> None:
     )
 
 
-# --- Task 5.9c: frequentist vs Bayesian head-to-head -------------------------
+# --- Frequentist vs Bayesian head-to-head -------------------------
 #
 # RQ4 base population, Tier A for BOTH arms - comparing the two models on
 # different features would conflate method with features.
@@ -877,7 +877,7 @@ def main_bayesian_comparison(config_path: str) -> None:
     print("Fitting frequentist arm (Tier A + logreg, D8 10x5 repeated CV)...")
     freq = compute_frequentist_arm(population, config.seed)
 
-    print("Fitting Bayesian arm (Tier A hierarchical logit, D8 10x5 repeated CV - ~7 min, see TASKS.md 5.9b)...")
+    print("Fitting Bayesian arm (Tier A hierarchical logit, D8 10x5 repeated CV - ~9 min)...")
     bayes = compute_bayesian_arm(population, config.seed)
 
     freq_p_wrong = 1 - freq["mean_oof_correct"]
@@ -964,11 +964,11 @@ def main_bayesian_comparison(config_path: str) -> None:
     )
 
 
-# --- Task 5.9f: verbose-shift validation (RQ5, D21 amendment) ----------------
+# --- Verbose-shift validation (RQ5, D21) ----------------
 #
 # Preregistered prediction (D23): under the clean -> verbose shift, epistemic
 # rises while aleatoric stays flat. The model is fit ONCE on all of clean
-# with 5.7's transfer-safe features and evaluated with predict_in_sample()
+# with the transfer test's features and evaluated with predict_in_sample()
 # on both conditions - clean and verbose share all 80 questions, so each
 # row keeps its real fitted intercept and only the features differ.
 
@@ -1028,7 +1028,7 @@ def main_verbose_shift(config_path: str) -> None:
     print(f"Verbose-shift population: N={len(clean_items)} paired items (clean/P1 vs verbose/P1)")
     print(f"Feature set (D21 parity fix): {TRANSFER_SAFE_COLUMNS}")
 
-    print("Fitting Bayesian model ONCE on all of clean (no CV, mirrors 5.7's transfer-test design)...")
+    print("Fitting Bayesian model ONCE on all of clean (no CV, mirrors the transfer test's design)...")
     mcmc, question_id_to_index, scaler = fit_verbose_shift_model(clean_items, config.seed)
 
     clean_entropy = compute_condition_entropy(mcmc, clean_items, question_id_to_index, scaler)

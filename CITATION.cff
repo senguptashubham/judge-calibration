@@ -9,6 +9,7 @@ authors:
 repository-code: "https://github.com/senguptashubham/judge-calibration"
 url: "https://senguptashubham.github.io/judge-calibration/"
 license: MIT
+version: "0.1.0"
 date-released: "2026-09-25"
 keywords:
   - LLM-as-a-judge

@@ -2,7 +2,7 @@
 
 The failure-taxonomy cases are hand-built: structured decoding meant no
 malformed output ever occurred in the real runs, so there are no real
-fixtures to test against. Together they cover CLAUDE.md §3's full taxonomy.
+fixtures to test against. Together they cover CONTRIBUTING.md §3's full taxonomy.
 """
 
 import numpy as np
@@ -84,7 +84,7 @@ def test_parse_verdict_and_confidence_invalid_verdict_value():
 
 def test_parse_verdict_and_confidence_missing_confidence_still_keeps_verdict():
     # verdict and verbalized_conf are independently nullable columns
-    # (CLAUDE.md schema) - a confidence failure shouldn't discard a
+    # (CONTRIBUTING.md schema) - a confidence failure shouldn't discard a
     # perfectly good verdict.
     raw = '{"reasoning": "...", "verdict": "B"}'
     result = parse_verdict_and_confidence(raw)

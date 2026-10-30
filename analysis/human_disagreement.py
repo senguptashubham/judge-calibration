@@ -1,4 +1,4 @@
-"""Human-disagreement decomposition (tasks 3.3, 3.4; D9).
+"""Human-disagreement decomposition (D9).
 
 `python -m analysis.human_disagreement --config configs/run.yaml`
 
@@ -7,12 +7,12 @@ votes d_human = |frac_prefer_a - 0.5| says nothing about disagreement.
 Only 31 of these items are contested, well under D9's 100, so the secondary
 bucketed comparison is out of scope.
 
-Task 3.3: OLS slope and Spearman correlation of `correct` and of
+Accuracy and confidence: OLS slope and Spearman correlation of `correct` and of
 conf_verb against d_human, cluster-bootstrap CIs. Writes
 results/human_disagreement_table_{model_slug}.csv and
 results/figures/human_disagreement_{model_slug}.png.
 
-Task 3.4: Spearman only, for each of the four confidence signals against
+Signals: Spearman only, for each of the four confidence signals against
 d_human. d_human takes just 3 distinct values here, which supports a
 monotonic claim but not a linear one. Writes
 results/d_human_correlations_table_{model_slug}.csv and
@@ -97,7 +97,7 @@ def _spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
 
 
 def compute_disagreement_regression(items: pd.DataFrame, y_col: str, seed: int) -> dict:
-    """Task 3.3: OLS slope and Spearman of `y_col` against d_human, each
+    """OLS slope and Spearman of `y_col` against d_human, each
     with a cluster-bootstrap CI (invariant 2).
     """
     def _slope(df: pd.DataFrame) -> float:
@@ -119,7 +119,7 @@ def compute_disagreement_regression(items: pd.DataFrame, y_col: str, seed: int) 
 
 
 def compute_d_human_correlation(items: pd.DataFrame, signal: str, seed: int) -> dict:
-    """Task 3.4: Spearman of `signal` against d_human, with a cluster-bootstrap CI."""
+    """Spearman of `signal` against d_human, with a cluster-bootstrap CI."""
     def _spearman(df: pd.DataFrame) -> float:
         return _spearman_corr(df["d_human"].to_numpy(), df[signal].to_numpy(dtype=float))
 
@@ -167,7 +167,7 @@ def main(config_path: str) -> None:
     regression_table.to_csv(regression_table_path, index=False)
     print(f"Wrote {len(regression_table)} rows to {regression_table_path}")
 
-    print("\n--- task 3.4: signal vs. d_human, Spearman only ---")
+    print("\n--- signal vs. d_human, Spearman only ---")
     correlation_rows = []
     for signal in SIGNALS:
         result = compute_d_human_correlation(items, signal, config.seed)

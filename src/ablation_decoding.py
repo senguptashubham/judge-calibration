@@ -1,4 +1,4 @@
-"""Task 4.5's decoding ablation: constrained (JSON-schema guided decoding)
+"""Decoding ablation: constrained (JSON-schema guided decoding)
 vs free-form generation on the same N items and the same single call
 (clean/P1/AB/greedy). Does constraining the format change the verdict, or
 only the absolute logprobs (D25)? Colab only (D17).

@@ -1,5 +1,5 @@
 """RQ6: does kev-8b resist the failure modes found in the primary judge?
-(D27, PLAN.md §7)
+(D27)
 
 `python -m analysis.rq6 --config configs/run_kev.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}`
 
