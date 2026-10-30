@@ -420,12 +420,18 @@ the figure (distinct linestyles/markers used specifically so they stay legible d
 this) because they're nearly numerically identical: **65% of items have epistemic
 entropy below 10⁻⁶, effectively zero** (all three prompt variants agree), so `total ≈ aleatoric`
 for most of the population by construction (`total - aleatoric` exactly equals
-`epistemic`, verified). The mechanism: ensemble agreement (low epistemic) does not
-mean the ensemble is *right* — among the lowest-decile-epistemic items, accuracy is
-only **46%**, far below the 75.7% overall baseline. The judge's three prompt variants
-can be confidently, uniformly wrong together just as easily as confidently right
-together; low epistemic uncertainty is actively misleading as a trust signal here, not
-merely uninformative.
+`epistemic`, verified). The mechanism is a blind spot of the decomposition, not
+prompts agreeing confidently on wrong answers. Epistemic entropy measures how much
+the three prompts disagree, and it is near zero in two opposite cases: when all
+three are confident in the same verdict, and when all three say 50/50, because
+entropy is flat around 0.5 and small disagreements there barely register. The
+lowest-decile-epistemic items, with accuracy **46%** against 75.7% overall, are
+almost all the second kind: their median total entropy is 0.693 (ln 2, the
+maximum), and 94% of them have total entropy above 0.5. The 701 items where all
+three prompts are confident (total entropy below 10⁻⁶) are right 94% of the time.
+Ranking by epistemic alone puts the coin flips first, so low epistemic
+uncertainty is misleading as a trust signal on its own; it only means "the
+prompts agree", not "the prompts agree and are sure".
 
 **Human disagreement: does judge behavior track genuine human
 consensus strength at all?** Population for both: `(clean, P1)` further restricted to
@@ -972,8 +978,11 @@ them needs to know which one does that job better, whatever each one measures,
 so comparing them by AUROC on the same items is the right test. The result also
 has a plausible explanation. The ensemble's epistemic signal measures something
 related to error only indirectly (whether rewording the prompt changes the
-verdict), and three prompts can agree and still be wrong together, as RQ2's
-threshold sweep showed. The Bayesian model's signal comes from a model trained
+verdict), and it scores three prompts that all say 50/50 as near-certain, as
+RQ2's threshold sweep showed. About 32% of items have an ensemble epistemic
+entropy between 10⁻¹⁶ and 10⁻⁹, where the order is partly floating-point noise;
+treating those values as ties moves the ensemble's AUROC from 0.558 to 0.584,
+which leaves the gap at about −0.2. The Bayesian model's signal comes from a model trained
 directly to predict error, so it targets the quantity the triage decision needs.
 What the comparison does not show is that one kind of uncertainty is better in
 general: the ECE comparison above, unlike AUROC, does depend on scale, and favours

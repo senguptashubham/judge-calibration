@@ -492,7 +492,8 @@ authors' pairwise template verbatim, and their verdict extractor ported unchange
 **Exclusions.** Both are logged, never dropped silently:
 
 - **Input:** prompts over 7,168 tokens (8,192 context minus the 1,024-token output
-  budget) are skipped: 362 calls (4.75%), almost all verbose turn 2.
+  budget) are skipped: 362 calls, almost all verbose turn 2. That is 4.75% of the 7,616
+  greedy calls and 2.4% of all 15,232.
 - **Output:** truncation at `max_tokens = 1024` leaves no verdict on 39.8% of verbose
   turn-2 calls. Every such failure is a truncated completion. This is reported as a
   finding in its own right. `max_tokens` was deliberately not raised.

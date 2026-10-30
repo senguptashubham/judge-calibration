@@ -30,7 +30,8 @@ whether their uncertainty can drive abstain-and-escalate evaluation.
 | RQ7 | Does auto-j-13b show the same failures? Split by turn | RQ1/RQ3/RQ4 tests |
 
 Report auto-j's verbose/turn-2 failure prominently whenever RQ7 comes up: 39.8% of
-calls produce no verdict, and 4.75% of all calls are skipped as over-length.
+calls produce no verdict, and 362 calls are skipped as over-length (4.75% of the 7,616
+greedy calls, 2.4% of all 15,232).
 
 ## 2. Invariants
 
