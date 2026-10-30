@@ -91,7 +91,7 @@ Then run `git status`. If everything reproduced, it is empty: every tracked CSV 
 
 ## Expected runtime
 
-A full run takes about 80 minutes on a laptop CPU. Most of that is five steps:
+A full run takes about 60–80 minutes on a laptop CPU. Most of that is five steps:
 
 | Step | Time |
 |---|---|
@@ -126,14 +126,14 @@ Because the NUTS seeds are fixed, the Bayesian results came out bit-identical on
 
 ## Verification run
 
-**Date:** 30 October 2026.
+**Date:** 31 October 2026.
 
 **Setup:**
-- a fresh `git clone` of `github.com/senguptashubham/judge-calibration`, with code identical to `9e64375`;
+- a fresh `git clone` of `github.com/senguptashubham/judge-calibration` at `6fb2c8a`. Later commits change only documentation and the floating-point last digit of one table (see below);
 - a new venv on Python 3.11.15 and `pip install -e .`;
 - `runs/` copied in from the original runs. The same files, byte for byte, are the ones published in the dataset.
 
 **Result:**
-- Every command above exited with code 0.
-- `git status` was empty afterwards.
-- `pytest`: 295 passed, 1 skipped. The skipped module is `tests/test_site_e2e.py` (16 browser tests). It needs Playwright, which the base install leaves out. To run it, use `pip install -e ".[site]" && playwright install chromium`, which brings the total to 311.
+- Every command above exited with code 0, in about 58 minutes of compute.
+- `git status` showed one file: the κ columns of `results/rq2_table_qwen2.5_7b_instruct.csv` differed in the 16th decimal place. The committed table had been generated before a final change to `cohens_kappa()`'s weighted branch. It was regenerated, and is now byte-identical to the fresh-clone output; every other tracked output matched as committed.
+- `pytest`: 301 passed, 1 skipped. The skipped module is `tests/test_site_e2e.py` (16 browser tests). It needs Playwright, which the base install leaves out. To run it, use `pip install -e ".[site]" && playwright install chromium`, which brings the total to 317.
