@@ -7,6 +7,8 @@ Intervals are always labelled with their kind: a cluster-bootstrap CI and
 D8's across-repeat spread are different quantities.
 """
 
+import functools
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -76,6 +78,58 @@ DARK_MUTED = "#aaa293"   # annotations and reference lines: 7:1 on the dark page
 _MUTED = "silver"
 
 
+@dataclass(frozen=True)
+class _Theme:
+    """The colours a figure uses besides its data colours. LIGHT holds the
+    values the light figures have always used, so they render unchanged;
+    DARK is the site's dark theme. A dark variant differs only in colour
+    and in its `_dark` filename suffix."""
+    rc: dict = field(default_factory=dict)
+    ink: str = "black"            # reference curves, e.g. the oracle
+    grey: str = "gray"            # dashed and dotted reference lines
+    note: str = "dimgray"         # small annotation text
+    shade: str = "0.93"           # background bands
+    edge: str = "white"           # marker edges between overlapping points
+    muted: str = _MUTED           # estimates whose CI includes 0
+    line_ink: str = INK           # auto-accept's in-between signals
+    line_ink_muted: str = INK_MUTED
+    judge_colors: dict = field(default_factory=lambda: dict(JUDGE_COLORS))
+    cmap_floor: float = 0.0       # sequential colormaps start here; viridis's darkest end vanishes on dark
+    suffix: str = ""
+
+
+LIGHT = _Theme()
+DARK = _Theme(
+    rc=DARK_RC, ink="#ece7dc", grey=DARK_MUTED, note=DARK_MUTED, shade="#26231f", edge="#1a1815",
+    muted="#77716a", line_ink="#ece7dc", line_ink_muted="#8f897d", judge_colors=DARK_JUDGE_COLORS,
+    cmap_floor=0.3, suffix="_dark",
+)
+_theme = LIGHT
+
+
+def _dark_variant(plot_fn):
+    """Adds a keyword `dark: bool = False` to a plot function. dark=True
+    draws the same figure in the site's dark theme and saves it as
+    `{name}_dark.png`, for slides and dark pages; dark=False changes
+    nothing."""
+    @functools.wraps(plot_fn)
+    def wrapper(*args, dark: bool = False, **kwargs):
+        global _theme
+        previous, _theme = _theme, (DARK if dark else LIGHT)
+        try:
+            with plt.rc_context(_theme.rc):
+                return plot_fn(*args, **kwargs)
+        finally:
+            _theme = previous
+    return wrapper
+
+
+def _themed(filename: str) -> str:
+    """`filename` with the active theme's suffix before the extension."""
+    path = Path(filename)
+    return f"{path.stem}{_theme.suffix}{path.suffix}"
+
+
 def signal_label(name: str) -> str:
     return SIGNAL_LABELS.get(name, name)
 
@@ -92,15 +146,16 @@ def judge_name(model_slug: str) -> str:
 def _save(fig: Figure, filename: str) -> Figure:
     fig.tight_layout()
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / filename, dpi=150)
+    fig.savefig(FIGURES_DIR / _themed(filename), dpi=150)
     return fig
 
 
 def _significance_colors(ci_low: np.ndarray, ci_high: np.ndarray, color: str = "tab:blue") -> list[str]:
     """`color` where the CI excludes 0, muted where it doesn't."""
-    return [color if (lo > 0 or hi < 0) else _MUTED for lo, hi in zip(ci_low, ci_high)]
+    return [color if (lo > 0 or hi < 0) else _theme.muted for lo, hi in zip(ci_low, ci_high)]
 
 
+@_dark_variant
 def plot_ece_auroc_orthogonal() -> Figure:
     """Two hand-built 6-item examples showing ECE and AUROC
     measure different things (invariant 6).
@@ -174,6 +229,7 @@ def _marker_sizes(weights: np.ndarray) -> np.ndarray:
     return 40 + weights * 310
 
 
+@_dark_variant
 def plot_reliability_diagram(
     confidences: np.ndarray,
     correct: np.ndarray,
@@ -224,7 +280,7 @@ def plot_reliability_diagram(
         ax.plot(conf_pts, acc_pts, color=color, alpha=0.5, zorder=1)
         ax.scatter(
             conf_pts, acc_pts, s=_marker_sizes(weights), alpha=0.8, color=color,
-            edgecolors="white", linewidths=1, zorder=2,
+            edgecolors=_theme.edge, linewidths=1, zorder=2,
         )
         legend_handles.append(
             Line2D(
@@ -235,8 +291,8 @@ def plot_reliability_diagram(
         hist_ax.hist(conf, bins=40, range=(0, 1), color=color, alpha=0.5)
 
     lo = np.floor(lowest * 10) / 10 - 0.02
-    ax.plot([lo, 1], [lo, 1], linestyle="--", color="gray", zorder=0)
-    legend_handles.insert(0, Line2D([0], [0], linestyle="--", color="gray", label="perfect calibration"))
+    ax.plot([lo, 1], [lo, 1], linestyle="--", color=_theme.grey, zorder=0)
+    legend_handles.insert(0, Line2D([0], [0], linestyle="--", color=_theme.grey, label="perfect calibration"))
 
     ax.set_xlim(lo, 1.02)
     ax.set_ylim(lo, 1.02)
@@ -244,13 +300,14 @@ def plot_reliability_diagram(
     ax.set_title(title or f"{signal_label(signal_name)} ({judge_name(model_slug)})")
     ax.legend(handles=legend_handles, loc="upper left", fontsize=8)
     ax.text(0.98, 0.02, note, transform=ax.transAxes,
-            ha="right", va="bottom", fontsize=8, color="dimgray")
+            ha="right", va="bottom", fontsize=8, color=_theme.note)
 
     hist_ax.set_xlabel(xlabel)
     hist_ax.set_ylabel("items")
     return _save(fig, f"reliability_{signal_name}_{model_slug}.png")
 
 
+@_dark_variant
 def plot_risk_coverage(
     curves: dict[str, tuple[np.ndarray, np.ndarray]],
     oracle: tuple[np.ndarray, np.ndarray],
@@ -296,16 +353,16 @@ def plot_risk_coverage(
 
     oracle_coverage, oracle_risk = oracle
     ax.plot(
-        oracle_coverage, oracle_risk, linestyle="--", color="black", linewidth=1.5,
+        oracle_coverage, oracle_risk, linestyle="--", color=_theme.ink, linewidth=1.5,
         label=f"oracle (AURC {aurc(oracle_coverage, oracle_risk):.3f})",
     )
     if base_risk is not None:
-        ax.axhline(base_risk, linestyle=":", color="gray", linewidth=1.2,
+        ax.axhline(base_risk, linestyle=":", color=_theme.grey, linewidth=1.2,
                    label=f"no abstention / random ({base_risk:.3f})")
 
-    ax.axvspan(0, 0.05, color="0.93", zorder=0)
+    ax.axvspan(0, 0.05, color=_theme.shade, zorder=0)
     ax.text(0.025, 0.98, "noisy", transform=ax.get_xaxis_transform(), ha="center", va="top",
-            fontsize=7, color="dimgray", rotation=90)
+            fontsize=7, color=_theme.note, rotation=90)
 
     ax.set_xlim(0, 1.02)
     ax.set_ylim(bottom=0)
@@ -388,8 +445,8 @@ def _draw_forest(
     annotate: bool = True,
     reference: float | None = 0.0,
     decimals: int = 3,
-    muted: str = "dimgray",
-    reference_color: str = "gray",
+    muted: str | None = None,
+    reference_color: str | None = None,
 ) -> None:
     """Draws a forest panel onto `ax`: a point + interval bar per label
     (first label at the top) and a dashed reference line (default 0). No
@@ -401,9 +458,11 @@ def _draw_forest(
             dense panels whose exact values live in a CSV.
         reference: x of the dashed line, or None for no line.
         decimals: decimal places in the annotations.
-        muted, reference_color: annotation and reference-line colours
-            (lighter greys for a dark figure).
+        muted, reference_color: annotation and reference-line colours;
+            default to the active theme's.
     """
+    muted = muted or _theme.note
+    reference_color = reference_color or _theme.grey
     labels = list(labels)
     values_arr = np.asarray(values, dtype=float)
     ci_low_arr = np.asarray(ci_low, dtype=float)
@@ -484,6 +543,7 @@ def plot_d_human_correlations(
     )
 
 
+@_dark_variant
 def plot_confidence_gap(panels: list[dict], title: str, filename: str) -> Figure:
     """RQ3a/RQ6/RQ7: each signal's mean confidence on items whose verdict
     flipped between AB and BA, minus on items that didn't - one panel per
@@ -502,19 +562,20 @@ def plot_confidence_gap(panels: list[dict], title: str, filename: str) -> Figure
                              squeeze=False)
     for ax, panel in zip(axes[0], panels):
         labels = [signal_label(s) + (" †" if s in BY_CONSTRUCTION else "") for s in panel["signals"]]
-        colors = [_MUTED if s in BY_CONSTRUCTION else "tab:blue" for s in panel["signals"]]
+        colors = [_theme.muted if s in BY_CONSTRUCTION else "tab:blue" for s in panel["signals"]]
         _draw_forest(ax, labels, panel["gap"], panel["ci_low"], panel["ci_high"],
                      "confidence when flipped − when stable\n(95% cluster-bootstrap CI)", colors=colors)
         ax.set_title(panel["title"])
     fig.suptitle(title)
     fig.text(0.01, 0.01, "† built from the same two orders that define a flip, so a large gap is expected by construction",
-             fontsize=7, color="dimgray")
+             fontsize=7, color=_theme.note)
     fig.tight_layout(rect=(0, 0.04, 1, 1))
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / filename, dpi=150)
+    fig.savefig(FIGURES_DIR / _themed(filename), dpi=150)
     return fig
 
 
+@_dark_variant
 def plot_verbosity_deltas(panels: list[dict], title: str, filename: str) -> Figure:
     """RQ3b/RQ6/RQ7: ΔECE and ΔAUROC (verbose − clean) side by side, one
     row per population. Positive ΔECE = worse calibration; negative ΔAUROC
@@ -590,6 +651,7 @@ def plot_rq4_ablation(
     return _save(fig, f"rq4_ablation_{model_slug}.png")
 
 
+@_dark_variant
 def plot_rq4_progression(
     comparisons: list[str],
     auroc_diff: np.ndarray,
@@ -614,6 +676,7 @@ def plot_rq4_progression(
     )
 
 
+@_dark_variant
 def plot_rq4_permutation_nulls(
     tiers: list[str],
     models: list[str],
@@ -633,21 +696,22 @@ def plot_rq4_permutation_nulls(
     fig, ax = plt.subplots(figsize=(8, 0.55 * len(order) + 1.8))
     for row, i in enumerate(order):
         null = np.asarray(null_distributions[i], dtype=float)
-        ax.scatter(null, row + rng.uniform(-0.15, 0.15, len(null)), s=10, color="gray", alpha=0.5, zorder=2)
+        ax.scatter(null, row + rng.uniform(-0.15, 0.15, len(null)), s=10, color=_theme.grey, alpha=0.5, zorder=2)
         ax.scatter([observed[i]], [row], marker="D", s=60, color="tab:red", zorder=3)
-    ax.axvline(0.5, linestyle="--", color="gray", linewidth=1, zorder=1)
+    ax.axvline(0.5, linestyle="--", color=_theme.grey, linewidth=1, zorder=1)
     ax.set_yticks(range(len(order)))
     ax.set_yticklabels([f"Tier {tiers[i]}, {models[i]}" for i in order])
     ax.set_ylim(len(order) - 0.5, -0.5)
     ax.set_xlabel("AUROC predicting judge error")
     ax.legend(handles=[
-        Line2D([0], [0], marker="o", linestyle="", color="gray", label="null (labels shuffled within question)"),
+        Line2D([0], [0], marker="o", linestyle="", color=_theme.grey, label="null (labels shuffled within question)"),
         Line2D([0], [0], marker="D", linestyle="", color="tab:red", label="observed"),
     ], loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, fontsize=8)
     ax.set_title("Observed AUROC vs. permutation null")
     return _save(fig, f"rq4_permutation_nulls_{model_slug}.png")
 
 
+@_dark_variant
 def plot_h4_interaction(
     oof_score: np.ndarray,
     oof_score_grid: np.ndarray,
@@ -666,13 +730,14 @@ def plot_h4_interaction(
     """
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
     cmap = plt.get_cmap("viridis")
-    colors = [cmap(i / max(len(d_human_values) - 1, 1)) for i in range(len(d_human_values))]
+    floor = _theme.cmap_floor
+    colors = [cmap(floor + (1 - floor) * i / max(len(d_human_values) - 1, 1)) for i in range(len(d_human_values))]
 
     ax = axes[0]
     for color, d_human_value, curve in zip(colors, d_human_values, predicted_curves):
         ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
     # Rug below the [0, 1] axis so it never overlaps the curves.
-    ax.plot(oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color="black", alpha=0.3,
+    ax.plot(oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color=_theme.ink, alpha=0.3,
             markersize=8, clip_on=False)
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.08, 1.02)
@@ -693,6 +758,7 @@ def plot_h4_interaction(
     return _save(fig, f"h4_interaction_{model_slug}.png")
 
 
+@_dark_variant
 def plot_rq4_transfer(
     models: list[str],
     baseline_mean: np.ndarray,
@@ -841,6 +907,7 @@ def plot_rq4_coefficients_full(
     return _save(fig, f"rq4_coefficients_full_{model_slug}.png")
 
 
+@_dark_variant
 def plot_bayesian_convergence(
     max_rhat: np.ndarray,
     flagged: np.ndarray,
@@ -862,14 +929,14 @@ def plot_bayesian_convergence(
     diverged = divergences > 0
 
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.axhline(1.01, linestyle="--", color="gray", linewidth=1, zorder=1)
+    ax.axhline(1.01, linestyle="--", color=_theme.grey, linewidth=1, zorder=1)
     ok = ~flagged_arr
     ax.scatter(x[ok], max_rhat_arr[ok], color="tab:blue", zorder=2)
     ax.scatter(x[high_rhat], max_rhat_arr[high_rhat], color="tab:red", zorder=3)
     ax.scatter(x[diverged], max_rhat_arr[diverged], marker="x", s=70, color="tab:orange", zorder=4)
 
     ax.legend(handles=[
-        Line2D([0], [0], linestyle="--", color="gray", label="threshold (R-hat 1.01)"),
+        Line2D([0], [0], linestyle="--", color=_theme.grey, label="threshold (R-hat 1.01)"),
         Line2D([0], [0], marker="o", linestyle="", color="tab:blue", label=f"converged ({int(ok.sum())})"),
         Line2D([0], [0], marker="o", linestyle="", color="tab:red", label=f"R-hat > 1.01 ({int(high_rhat.sum())})"),
         Line2D([0], [0], marker="x", linestyle="", color="tab:orange",
@@ -882,6 +949,7 @@ def plot_bayesian_convergence(
     return _save(fig, f"rq4_bayesian_convergence_{model_slug}.png")
 
 
+@_dark_variant
 def plot_rq5_distillation(
     auroc_ensemble: float,
     auroc_ensemble_ci: tuple[float, float],
@@ -922,7 +990,7 @@ def plot_rq5_distillation(
     for y, (v, lo, hi) in enumerate(zip(values, lows, highs)):
         text = f"{v:.3f} (point only)" if np.isnan(lo) else f"{v:.3f} [{lo:.3f}, {hi:.3f}]"
         ax.annotate(text, xy=(v, y), xytext=(0, 10), textcoords="offset points", ha="center",
-                    fontsize=8, color="dimgray")
+                    fontsize=8, color=_theme.note)
     ax.set_title("A single-call Bayesian model vs. a 3-prompt ensemble\n(95% cluster-bootstrap CIs)", fontsize=10)
     return _save(fig, f"rq5_distillation_{model_slug}.png")
 
@@ -1008,6 +1076,7 @@ AUTO_ACCEPT_FIGURE_SIGNALS = {
 }
 
 
+@_dark_variant
 def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Figure:
     """One column per judge. Top: the share of the judge's wrong verdicts an
     auto-accept pipeline lets through, against the confidence threshold it
@@ -1025,8 +1094,8 @@ def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Fig
     fig, axes = plt.subplots(2, len(judges), figsize=(5.2 * len(judges), 8), sharex=True, sharey="row", squeeze=False)
     for col, judge in enumerate(judges):
         signals = AUTO_ACCEPT_FIGURE_SIGNALS[judge]
-        middle = [INK_MUTED, INK][: len(signals) - 2]
-        colors = [ACCENT_RED, *middle, JUDGE_COLORS[judge]]
+        middle = [_theme.line_ink_muted, _theme.line_ink][: len(signals) - 2]
+        colors = [ACCENT_RED, *middle, _theme.judge_colors[judge]]
         for color, signal in zip(colors, signals):
             for condition, linestyle in [("clean", "-"), ("verbose", "--")]:
                 df = curves[(curves["judge"] == judge) & (curves["signal"] == signal) & (curves["condition"] == condition)]
@@ -1036,7 +1105,7 @@ def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Fig
                 axes[0][col].plot(df["threshold"], df["slip_through"], color=color, linestyle=linestyle, label=label)
                 axes[1][col].plot(df["threshold"], df["accepted_share"], color=color, linestyle=linestyle)
         for row in (0, 1):
-            axes[row][col].axvline(threshold_marker, color="gray", linestyle=":", linewidth=1)
+            axes[row][col].axvline(threshold_marker, color=_theme.grey, linestyle=":", linewidth=1)
             axes[row][col].set_xlim(0.5, 1.0)
             axes[row][col].set_ylim(0, 1.02)
         axes[0][col].set_title(judge)
@@ -1049,4 +1118,5 @@ def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Fig
 
 
 if __name__ == "__main__":
-    plot_ece_auroc_orthogonal()
+    for dark in (False, True):
+        plot_ece_auroc_orthogonal(dark=dark)

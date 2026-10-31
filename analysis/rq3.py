@@ -177,11 +177,13 @@ def run_rq3b(config: Config) -> pd.DataFrame:
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
-    plot_verbosity_deltas(
-        [verbosity_panel(table, "")],
-        title=f"Padding attack: calibration and error detection ({judge_name(config.model_slug)})",
-        filename=f"rq3b_deltas_{config.model_slug}.png",
-    )
+    for dark in (False, True):
+        plot_verbosity_deltas(
+            [verbosity_panel(table, "")],
+            title=f"Padding attack: calibration and error detection ({judge_name(config.model_slug)})",
+            filename=f"rq3b_deltas_{config.model_slug}.png",
+            dark=dark,
+        )
 
     headline = table[table["signal"] == "conf_verb"].iloc[0]
     print(
@@ -215,11 +217,13 @@ def run_rq3a(config: Config) -> pd.DataFrame:
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
-    plot_confidence_gap(
-        [confidence_gap_panel(table, f"flip rate {flip_rate_result['flip_rate']:.1%}")],
-        title=f"Is the judge less confident when answer order changes its verdict? ({judge_name(config.model_slug)})",
-        filename=f"rq3a_confidence_gap_{config.model_slug}.png",
-    )
+    for dark in (False, True):
+        plot_confidence_gap(
+            [confidence_gap_panel(table, f"flip rate {flip_rate_result['flip_rate']:.1%}")],
+            title=f"Is the judge less confident when answer order changes its verdict? ({judge_name(config.model_slug)})",
+            filename=f"rq3a_confidence_gap_{config.model_slug}.png",
+            dark=dark,
+        )
 
     headline = table[table["signal"] == "conf_verb"].iloc[0]
     print(

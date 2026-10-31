@@ -153,7 +153,8 @@ def main(config_path: str, kev_config_path: str, autoj_config_path: str) -> None
     print(at_09[["judge", "signal", "condition", "n", "accepted_share", "slip_through", "slip_through_ci_low",
                  "slip_through_ci_high", "error_among_accepted"]].round(3).to_string(index=False))
 
-    plot_auto_accept(curves)
+    for dark in (False, True):
+        plot_auto_accept(curves, dark=dark)
 
 
 if __name__ == "__main__":

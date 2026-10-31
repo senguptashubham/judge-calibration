@@ -343,14 +343,16 @@ def main_h4(config_path: str) -> None:
     print(f"Wrote 1 row to {table_path}")
 
     curves = compute_h4_interaction_curves(predictions_df)
-    plot_h4_interaction(
-        oof_score=curves["oof_score"],
-        oof_score_grid=curves["oof_score_grid"],
-        d_human_values=curves["d_human_values"],
-        predicted_curves=curves["predicted_curves"],
-        log_odds_curves=curves["log_odds_curves"],
-        model_slug=config.model_slug,
-    )
+    for dark in (False, True):
+        plot_h4_interaction(
+            oof_score=curves["oof_score"],
+            oof_score_grid=curves["oof_score_grid"],
+            d_human_values=curves["d_human_values"],
+            predicted_curves=curves["predicted_curves"],
+            log_odds_curves=curves["log_odds_curves"],
+            model_slug=config.model_slug,
+            dark=dark,
+        )
 
 
 # --- Transfer clean -> verbose -------------------------------------
@@ -447,16 +449,18 @@ def main_transfer(config_path: str) -> None:
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
-    plot_rq4_transfer(
-        models=table["model"].tolist(),
-        baseline_mean=table["baseline_auroc_mean"].to_numpy(),
-        baseline_low=table["baseline_auroc_low"].to_numpy(),
-        baseline_high=table["baseline_auroc_high"].to_numpy(),
-        transfer_mean=table["transfer_auroc"].to_numpy(),
-        transfer_low=table["transfer_ci_low"].to_numpy(),
-        transfer_high=table["transfer_ci_high"].to_numpy(),
-        model_slug=config.model_slug,
-    )
+    for dark in (False, True):
+        plot_rq4_transfer(
+            models=table["model"].tolist(),
+            baseline_mean=table["baseline_auroc_mean"].to_numpy(),
+            baseline_low=table["baseline_auroc_low"].to_numpy(),
+            baseline_high=table["baseline_auroc_high"].to_numpy(),
+            transfer_mean=table["transfer_auroc"].to_numpy(),
+            transfer_low=table["transfer_ci_low"].to_numpy(),
+            transfer_high=table["transfer_ci_high"].to_numpy(),
+            model_slug=config.model_slug,
+            dark=dark,
+        )
 
 
 # --- LeaveOneGroupOut over category ------------------------------
@@ -577,13 +581,15 @@ def main_ablation(config_path: str) -> None:
         null_means=null_table["null_mean"].to_numpy(),
     )
 
-    plot_rq4_permutation_nulls(
-        tiers=[row["tier"] for row in null_rows],
-        models=[row["model"] for row in null_rows],
-        observed=np.array([row["observed_auroc"] for row in null_rows]),
-        null_distributions=[row["null_aurocs"] for row in null_rows],
-        model_slug=config.model_slug,
-    )
+    for dark in (False, True):
+        plot_rq4_permutation_nulls(
+            tiers=[row["tier"] for row in null_rows],
+            models=[row["model"] for row in null_rows],
+            observed=np.array([row["observed_auroc"] for row in null_rows]),
+            null_distributions=[row["null_aurocs"] for row in null_rows],
+            model_slug=config.model_slug,
+            dark=dark,
+        )
 
     # Is the apparent baseline -> A -> B -> C progression real?
     print()
@@ -598,13 +604,15 @@ def main_ablation(config_path: str) -> None:
         )
     print(f"Wrote {len(progression)} rows to {progression_path}")
 
-    plot_rq4_progression(
-        comparisons=[f"{row['model']}: {row['comparison']}" for _, row in progression.iterrows()],
-        auroc_diff=progression["auroc_diff"].to_numpy(),
-        ci_low=progression["ci_low"].to_numpy(),
-        ci_high=progression["ci_high"].to_numpy(),
-        model_slug=config.model_slug,
-    )
+    for dark in (False, True):
+        plot_rq4_progression(
+            comparisons=[f"{row['model']}: {row['comparison']}" for _, row in progression.iterrows()],
+            auroc_diff=progression["auroc_diff"].to_numpy(),
+            ci_low=progression["ci_low"].to_numpy(),
+            ci_high=progression["ci_high"].to_numpy(),
+            model_slug=config.model_slug,
+            dark=dark,
+        )
 
 
 # --- Meta-model calibration and coefficients -----------------------
@@ -956,12 +964,14 @@ def main_bayesian_comparison(config_path: str) -> None:
     all_diag = bayes["fold_diagnostics"]
     print(f"Bayesian convergence: {summarize_diagnostics(all_diag)}")
 
-    plot_bayesian_convergence(
-        max_rhat=np.array([fold_diag["max_rhat"] for fold_diag in all_diag]),
-        flagged=np.array([fold_diag["flagged"] for fold_diag in all_diag]),
-        n_divergences=np.array([fold_diag["n_divergences"] for fold_diag in all_diag]),
-        model_slug=config.model_slug,
-    )
+    for dark in (False, True):
+        plot_bayesian_convergence(
+            max_rhat=np.array([fold_diag["max_rhat"] for fold_diag in all_diag]),
+            flagged=np.array([fold_diag["flagged"] for fold_diag in all_diag]),
+            n_divergences=np.array([fold_diag["n_divergences"] for fold_diag in all_diag]),
+            model_slug=config.model_slug,
+            dark=dark,
+        )
 
 
 # --- Verbose-shift validation (RQ5, D21) ----------------

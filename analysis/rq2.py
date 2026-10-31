@@ -110,10 +110,12 @@ def main(config_path: str) -> None:
         uncertainty = 1 - items[signal].to_numpy(dtype=float)
         curves[signal] = risk_coverage(uncertainty, items[correct_col].to_numpy())
 
-    plot_risk_coverage(
-        curves, oracle_curve, filename=f"risk_coverage_{config.model_slug}.png",
-        title=f"Abstaining on the least confident items ({judge_name(config.model_slug)})",
-    )
+    for dark in (False, True):
+        plot_risk_coverage(
+            curves, oracle_curve, filename=f"risk_coverage_{config.model_slug}.png",
+            title=f"Abstaining on the least confident items ({judge_name(config.model_slug)})",
+            dark=dark,
+        )
 
     table = pd.DataFrame.from_records(rows)
     table_path = f"{config.paths.results_dir}/rq2_table_{config.model_slug}.csv"

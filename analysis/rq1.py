@@ -175,15 +175,18 @@ def main(config_path: str) -> None:
         overlay = None
         if signal in bidir_form:
             overlay = (items[bidir_form[signal]].to_numpy(), items["correct_bidir"].to_numpy(), "order-averaged verdict")
-        plot_reliability_diagram(
-            items[CALIBRATION_FORM[signal]].to_numpy(),
-            items["correct"].to_numpy(),
-            signal_name=signal,
-            n_bins=config.n_bins,
-            model_slug=config.model_slug,
-            label="AB verdict",
-            overlay=overlay,
-        )
+        # A dark copy of the stated-confidence diagram, for slides.
+        for dark in (False, True) if signal == "conf_verb" else (False,):
+            plot_reliability_diagram(
+                items[CALIBRATION_FORM[signal]].to_numpy(),
+                items["correct"].to_numpy(),
+                signal_name=signal,
+                n_bins=config.n_bins,
+                model_slug=config.model_slug,
+                label="AB verdict",
+                overlay=overlay,
+                dark=dark,
+            )
 
     gap = compute_verdict_gap(items, config.seed)
     print(

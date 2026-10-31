@@ -165,7 +165,9 @@ REPORT.md · README.md · REPRODUCE.md · DECISIONS.md · PREREGISTRATION.md (fr
   goes YAML → dataclass, and nothing in `src/` hardcodes a model name, path,
   threshold or k.
 - **Plots:** matplotlib only. One figure per function, which returns the `Figure` and
-  saves it to `results/figures/` under a deterministic name.
+  saves it to `results/figures/` under a deterministic name. Figures used on slides
+  also take `dark=True` (the `@_dark_variant` decorator), which saves the same figure
+  in the site's dark theme as `{name}_dark.png`.
 - **Output and randomness:** use `logging`, not `print`, except in CLIs. Every
   stochastic function takes an explicit `seed` or `rng`.
 - **Comments and docstrings** say what the code does and why. Dates, task numbers and

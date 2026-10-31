@@ -52,6 +52,9 @@ pip install -e .
 
 Q=configs/run.yaml; K=configs/run_kev.yaml; A=configs/run_autoj.yaml
 
+# Concept figure (ece_auroc_orthogonal.png), light and dark
+python -m src.plots
+
 # Qwen2.5-7B-Instruct (RQ1-RQ5)
 python -m src.data    --config $Q
 python -m src.parse   --config $Q

@@ -111,11 +111,13 @@ def main_threshold_sweep(config_path: str) -> None:
         curves[signal] = (coverage, risk)
         aurc_by_signal[signal] = aurc(coverage, risk)
 
-    plot_risk_coverage(
-        curves, oracle_curve,
-        filename=f"entropy_threshold_sweep_{config.model_slug}.png",
-        title=f"Abstaining by ensemble entropy ({judge_name(config.model_slug)})",
-    )
+    for dark in (False, True):
+        plot_risk_coverage(
+            curves, oracle_curve,
+            filename=f"entropy_threshold_sweep_{config.model_slug}.png",
+            title=f"Abstaining by ensemble entropy ({judge_name(config.model_slug)})",
+            dark=dark,
+        )
 
     full_table = pd.concat(tables, ignore_index=True)
     table_path = f"{config.paths.results_dir}/rq5_threshold_sweep_table_{config.model_slug}.csv"
@@ -277,16 +279,18 @@ def main_distillation(config_path: str) -> None:
     gaps.to_csv(gaps_path, index=False)
     print(f"Wrote {len(gaps)} rows to {gaps_path}")
 
-    plot_rq5_distillation(
-        auroc_ensemble=ensemble["auroc"],
-        auroc_ensemble_ci=(ensemble["auroc_ci_low"], ensemble["auroc_ci_high"]),
-        auroc_bayesian=bayesian_auroc,
-        epistemic_auroc_ensemble=ensemble_epistemic_auroc,
-        epistemic_auroc_ensemble_ci=(ee_low, ee_high),
-        epistemic_auroc_bayesian=bayesian_epistemic_auroc,
-        epistemic_auroc_bayesian_ci=(be_low, be_high),
-        model_slug=config.model_slug,
-    )
+    for dark in (False, True):
+        plot_rq5_distillation(
+            auroc_ensemble=ensemble["auroc"],
+            auroc_ensemble_ci=(ensemble["auroc_ci_low"], ensemble["auroc_ci_high"]),
+            auroc_bayesian=bayesian_auroc,
+            epistemic_auroc_ensemble=ensemble_epistemic_auroc,
+            epistemic_auroc_ensemble_ci=(ee_low, ee_high),
+            epistemic_auroc_bayesian=bayesian_epistemic_auroc,
+            epistemic_auroc_bayesian_ci=(be_low, be_high),
+            model_slug=config.model_slug,
+            dark=dark,
+        )
 
 
 # --- Human-disagreement validation -------------------------------
