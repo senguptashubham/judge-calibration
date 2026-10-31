@@ -1,8 +1,10 @@
-"""Tests for analysis/site_data.py's item pickers: the game pool and the random
-"Trick the judge" examples. The exported file as a whole is checked against
-the real data when it is built."""
+"""Tests for analysis/site_data.py's item pickers (the game pool and the random
+"Trick the judge" examples) and the method diagram's numbers. The exported
+file as a whole is checked against the real data when it is built."""
 
-from analysis.site_data import pick_game_items, pick_random_examples
+import pytest
+
+from analysis.site_data import method_numbers, pick_game_items, pick_random_examples
 
 
 def _call(winner):
@@ -61,3 +63,13 @@ def test_random_examples_respect_exclusions_size_cap_and_count():
     assert by_question == {1: "q1-a", 2: "q2-a", 3: "q3-a"}
     assert all(ex["kind"] == "random" and "padded_a" in ex for ex in examples)
     assert len(pick_random_examples(ITEMS, exclude=set(), seed=0, n=2, max_bytes=8000)) == 2
+
+
+def test_autoj_no_verdict_rate_comes_from_the_rq7_table_not_the_pages_items():
+    # Every call on the page gave a verdict; the rate must still be the table's.
+    table = [{"condition": "verbose", "turn": 2, "n_calls": 1584, "n_no_verdict": 630, "rate": 630 / 1584},
+             {"condition": "verbose", "turn": 1, "n_calls": 1862, "n_no_verdict": 253, "rate": 253 / 1862}]
+
+    assert method_numbers(ITEMS, table)["autoj_padded_turn2_no_verdict"] == 0.398
+    with pytest.raises(ValueError):
+        method_numbers(ITEMS, table[1:])

@@ -7,7 +7,8 @@ models had, the human vote, and each judge's greedy call under
 (clean, padded) x (AB, BA) - which position it picked, which model that
 means, its stated confidence where it has one, and its own reasoning text.
 Plus the auto-accept series (analysis/auto_accept.py), a showcase list for
-the site's opening examples, and the headline comparison numbers.
+the site's opening examples, the headline comparison numbers, and auto-j's
+no-verdict rates (analysis/rq7.py).
 
 Padded answers are not stored here: analysis/site_data.py renders them with
 src/perturb.py::verbose_pad, the same function the runs used.
@@ -238,6 +239,8 @@ def build_bundle(config: Config, kev_config: KevConfig, autoj_config: AutojConfi
         "auto_accept_series": series,
         "judge_comparison": pd.read_csv(f"{results_dir}/judge_comparison.csv").to_dict("records"),
         "auto_accept_headline": pd.read_csv(f"{results_dir}/auto_accept.csv").to_dict("records"),
+        "autoj_no_verdict": pd.read_csv(f"{results_dir}/rq7_no_verdict_{autoj_config.model_slug}.csv")
+        .to_dict("records"),
     }
 
 

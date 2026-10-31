@@ -1528,6 +1528,8 @@ parseable verdict at all:
 | `verbose` / turn=1 | 1,862 | 253 | 13.6% |
 | `verbose` / turn=2 | 1,584 | 630 | **39.8%** |
 
+Table: `rq7_no_verdict_autoj_13b_gptq_4bits.csv` (written by the `calibration` task).
+
 The mechanism is exact, not approximate: every failure traces to
 `finish_reason == "length"` (the completion was truncated at 1,024 tokens
 before reaching a decision line) — every completion that finished

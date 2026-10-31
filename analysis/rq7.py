@@ -9,6 +9,8 @@ failure modes? (D28)
   conf_sc_bpe_autoj_greedy - the same signal from the two greedy calls -
   so clean and verbose are scored on the same construction.
 - Every test is split by turn (1 vs 2), both always reported.
+- The calibration task also writes how often auto-j gives no verdict at
+  all, by condition and turn, over every call that ran.
 - auto-j's signals have different null patterns from each other and from
   `correct` (ties and parse failures), so each test filters to its own
   signal's non-null rows right before computing - never one shared filter.
@@ -30,6 +32,7 @@ from analysis.rq3 import (
     verbosity_panel,
 )
 from analysis.rq6 import compute_signal_calibration
+from src.autoj_signals import no_verdict_table
 from src.bayesian import repeated_stratified_group_kfold_bayesian, summarize_diagnostics
 from src.judge_autoj import AutojConfig
 from src.plots import (
@@ -98,6 +101,14 @@ def load_rq7_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFram
 
 def main_calibration(config_path: str) -> None:
     config = AutojConfig.from_yaml(config_path)
+    failures = no_verdict_table(pd.read_parquet(config.paths.calls_parquet))
+    failures_path = f"{config.paths.results_dir}/rq7_no_verdict_{config.model_slug}.csv"
+    failures.to_csv(failures_path, index=False)
+    print("RQ7 calls with no verdict (skips excluded):")
+    for row in failures.itertuples():
+        print(f"  {row.condition}/turn={row.turn}: {row.n_no_verdict} of {row.n_calls} ({row.rate:.1%})")
+    print(f"Wrote {len(failures)} rows to {failures_path}")
+
     clean_items = load_rq7_clean_items(config.paths.items_parquet)
     clean_items = clean_items[clean_items["correct"].notna()]
 

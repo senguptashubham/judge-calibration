@@ -23,6 +23,7 @@ from src.autoj_signals import (
     conf_sc_bpe_autoj_greedy,
     extract_autoj_verdict,
     flipped_autoj,
+    no_verdict_table,
     judge_verdict_autoj,
     verdict_bidir_autoj,
 )
@@ -328,3 +329,19 @@ def test_calibration_forms_are_probabilities_on_the_ab_verdict():
     signals = compute_item_signals_autoj(rows, k_sc=4)
     assert signals["conf_sc_bpe_autoj_prob"] == pytest.approx(0.9)
     assert signals["conf_sc_bpe_autoj_greedy_prob"] == pytest.approx(1.0)
+
+
+def test_no_verdict_table_excludes_skips_and_counts_ties_as_verdicts():
+    calls = pd.DataFrame({
+        "condition": ["verbose"] * 5 + ["clean"],
+        "turn": [2] * 5 + [1],
+        "skipped": [False, False, False, False, True, False],
+        "pred_label": [-1, -1, 2, 0, None, 1],
+    })
+
+    table = no_verdict_table(calls).set_index(["condition", "turn"])
+
+    assert table.loc[("verbose", 2), "n_calls"] == 4
+    assert table.loc[("verbose", 2), "n_no_verdict"] == 2
+    assert table.loc[("verbose", 2), "rate"] == 0.5
+    assert table.loc[("clean", 1), "rate"] == 0.0

@@ -83,6 +83,21 @@ def build_calls_autoj(checkpoint_path: str | Path) -> pd.DataFrame:
     return pd.DataFrame.from_records(rows)
 
 
+def no_verdict_table(calls: pd.DataFrame) -> pd.DataFrame:
+    """Share of the calls that ran (all samples, skips excluded) that gave
+    no decision line (pred_label == -1), by condition and turn. A tie is a
+    verdict here. Counted over every call, labelled or not: a missing
+    verdict needs no human label to be seen.
+    """
+    ran = calls[~calls["skipped"].astype(bool)]
+    table = (ran.assign(no_verdict=ran["pred_label"] == -1)
+             .groupby(["condition", "turn"])["no_verdict"].agg(n_calls="size", n_no_verdict="sum")
+             .reset_index())
+    table["n_no_verdict"] = table["n_no_verdict"].astype(int)
+    table["rate"] = table["n_no_verdict"] / table["n_calls"]
+    return table
+
+
 def _find_call(rows: list[dict], order: str, sample_idx: int) -> dict | None:
     """One call by order + sample_idx, excluding skipped calls."""
     for row in rows:

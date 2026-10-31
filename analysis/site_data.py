@@ -132,19 +132,22 @@ def pick_random_examples(items: list[dict], exclude: set[str], seed: int, n: int
     return out
 
 
-def method_numbers(items: list[dict]) -> dict:
-    """Counts for the method diagram, taken from the same items the page shows."""
+def method_numbers(items: list[dict], autoj_no_verdict: list[dict]) -> dict:
+    """Counts for the method diagram, taken from the same items the page shows.
+    auto-j's no-verdict rate is a result, not a count of the page's items, so
+    it comes from analysis/rq7.py's table over every call, as in the report."""
     calls = {judge: [call for conds in (it["judges"][judge] for it in items)
                      for orders in conds.values() for call in orders.values()]
              for judge in items[0]["judges"]}
-    autoj_padded_t2 = [call for it in items if it["turn"] == 2
-                       for call in it["judges"]["auto-j-13b"]["verbose"].values() if call["status"] != "skipped"]
+    padded_t2 = [r for r in autoj_no_verdict if r["condition"] == "verbose" and r["turn"] == 2]
+    if len(padded_t2) != 1:
+        raise ValueError(f"expected one verbose/turn-2 row in the auto-j no-verdict table, got {len(padded_t2)}")
     return {
         "n_questions": len({it["question_id"] for it in items}),
         "n_models": len({it["model_a"] for it in items} | {it["model_b"] for it in items}),
         "n_items": len(items),
         "verdicts": {judge: sum(c["status"] == "ok" for c in cs) for judge, cs in calls.items()},
-        "autoj_padded_turn2_no_verdict": _r(np.mean([c["status"] == "no_verdict" for c in autoj_padded_t2]), 3),
+        "autoj_padded_turn2_no_verdict": _r(padded_t2[0]["rate"], 3),
     }
 
 
@@ -180,7 +183,7 @@ def main(config_path: str) -> None:
                              for r in bundle["judge_comparison"]],
         "comparison_measures": [{"measure": m, "title": title, "axis": axis, "reference": ref}
                                 for m, title, axis, ref in MEASURES],
-        "method": method_numbers(bundle["items"]),
+        "method": method_numbers(bundle["items"], bundle["autoj_no_verdict"]),
     }
     SITE_DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     SITE_DATA_PATH.write_text("window.SITE_DATA = " + json.dumps(data, separators=(",", ":")) + ";\n", encoding="utf-8")
