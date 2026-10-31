@@ -113,9 +113,9 @@ exception is `results/items_labels.parquet`, which is built from human votes onl
 - **Provenance:** `seed`, `judge_model`, `vllm_version`, `prompt_hash`, `git_sha`.
 - **Output:** `raw_output`, `parse_ok`, `parse_failure_type` (`none`, `no_verdict`,
   `no_confidence`, `malformed_json` or `truncated`), `verdict`, `verbalized_conf`,
-  `reasoning_len`.
-- **Logprobs:** `verdict_token_logprob`, `p_a`, and the six `cot_*` statistics. All
-  of them are valid only when `sample_idx == 0` (D6).
+  `reasoning_text`, `reasoning_len`.
+- **Logprobs:** `verdict_token_logprob`, `p_a`, the five `cot_*` statistics and
+  `n_cot_tokens`. All of them are valid only when `sample_idx == 0` (D6).
 - **Counts and timing:** `n_prompt_tokens`, `n_out_tokens`, `latency_ms`.
 
 **`items_*.parquet`** has one row per `(item_id, condition, prompt_variant)`:
@@ -125,7 +125,8 @@ exception is `results/items_labels.parquet`, which is built from human votes onl
 - **Verdicts:**
   - `judge_verdict`: the greedy AB verdict, the primary one;
   - `correct`;
-  - `verdict_bidir`: the argmax of the mean `p_a` over both orders;
+  - `verdict_bidir`: the argmax of P(model_a wins) averaged over both orders,
+    (p_a(AB) + 1 − p_a(BA)) / 2;
   - `correct_bidir`.
 - **Signals:** `conf_verb`, `conf_lp`, `conf_sc` (clean/P1 only), `conf_bpe`, and
   `conf_ens` with `ens_entropy_{total,aleatoric,epistemic}` (clean only).
@@ -134,8 +135,8 @@ exception is `results/items_labels.parquet`, which is built from human votes onl
 - **Order:** `flipped`, computed within each `(condition, prompt_variant)`.
 - **Tier B:** `len_a`, `len_b`, `len_ratio`, `abs_len_diff`, `longer_is_chosen`,
   `judge_output_len`.
-- **Tier C:** `verdict_margin`, `cot_*_greedy`, and `cot_*_sampled_t07` (clean/P1
-  only).
+- **Tier C:** `verdict_margin`, plus `cot_*` and `n_cot_tokens` with the suffixes
+  `_greedy` and `_sampled_t07` (the latter clean/P1 only).
 
 ## 4. Layout
 

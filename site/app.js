@@ -1048,7 +1048,7 @@
       body: ["Votes are grouped by comparison: the same question, the same two chatbots, the same turn. The label is the majority among voters who picked a side.",
         `Comparisons where most voters called it a tie, or where the votes split evenly, get no label and are left out. That leaves ${num(M.n_items)} comparisons: the yardstick every judge verdict is scored against.`] },
     { id: "present", col: 2, bar: "03 · perturb", title: "Four presentations", sub: "as published · swapped · padded · both",
-      body: ["Each comparison is shown to each judge four ways: as published; with the two answers in swapped order; with both answers padded with filler that adds length but no information; and both at once.",
+      body: ["Each comparison is sent to each judge four ways: as published; with the two answers in swapped order; with both answers padded with filler that adds length but no information; and both at once. A few prompts over a judge's length limit are skipped.",
         "The content of the answers never changes, so a judge that is reading them should give the same verdict all four times."] },
     { id: "qwen", col: 3, judge: "Qwen2.5-7B", bar: "04 · judge", title: "Qwen2.5-7B", sub: `${num(M.verdicts["Qwen2.5-7B"])} verdicts`,
       body: ["A general-purpose 7B chat model, prompted to act as a judge. It writes its reasoning, a verdict and a stated confidence.",

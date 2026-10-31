@@ -423,11 +423,14 @@ for most of the population by construction (`total - aleatoric` exactly equals
 `epistemic`, verified). The mechanism is a blind spot of the decomposition, not
 prompts agreeing confidently on wrong answers. Epistemic entropy measures how much
 the three prompts disagree, and it is near zero in two opposite cases: when all
-three are confident in the same verdict, and when all three say 50/50, because
-entropy is flat around 0.5 and small disagreements there barely register. The
+three are confident in the same verdict, and when all three sit near 50/50,
+because entropy is flat around 0.5 and small disagreements there barely
+register. Each prompt's probability is already averaged over both answer orders,
+so a prompt sits near 50/50 when its verdict flips with the order. The
 lowest-decile-epistemic items, with accuracy **46%** against 75.7% overall, are
-almost all the second kind: their median total entropy is 0.693 (ln 2, the
-maximum), and 94% of them have total entropy above 0.5. The 701 items where all
+almost all the second kind: in 94% of them all three prompts flip, their median
+total entropy is 0.693 (ln 2, the maximum), and 94% have total entropy above
+0.5. The 701 items where all
 three prompts are confident (total entropy below 10⁻⁶) are right 94% of the time.
 Ranking by epistemic alone puts the coin flips first, so low epistemic
 uncertainty is misleading as a trust signal on its own; it only means "the
@@ -451,7 +454,7 @@ items), CI-backed under both a linear and a rank-only assumption
 
 | target | OLS slope | Spearman ρ |
 |---|---|---|
-| `correct ~ d_human` | 0.803 [0.208, 1.376] | 0.141 [0.036, 0.237] |
+| `correct ~ d_human` | 0.803 [0.208, 1.376] | 0.141 [0.036, 0.236] |
 | `conf_verb ~ d_human` | 0.059 [0.016, 0.100] | 0.113 [0.031, 0.190] |
 
 Spearman was added specifically because 3 points can't support a linear-shape claim;
@@ -544,8 +547,8 @@ its ceiling almost everywhere, leaving little room for it to move in either
 direction.
 
 **`conf_bpe`'s near-total collapse (0.307 vs. 0.998) is expected by construction,
-not an independent discovery.** `conf_bpe = 1 - entropy(mean p_a across both
-orders)` — it is *built from* cross-order agreement, so it is close to definitionally
+not an independent discovery.** `conf_bpe = 1 - entropy(P(model_a wins) averaged
+across both orders)` — it is *built from* cross-order agreement, so it is close to definitionally
 minimized exactly when the two orders disagree (a flip). A signal computed directly
 from the same order machinery it is being evaluated on will look artificially good
 on that specific axis. `conf_sc`'s
@@ -657,13 +660,18 @@ genuinely higher point estimate but a noisier CI must still win).*
 
 | tier | model | AUROC | 95% spread (D8) |
 |---|---|---|---|
-| baseline (`conf_bpe`) | — | 0.8196 | [0.7746, 0.8622] |
+| baseline (`conf_bpe`) | — | 0.8196 | [0.7746, 0.8622]† |
 | A | logreg | 0.8239 | [0.8155, 0.8331] |
 | A | histgbm | 0.8188 | [0.8080, 0.8282] |
 | B | logreg | 0.8120 | [0.7943, 0.8228] |
 | B | histgbm | 0.8084 | [0.7983, 0.8176] |
 | C | logreg | 0.8065 | [0.7827, 0.8196] |
 | C | histgbm | 0.8048 | [0.7943, 0.8156] |
+
+†A cluster-bootstrap CI over questions, not a D8 spread. The tiers' intervals are
+the spread across CV repeats on the same 556 items, which leaves out item-sampling
+noise and so is much narrower; the two kinds of interval can't be compared by
+overlap. The paired test below compares baseline and tiers properly.
 
 Every cell clears chance decisively — a **permutation null** (invariant 12,
 n=50 per cell) centers at 0.531–0.568 across all six tier/model cells, and
@@ -978,8 +986,8 @@ them needs to know which one does that job better, whatever each one measures,
 so comparing them by AUROC on the same items is the right test. The result also
 has a plausible explanation. The ensemble's epistemic signal measures something
 related to error only indirectly (whether rewording the prompt changes the
-verdict), and it scores three prompts that all say 50/50 as near-certain, as
-RQ2's threshold sweep showed. About 32% of items have an ensemble epistemic
+verdict), and it scores three prompts that all flip with answer order, and so
+all sit near 50/50, as near-certain, as RQ2's threshold sweep showed. About 32% of items have an ensemble epistemic
 entropy between 10⁻¹⁶ and 10⁻⁹, where the order is partly floating-point noise;
 treating those values as ties moves the ensemble's AUROC from 0.558 to 0.584,
 which leaves the gap at about −0.2. The Bayesian model's signal comes from a model trained

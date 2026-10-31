@@ -136,7 +136,7 @@ Where: `configs/run.yaml`, `src/config.py`, `src/perturb.py` (builds only
 only needs `clean`. Self-consistency is defined on the AB presentation, so sampling
 in BA, in P2/P3 or in `verbose` would add nothing.
 
-Where: `src/prompts.py`, `src/judge.py::calls_for_item()`.
+Where: `src/prompts.py`, `src/judge.py::call_schedule()`.
 
 ### D10–D12 — Pilot, vLLM pin, compute budget
 **Pilot (D10).** The pilot was 20 clean items. A throwaway verbose smoke test
@@ -212,8 +212,8 @@ Where: `src/config.py`, `src/plots.py`, every `analysis/*.py` writer.
 
 - **Primary verdict:** `judge_verdict`, the greedy verdict in AB order. This is what
   a deployment running one pass gets. `correct` is scored against it.
-- **Secondary verdict:** `verdict_bidir`, the argmax of the mean `p_a` across both
-  orders. `correct_bidir` is scored against it.
+- **Secondary verdict:** `verdict_bidir`, the argmax of P(model_a wins) averaged
+  over both orders, (`p_a`(AB) + 1 − `p_a`(BA)) / 2. `correct_bidir` is scored against it.
 - **A confidence is scored only against the verdict it belongs to.**
   - `conf_verb`, `conf_lp` and `conf_sc` describe the AB verdict.
   - Against `verdict_bidir`, calibration uses `conf_verb_bidir` and `conf_lp_bidir`.
@@ -265,11 +265,11 @@ Where: `src/metrics.py::ece`, `risk_coverage`, `aurc`, `coverage_weights`;
 `tests/test_metrics.py`.
 
 ### D20 ⚑ — `conf_ens` and the judge-level entropy decomposition; the P1 filter
-**Decision.** For a `clean` item, these are computed over the greedy `p_a` from
-P1–P3:
+**Decision.** For a `clean` item, these are computed over p_i, each prompt's
+P(model_a wins) averaged over both orders as for `verdict_bidir`, for P1–P3:
 
-- **total** = H[mean `p_a`];
-- **aleatoric** = mean H[`p_a`];
+- **total** = H[mean p_i];
+- **aleatoric** = mean H[p_i];
 - **epistemic** = total − aleatoric. This is the BALD / mutual-information term.
 
 `conf_ens = 1 − total`. All three components are stored. "Uncertainty" is never
