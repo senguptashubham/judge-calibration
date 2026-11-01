@@ -416,7 +416,7 @@ by a wide margin: AURC(`ens_entropy_total`) = 0.098, AURC(`ens_entropy_aleatoric
 0.099, AURC(`ens_entropy_epistemic`) = 0.273 — a paired cluster-bootstrap on the gap
 gives **epistemic − total = +0.175 [0.142, 0.208]**, a CI entirely on the "epistemic is
 worse" side of zero. The `total`/`aleatoric` curves are visually indistinguishable in
-the figure (distinct linestyles/markers used specifically so they stay legible despite
+the figure (distinct colours and markers used specifically so they stay legible despite
 this) because they're nearly numerically identical: **65% of items have epistemic
 entropy below 10⁻⁶, effectively zero** (all three prompt variants agree), so `total ≈ aleatoric`
 for most of the population by construction (`total - aleatoric` exactly equals

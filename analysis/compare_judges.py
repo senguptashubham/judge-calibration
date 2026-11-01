@@ -26,7 +26,7 @@ KEV_REGIMES = {"in_coverage": "in coverage", "out_of_coverage": "out of coverage
 
 # (measure key, panel title, x label, reference line)
 MEASURES = [
-    ("auroc", "Error detection (AUROC)", "AUROC of the order-swap signal (dashed = chance)", 0.5),
+    ("auroc", "Error detection (AUROC)", "AUROC of the order-swap signal (dotted = chance)", 0.5),
     ("overconfidence_gap", "Overconfidence", "mean confidence − accuracy (> 0 = overconfident)", 0.0),
     ("flip_rate", "Position bias", "share of verdicts that flip when answer order swaps", None),
     ("delta_ece", "Padding attack on calibration", "Δ ECE, verbose − clean (> 0 = worse calibrated)", 0.0),
@@ -142,8 +142,8 @@ def main(config_path: str, kev_config_path: str, autoj_config_path: str) -> None
                 ],
             }
         )
-    plot_judge_comparison(panels)
-    plot_judge_comparison(panels, "judge_comparison_dark.png", dark=True)   # the README's dark-theme copy
+    for dark in (False, True):   # the dark copy is the README's dark-theme image
+        plot_judge_comparison(panels, dark=dark)
 
 
 if __name__ == "__main__":

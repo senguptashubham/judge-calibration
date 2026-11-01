@@ -8,14 +8,17 @@ D8's across-repeat spread are different quantities.
 """
 
 import functools
-from dataclasses import dataclass, field
+import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
+from matplotlib.ticker import MaxNLocator
 
 from src.metrics import aurc, auroc_error, ece, get_bin_edges
 
@@ -46,6 +49,32 @@ SIGNAL_LABELS = {
     "p_correct_logreg": "logistic-regression meta-model",
 }
 
+# Each judge's naive confidence - what it reports by default, the signal that
+# lets errors through - drawn red in single-judge figures. Reliability
+# diagrams name a split by suffix (kev's coverage regime, auto-j's turn).
+NAIVE_SIGNALS = {
+    "conf_verb",
+    "conf_kev", "conf_kev_in_coverage", "conf_kev_out_of_coverage",
+    "conf_sc_autoj", "conf_sc_autoj_turn1", "conf_sc_autoj_turn2",
+}
+
+# A signal's colour role in single-judge comparisons, the same in every figure:
+# red the naive one, blue the fix, then signal-2, signal-3, ink. Unlisted
+# signals are grey.
+SIGNAL_ROLES = {
+    "conf_verb": "accent",
+    "conf_bpe": "works", "p_correct_bayesian": "works", "ens_entropy_total": "works",
+    "conf_ens": "signal2", "conf_ens_prob": "signal2",
+    "conf_lp": "signal3", "ens_entropy_aleatoric": "signal3",
+    "conf_sc": "ink",
+    "ens_entropy_epistemic": "accent",
+}
+
+
+def _signal_color(signal: str) -> str:
+    return getattr(_theme, SIGNAL_ROLES.get(signal, "muted"))
+
+
 # Signals built from the same AB/BA pair that defines `flipped`: their
 # flipped-vs-unflipped confidence gap is large by construction.
 BY_CONSTRUCTION = {"conf_bpe", "conf_kev_bpe", "conf_sc_bpe_autoj"}
@@ -55,63 +84,82 @@ JUDGE_NAMES = {
     "kev_8b": "kev-8b",
     "autoj_13b_gptq_4bits": "auto-j-13b",
 }
-# The site's palette (site/style.css), so the report, README and site agree. The
-# three judge colours and the red were validated together for colour-vision
-# separation; matplotlib's tab:orange/tab:green were nearly identical for
-# red-green colour-blind readers. Amber and teal sit under 3:1 on white, so
-# every figure that uses them also labels the judge in text.
-JUDGE_COLORS = {"Qwen2.5-7B": "#2a78d6", "kev-8b": "#eda100", "auto-j-13b": "#1baf7a"}
-ACCENT_RED = "#d03b3b"
-INK, INK_MUTED = "#111110", "#8a877e"
-# The site's dark theme, for figure variants shown on dark pages (the README
-# picks one by the reader's GitHub theme). Amber steps to #c98500 on dark, as on
-# the site; blue, teal and red pass there unchanged.
-DARK_JUDGE_COLORS = {**JUDGE_COLORS, "kev-8b": "#c98500"}
-DARK_RC = {
-    "figure.facecolor": "#1a1815", "axes.facecolor": "#1a1815", "savefig.facecolor": "#1a1815",
-    "axes.edgecolor": "#8f897d", "axes.labelcolor": "#ece7dc", "text.color": "#ece7dc",
-    "xtick.color": "#8f897d", "ytick.color": "#8f897d",
-    "xtick.labelcolor": "#c8c1b3", "ytick.labelcolor": "#ece7dc",
-}
-DARK_MUTED = "#aaa293"   # annotations and reference lines: 7:1 on the dark page
+# Colour roles shared with the site (design/tokens.json), so the report, README,
+# site and slides agree. Two rules decide a series' colour:
+# - a figure with more than one judge colours each by its judge; red marks only
+#   the naive signal that lets errors through;
+# - a single-judge figure (the judge named in its title) colours by role: red =
+#   naive or harmful, blue ("works") = the fix or a significant improvement,
+#   grey = not significant or in between. Where it compares several signals,
+#   two more colours (signal-2 teal-blue, signal-3 magenta) keep them apart,
+#   each signal always in the same one (SIGNAL_ROLES).
+# An effect with no good or bad direction is ink, hollow grey if not significant.
+# Qwen's purple and works' blue merge for red-green colour-blind readers, which
+# is why they never share a figure. Amber and teal sit under 3:1 on the light
+# paper, so every figure that uses them also labels the judge in text.
+_TOKENS = json.loads((Path(__file__).resolve().parents[1] / "design" / "tokens.json").read_text(encoding="utf-8"))
 
-_MUTED = "silver"
+# Line styles, as on the site: dashed = an attacked (padded or swapped) series;
+# dotted = a reference line (chance, zero, a threshold, perfect calibration).
+# Dash lengths scale with line width, and round caps turn the dotted pattern
+# into dots, so the two never look alike.
+DASHED = (0, (6, 4))
+DOTTED = (0, (1, 3))
+REFERENCE_LINE = {"linestyle": DOTTED, "dash_capstyle": "round", "linewidth": 1.5}
 
 
 @dataclass(frozen=True)
 class _Theme:
-    """The colours a figure uses besides its data colours. LIGHT holds the
-    values the light figures have always used, so they render unchanged;
-    DARK is the site's dark theme. A dark variant differs only in colour
-    and in its `_dark` filename suffix."""
-    rc: dict = field(default_factory=dict)
-    ink: str = "black"            # reference curves, e.g. the oracle
-    grey: str = "gray"            # dashed and dotted reference lines
-    note: str = "dimgray"         # small annotation text
-    shade: str = "0.93"           # background bands
-    edge: str = "white"           # marker edges between overlapping points
-    muted: str = _MUTED           # estimates whose CI includes 0
-    line_ink: str = INK           # auto-accept's in-between signals
-    line_ink_muted: str = INK_MUTED
-    judge_colors: dict = field(default_factory=lambda: dict(JUDGE_COLORS))
-    cmap_floor: float = 0.0       # sequential colormaps start here; viridis's darkest end vanishes on dark
-    suffix: str = ""
+    """The colours a figure uses, by role, for one theme of design/tokens.json.
+    A dark variant differs only in colour and in its `_dark` filename suffix."""
+    rc: dict
+    ink: str            # text; reference curves, e.g. the oracle
+    grey: str           # reference lines
+    note: str           # small annotation text: full ink, since grey at 7-8 pt is hard to read
+    shade: str          # background bands
+    edge: str           # the paper: marker edges between overlapping points, hollow markers' fill
+    muted: str          # estimates whose CI includes 0; in-between signals
+    accent: str         # red: the naive signal, a harmful effect
+    works: str          # blue: the fix, a helpful effect (single-judge figures only)
+    signal2: str        # teal-blue and magenta: further signals in a single-judge comparison
+    signal3: str
+    ramp_low: str       # the light end of a sequential grey ramp (its dark end is ink)
+    judge_colors: dict
+    suffix: str
 
 
-LIGHT = _Theme()
-DARK = _Theme(
-    rc=DARK_RC, ink="#ece7dc", grey=DARK_MUTED, note=DARK_MUTED, shade="#26231f", edge="#1a1815",
-    muted="#77716a", line_ink="#ece7dc", line_ink_muted="#8f897d", judge_colors=DARK_JUDGE_COLORS,
-    cmap_floor=0.3, suffix="_dark",
-)
+def _theme_from(t: dict, suffix: str) -> _Theme:
+    rc = {
+        "figure.facecolor": t["paper"], "axes.facecolor": t["paper"], "savefig.facecolor": t["paper"],
+        "axes.edgecolor": t["dot-ok"], "axes.labelcolor": t["ink"], "text.color": t["ink"],
+        "xtick.color": t["dot-ok"], "ytick.color": t["dot-ok"],
+        "xtick.labelcolor": t["ink"], "ytick.labelcolor": t["ink"],
+        "legend.edgecolor": t["rule"], "grid.color": t["rule"],
+        # Long enough for a legend line to show at least two dashes or several dots.
+        "legend.handlelength": 4.0,
+        # An axis spanning less than 10^-3 gets its labels as multiples of 1e-n:
+        # "-0.0006" tick labels run into each other on a narrow panel.
+        "axes.formatter.limits": (-3, 6),
+    }
+    return _Theme(
+        rc=rc, ink=t["ink"], grey=t["ink-3"], note=t["ink"], shade=t["paper-2"], edge=t["paper"],
+        muted=t["ink-3"], accent=t["accent"], works=t["works"], signal2=t["signal-2"], signal3=t["signal-3"],
+        ramp_low=t["dot-ok"],
+        judge_colors={"Qwen2.5-7B": t["qwen"], "kev-8b": t["kev"], "auto-j-13b": t["autoj"]},
+        suffix=suffix,
+    )
+
+
+LIGHT = _theme_from(_TOKENS["light"], suffix="")
+DARK = _theme_from(_TOKENS["dark"], suffix="_dark")
 _theme = LIGHT
 
 
 def _dark_variant(plot_fn):
     """Adds a keyword `dark: bool = False` to a plot function. dark=True
     draws the same figure in the site's dark theme and saves it as
-    `{name}_dark.png`, for slides and dark pages; dark=False changes
-    nothing."""
+    `{name}_dark.png`, for slides and dark pages; dark=False draws the
+    light theme."""
     @functools.wraps(plot_fn)
     def wrapper(*args, dark: bool = False, **kwargs):
         global _theme
@@ -143,16 +191,72 @@ def judge_name(model_slug: str) -> str:
     return model_slug
 
 
-def _save(fig: Figure, filename: str) -> Figure:
-    fig.tight_layout()
+def _fit_titles(fig: Figure, renderer) -> None:
+    """Keeps every axes title inside the figure. A title is centred over its
+    axes, so over an axes pushed right by long tick labels a long title can run
+    off the right edge while the left margin is empty: slide it just far enough
+    to fit, and shrink its font first if it is wider than the figure."""
+    pad = 0.01 * fig.bbox.width
+    for ax in fig.axes:
+        title = ax.title
+        if not title.get_text():
+            continue
+        while title.get_window_extent(renderer).width > fig.bbox.width - 2 * pad and title.get_fontsize() > 7:
+            title.set_fontsize(title.get_fontsize() - 0.5)
+        box = title.get_window_extent(renderer)
+        shift = min(0.0, fig.bbox.width - pad - box.x1) or max(0.0, pad - box.x0)
+        if shift:
+            title.set_x(title.get_position()[0] + shift / ax.bbox.width)
+
+
+def _thin_crowded_ticks(fig: Figure, renderer) -> None:
+    """Halves the x ticks of any axis whose tick labels touch, so a narrow
+    panel never prints its numbers into each other."""
+    for ax in fig.axes:
+        boxes = [t.get_window_extent(renderer) for t in ax.get_xticklabels() if t.get_visible() and t.get_text()]
+        boxes = sorted((b for b in boxes if b.width), key=lambda b: b.x0)
+        if any(a.x1 + 2 > b.x0 for a, b in zip(boxes, boxes[1:])):
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=max(len(boxes) // 2, 2)))
+
+
+def _save(fig: Figure, filename: str, rect: tuple[float, float, float, float] = (0, 0, 1, 1)) -> Figure:
+    """Lays out and saves a figure. Every figure goes through here, so the
+    layout guards (titles inside the figure, readable tick labels) cover new
+    figures too."""
+    fig.tight_layout(rect=rect)
+    fig.canvas.draw()
+    renderer = fig.canvas.get_renderer()
+    _thin_crowded_ticks(fig, renderer)
+    _fit_titles(fig, renderer)
     FIGURES_DIR.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIGURES_DIR / _themed(filename), dpi=150)
     return fig
 
 
-def _significance_colors(ci_low: np.ndarray, ci_high: np.ndarray, color: str = "tab:blue") -> list[str]:
-    """`color` where the CI excludes 0, muted where it doesn't."""
-    return [color if (lo > 0 or hi < 0) else _theme.muted for lo, hi in zip(ci_low, ci_high)]
+def _includes(reference: float | None, ci_low, ci_high) -> list[bool]:
+    """Per estimate, whether its interval includes `reference` (never, if None)."""
+    return [reference is not None and lo <= reference <= hi for lo, hi in zip(ci_low, ci_high)]
+
+
+def _direction_styles(ci_low, ci_high, worse_if_positive: bool) -> tuple[list[str], list[bool]]:
+    """Single-judge forests: (colors, hollow). Red where the interval sits wholly
+    on the harmful side of 0, blue where it sits wholly on the helpful side,
+    hollow grey where it includes 0 - colour for direction, fill for
+    significance."""
+    colors = []
+    for lo, hi in zip(ci_low, ci_high):
+        if lo <= 0 <= hi:
+            colors.append(_theme.muted)
+        else:
+            colors.append(_theme.accent if (lo > 0) == worse_if_positive else _theme.works)
+    return colors, _includes(0.0, ci_low, ci_high)
+
+
+def _neutral_styles(ci_low, ci_high) -> tuple[list[str], list[bool]]:
+    """Forests whose effects have no good or bad direction: (colors, hollow).
+    Ink where the interval excludes 0, hollow grey where it includes it."""
+    hollow = _includes(0.0, ci_low, ci_high)
+    return [_theme.muted if empty else _theme.ink for empty in hollow], hollow
 
 
 @_dark_variant
@@ -190,8 +294,8 @@ def plot_ece_auroc_orthogonal() -> Figure:
     ]:
         correct_bool = np.asarray(correct, dtype=bool)
         x = np.arange(len(confidences))
-        ax.scatter(x[correct_bool], confidences[correct_bool], c="tab:green", label="correct")
-        ax.scatter(x[~correct_bool], confidences[~correct_bool], c="tab:red", label="incorrect")
+        ax.scatter(x[correct_bool], confidences[correct_bool], color=_theme.ink, label="correct")
+        ax.scatter(x[~correct_bool], confidences[~correct_bool], color=_theme.accent, label="incorrect")
         ax.set_ylim(0.4, 1.05)
         ax.set_xlabel("item")
         ax.set_title(f"{label}\nECE={ece_val:.2f}, AUROC={auroc_val:.2f}")
@@ -239,6 +343,8 @@ def plot_reliability_diagram(
     strategy: str = "auto",
     label: str = "judge_verdict",
     overlay: tuple[np.ndarray, np.ndarray, str] | None = None,
+    overlay_role: str = "works",
+    main_role: str | None = None,
     title: str | None = None,
     xlabel: str = "confidence",
     ylabel: str = "accuracy",
@@ -254,17 +360,28 @@ def plot_reliability_diagram(
     verdict_bidir definition (D7). It carries its own confidences: a
     confidence is only meaningful against the verdict it belongs to.
 
+    Colours by role (a single-judge figure): the main curve is red for a
+    judge's naive confidence (NAIVE_SIGNALS) and ink otherwise; the overlay
+    takes `overlay_role` - "works" (blue) for a fix such as the order-averaged
+    verdict, "ink" for an alternative that is neither. `main_role` overrides
+    the main curve's colour, e.g. "works" for the Bayesian model. The overlay
+    is drawn with smaller squares on top, so where the two curves coincide
+    the main curve's circle still shows around the overlay's square.
+
     The axes start at the lowest confidence or accuracy shown, never above
     0.5, so the region where the points actually sit fills the panel.
 
     Saved to results/figures/reliability_{signal_name}_{model_slug}.png.
     """
-    curves = [(np.asarray(confidences, dtype=float), np.asarray(correct, dtype=float), label, "tab:blue")]
+    if main_role is not None:
+        main_color = getattr(_theme, main_role)
+    else:
+        main_color = _theme.accent if signal_name in NAIVE_SIGNALS else _theme.ink
+    curves = [(np.asarray(confidences, dtype=float), np.asarray(correct, dtype=float), label, main_color, "o", 1.0)]
     if overlay is not None:
         overlay_conf, overlay_correct, overlay_label = overlay
-        curves.append(
-            (np.asarray(overlay_conf, dtype=float), np.asarray(overlay_correct, dtype=float), overlay_label, "tab:orange")
-        )
+        curves.append((np.asarray(overlay_conf, dtype=float), np.asarray(overlay_correct, dtype=float),
+                       overlay_label, getattr(_theme, overlay_role), "s", 0.35))
 
     fig, (ax, hist_ax) = plt.subplots(
         2, 1, figsize=(5.5, 6.5), sharex=True, gridspec_kw={"height_ratios": [4, 1]}
@@ -272,27 +389,29 @@ def plot_reliability_diagram(
 
     lowest = 0.5
     legend_handles = []
-    for conf, corr, curve_label, color in curves:
+    for conf, corr, curve_label, color, marker, size in curves:
         conf_pts, acc_pts, weights = _binned_means(conf, corr, n_bins, strategy)
         ece_value, n_effective_bins = ece(conf, corr, n_bins, strategy)
         lowest = min(lowest, conf_pts.min(), acc_pts.min())
 
         ax.plot(conf_pts, acc_pts, color=color, alpha=0.5, zorder=1)
         ax.scatter(
-            conf_pts, acc_pts, s=_marker_sizes(weights), alpha=0.8, color=color,
-            edgecolors=_theme.edge, linewidths=1, zorder=2,
+            conf_pts, acc_pts, s=size * _marker_sizes(weights), alpha=0.8, color=color, marker=marker,
+            edgecolors=_theme.edge, linewidths=1, zorder=2 if size == 1.0 else 3,
         )
         legend_handles.append(
             Line2D(
-                [0], [0], marker="o", linestyle="", color=color, markersize=9,
+                [0], [0], marker=marker, linestyle="", color=color, markersize=9 if size == 1.0 else 6,
                 label=f"{curve_label}: ECE {ece_value:.3f} ({n_effective_bins} bins)",
             )
         )
-        hist_ax.hist(conf, bins=40, range=(0, 1), color=color, alpha=0.5)
+        # Outlines, not translucent fills: overlapping red and blue fills would blend
+        # into Qwen's purple.
+        hist_ax.hist(conf, bins=40, range=(0, 1), color=color, histtype="step", linewidth=1.5)
 
     lo = np.floor(lowest * 10) / 10 - 0.02
-    ax.plot([lo, 1], [lo, 1], linestyle="--", color=_theme.grey, zorder=0)
-    legend_handles.insert(0, Line2D([0], [0], linestyle="--", color=_theme.grey, label="perfect calibration"))
+    ax.plot([lo, 1], [lo, 1], color=_theme.grey, zorder=0, **REFERENCE_LINE)
+    legend_handles.insert(0, Line2D([0], [0], color=_theme.grey, label="perfect calibration", **REFERENCE_LINE))
 
     ax.set_xlim(lo, 1.02)
     ax.set_ylim(lo, 1.02)
@@ -329,12 +448,11 @@ def plot_risk_coverage(
         curves: {name: (coverage, risk)}.
         oracle: (coverage, risk) from oracle_risk_coverage().
     """
-    fig, ax = plt.subplots(figsize=(6.5, 5))
+    fig, ax = plt.subplots(figsize=(6.5, 6.4))
 
     # Curves can coincide (RQ5's total and aleatoric entropy almost do), so
-    # linestyle and marker vary too - color alone can't separate lines drawn
-    # on top of each other.
-    linestyles = ["-", "--", "-.", ":"]
+    # the marker varies too - colour alone can't separate lines drawn on top
+    # of each other. Every curve is solid: dashes mean an attacked series.
     markers = ["o", "s", "^", "D"]
 
     base_risk = None
@@ -343,7 +461,7 @@ def plot_risk_coverage(
         base_risk = float(risk[np.argmax(coverage)])
         ax.plot(
             coverage, risk,
-            linestyle=linestyles[i % len(linestyles)],
+            color=_signal_color(name),
             marker=markers[i % len(markers)],
             markersize=3,
             markevery=0.05,
@@ -353,11 +471,11 @@ def plot_risk_coverage(
 
     oracle_coverage, oracle_risk = oracle
     ax.plot(
-        oracle_coverage, oracle_risk, linestyle="--", color=_theme.ink, linewidth=1.5,
+        oracle_coverage, oracle_risk, color=_theme.ink, **REFERENCE_LINE,
         label=f"oracle (AURC {aurc(oracle_coverage, oracle_risk):.3f})",
     )
     if base_risk is not None:
-        ax.axhline(base_risk, linestyle=":", color=_theme.grey, linewidth=1.2,
+        ax.axhline(base_risk, color=_theme.grey, **REFERENCE_LINE,
                    label=f"no abstention / random ({base_risk:.3f})")
 
     ax.axvspan(0, 0.05, color=_theme.shade, zorder=0)
@@ -369,7 +487,8 @@ def plot_risk_coverage(
     ax.set_xlabel("coverage (share of items the judge keeps)")
     ax.set_ylabel("risk (error rate on kept items)")
     ax.set_title(title)
-    ax.legend(loc="upper left", bbox_to_anchor=(0.06, 1), fontsize=8)
+    # Below the axes: the curves and the reference lines fill every corner.
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.13), ncol=2, fontsize=8)
     return _save(fig, filename)
 
 
@@ -386,6 +505,7 @@ def _spearman_corr(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.sum(x_centered * y_centered) / denom)
 
 
+@_dark_variant
 def plot_human_disagreement(
     d_human: np.ndarray,
     correct: np.ndarray,
@@ -410,16 +530,16 @@ def plot_human_disagreement(
 
     fig, axes = plt.subplots(1, 2, figsize=(10, 4.5))
     panels = [
-        (axes[0], correct_arr, "accuracy", "tab:blue", "o"),
-        (axes[1], confidence_arr, "mean stated confidence", "tab:orange", "s"),
+        (axes[0], correct_arr, "accuracy", _theme.ink, "o"),
+        (axes[1], confidence_arr, "mean stated confidence", _theme.accent, "s"),
     ]
     for ax, y_arr, ylabel, color, marker in panels:
         bin_d, bin_y, weights = _binned_means(d_human_arr, y_arr, n_bins, strategy="auto")
         ax.scatter(bin_d, bin_y, s=_marker_sizes(weights), marker=marker, color=color,
-                   alpha=0.85, edgecolors="white", linewidths=1, zorder=2)
+                   alpha=0.85, edgecolors=_theme.edge, linewidths=1, zorder=2)
         for x, y, w in zip(bin_d, bin_y, weights):
             ax.annotate(f"n={round(w * len(d_human_arr))}", xy=(x, y), xytext=(0, 12),
-                        textcoords="offset points", ha="center", fontsize=8, color="dimgray")
+                        textcoords="offset points", ha="center", fontsize=8, color=_theme.note)
 
         rho = _spearman_corr(d_human_arr, y_arr)
         x_pad = 0.08 * (d_human_arr.max() - d_human_arr.min())
@@ -447,16 +567,23 @@ def _draw_forest(
     decimals: int = 3,
     muted: str | None = None,
     reference_color: str | None = None,
+    hollow: list[bool] | None = None,
+    markers: list[str] | None = None,
+    dashed: list[bool] | None = None,
 ) -> None:
     """Draws a forest panel onto `ax`: a point + interval bar per label
-    (first label at the top) and a dashed reference line (default 0). No
+    (first label at the top) and a dotted reference line (default 0). No
     title, no save - the shared primitive under every forest figure.
 
     Args:
-        colors: optional per-label colors (default: all tab:blue).
+        colors: optional per-label colors (default: all ink).
+        hollow: per label, draw the point hollow - by convention, where the
+            interval includes the reference (not significant).
+        markers: per label, the point's marker (default: all circles).
+        dashed: per label, draw the interval dashed - an attacked condition.
         annotate: print "value [lo, hi]" above each point. Turn off for
             dense panels whose exact values live in a CSV.
-        reference: x of the dashed line, or None for no line.
+        reference: x of the dotted line, or None for no line.
         decimals: decimal places in the annotations.
         muted, reference_color: annotation and reference-line colours;
             default to the active theme's.
@@ -467,19 +594,26 @@ def _draw_forest(
     values_arr = np.asarray(values, dtype=float)
     ci_low_arr = np.asarray(ci_low, dtype=float)
     ci_high_arr = np.asarray(ci_high, dtype=float)
-    point_colors = list(colors) if colors is not None else ["tab:blue"] * len(labels)
+    point_colors = list(colors) if colors is not None else [_theme.ink] * len(labels)
 
     y_pos = np.arange(len(labels))
     # errorbar takes distances from the point, not absolute CI bounds.
     err_low = values_arr - ci_low_arr
     err_high = ci_high_arr - values_arr
 
+    hollow_flags = list(hollow) if hollow is not None else [False] * len(labels)
+    point_markers = list(markers) if markers is not None else ["o"] * len(labels)
+    dashed_flags = list(dashed) if dashed is not None else [False] * len(labels)
     if reference is not None:
-        ax.axvline(reference, linestyle="--", color=reference_color, linewidth=1, zorder=1)
+        ax.axvline(reference, color=reference_color, zorder=1, **REFERENCE_LINE)
     # One errorbar call per point, since one call takes only one color.
-    for x, y, lo_err, hi_err, color in zip(values_arr, y_pos, err_low, err_high, point_colors):
-        ax.errorbar([x], [y], xerr=[[lo_err], [hi_err]], fmt="o", color=color, ecolor=color,
-                    capsize=4, markersize=7, zorder=2)
+    for x, y, lo_err, hi_err, color, empty, marker, attacked in zip(
+            values_arr, y_pos, err_low, err_high, point_colors, hollow_flags, point_markers, dashed_flags):
+        bars = ax.errorbar([x], [y], xerr=[[lo_err], [hi_err]], fmt=marker, color=color, ecolor=color,
+                           markerfacecolor=_theme.edge if empty else color, markeredgewidth=1.5,
+                           capsize=4, markersize=7, zorder=2)
+        if attacked:
+            bars.lines[2][0].set_linestyle(DASHED)
 
     # Exact values as text: when one estimate dwarfs the others, small but
     # real ones shrink to a dot with an invisible bar.
@@ -506,16 +640,18 @@ def _forest_plot(
     title: str,
     filename: str,
     colors: list[str] | None = None,
+    hollow: list[bool] | None = None,
 ) -> Figure:
     """A single-panel forest plot (several estimates with CIs against 0),
     saved to results/figures/{filename}. Height scales with the label count.
     """
     fig, ax = plt.subplots(figsize=(7, 0.8 * len(labels) + 1.6))
-    _draw_forest(ax, labels, values, ci_low, ci_high, xlabel, colors=colors)
+    _draw_forest(ax, labels, values, ci_low, ci_high, xlabel, colors=colors, hollow=hollow)
     ax.set_title(title)
     return _save(fig, filename)
 
 
+@_dark_variant
 def plot_d_human_correlations(
     signals: list[str],
     spearman: np.ndarray,
@@ -529,8 +665,12 @@ def plot_d_human_correlations(
     by RQ5). A second caller with a different signal set must pass
     a `filename_suffix`, or it overwrites the first caller's figure.
 
+    A correlation here has no good or bad direction: ink where the CI
+    excludes 0, hollow grey where it doesn't.
+
     Saved to results/figures/d_human_correlations{filename_suffix}_{model_slug}.png.
     """
+    colors, hollow = _neutral_styles(ci_low, ci_high)
     return _forest_plot(
         labels=[signal_label(s) for s in signals],
         values=spearman,
@@ -539,7 +679,8 @@ def plot_d_human_correlations(
         xlabel="Spearman ρ with d_human, 95% cluster-bootstrap CI",
         title=f"{title} ({judge_name(model_slug)})",
         filename=f"d_human_correlations{filename_suffix}_{model_slug}.png",
-        colors=_significance_colors(ci_low, ci_high),
+        colors=colors,
+        hollow=hollow,
     )
 
 
@@ -548,9 +689,11 @@ def plot_confidence_gap(panels: list[dict], title: str, filename: str) -> Figure
     """RQ3a/RQ6/RQ7: each signal's mean confidence on items whose verdict
     flipped between AB and BA, minus on items that didn't - one panel per
     population (e.g. per coverage regime or turn). A negative gap with a CI
-    excluding 0 means the signal drops where order changed the verdict.
+    excluding 0 means the signal drops where order changed the verdict: it
+    flags those errors (blue). A significant rise is red; a CI including 0
+    is hollow grey.
 
-    Signals in BY_CONSTRUCTION are drawn muted and marked †: they are built
+    Signals in BY_CONSTRUCTION are drawn filled grey and marked †: they are built
     from the same two orders that define a flip, so their large gap is
     expected and says nothing new.
 
@@ -562,25 +705,26 @@ def plot_confidence_gap(panels: list[dict], title: str, filename: str) -> Figure
                              squeeze=False)
     for ax, panel in zip(axes[0], panels):
         labels = [signal_label(s) + (" †" if s in BY_CONSTRUCTION else "") for s in panel["signals"]]
-        colors = [_theme.muted if s in BY_CONSTRUCTION else "tab:blue" for s in panel["signals"]]
+        colors, hollow = _direction_styles(panel["ci_low"], panel["ci_high"], worse_if_positive=True)
+        for i, signal in enumerate(panel["signals"]):
+            if signal in BY_CONSTRUCTION:
+                colors[i], hollow[i] = _theme.muted, False
         _draw_forest(ax, labels, panel["gap"], panel["ci_low"], panel["ci_high"],
-                     "confidence when flipped − when stable\n(95% cluster-bootstrap CI)", colors=colors)
+                     "confidence when flipped − when stable\n(95% cluster-bootstrap CI)", colors=colors, hollow=hollow)
         ax.set_title(panel["title"])
     fig.suptitle(title)
     fig.text(0.01, 0.01, "† built from the same two orders that define a flip, so a large gap is expected by construction",
              fontsize=7, color=_theme.note)
-    fig.tight_layout(rect=(0, 0.04, 1, 1))
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURES_DIR / _themed(filename), dpi=150)
-    return fig
+    return _save(fig, filename, rect=(0, 0.04, 1, 1))
 
 
 @_dark_variant
 def plot_verbosity_deltas(panels: list[dict], title: str, filename: str) -> Figure:
     """RQ3b/RQ6/RQ7: ΔECE and ΔAUROC (verbose − clean) side by side, one
     row per population. Positive ΔECE = worse calibration; negative ΔAUROC
-    = the signal detects errors less well. Estimates whose paired CI
-    excludes 0 are coloured; the rest are muted.
+    = the signal detects errors less well. Red where padding significantly
+    hurt, blue where it significantly helped, hollow grey where the paired
+    CI includes 0.
 
     Each panel: {"title", "signals", "delta_ece", "ece_ci_low", "ece_ci_high",
     "delta_auroc", "auroc_ci_low", "auroc_ci_high"}.
@@ -590,19 +734,29 @@ def plot_verbosity_deltas(panels: list[dict], title: str, filename: str) -> Figu
     fig, axes = plt.subplots(len(panels), 2, figsize=(12, (0.8 * n_signals + 1.4) * len(panels) + 0.6), squeeze=False)
     for row, panel in zip(axes, panels):
         labels = [signal_label(s) for s in panel["signals"]]
+        ece_colors, ece_hollow = _direction_styles(panel["ece_ci_low"], panel["ece_ci_high"], worse_if_positive=True)
+        auroc_colors, auroc_hollow = _direction_styles(panel["auroc_ci_low"], panel["auroc_ci_high"],
+                                                       worse_if_positive=False)
         _draw_forest(row[0], labels, panel["delta_ece"], panel["ece_ci_low"], panel["ece_ci_high"],
-                     "Δ ECE, verbose − clean (> 0 = worse calibrated)",
-                     colors=_significance_colors(panel["ece_ci_low"], panel["ece_ci_high"]))
+                     "Δ ECE, verbose − clean (> 0 = worse calibrated)", colors=ece_colors, hollow=ece_hollow)
         _draw_forest(row[1], labels, panel["delta_auroc"], panel["auroc_ci_low"], panel["auroc_ci_high"],
                      "Δ AUROC, verbose − clean (< 0 = detects errors less well)",
-                     colors=_significance_colors(panel["auroc_ci_low"], panel["auroc_ci_high"]))
+                     colors=auroc_colors, hollow=auroc_hollow)
         row[0].set_title(f"{panel['title']}: calibration" if panel["title"] else "Calibration")
         row[1].set_title(f"{panel['title']}: error detection" if panel["title"] else "Error detection")
         row[1].set_yticklabels([])
-    fig.suptitle(f"{title}\n(paired 95% cluster-bootstrap CIs; muted = CI includes 0)")
+    fig.suptitle(f"{title}\n(paired 95% cluster-bootstrap CIs; red = worse under padding, blue = better, "
+                 "hollow = CI includes 0)")
     return _save(fig, filename)
 
 
+# RQ4's meta-models are the proposed fix, so they are blue and the marker tells them
+# apart. Where the Bayesian model sits next to logistic regression, the Bayesian
+# model takes the blue and logistic regression is ink.
+MODEL_MARKERS = {"logreg": "o", "histgbm": "s"}
+
+
+@_dark_variant
 def plot_rq4_ablation(
     tiers: list[str],
     models: list[str],
@@ -626,10 +780,9 @@ def plot_rq4_ablation(
     """
     by_cell = {(t, m): (v, lo, hi) for t, m, v, lo, hi in zip(tiers, models, auroc_mean, auroc_low, auroc_high)}
     tier_names = {"A": "A: judge's own signals", "B": "B: + surface features", "C": "C: + token statistics"}
-    model_colors = {"logreg": "tab:blue", "histgbm": "tab:purple"}
-
-    labels, values, lows, highs, colors = [f"best single signal ({signal_label(baseline_label)})"], [baseline], \
-        [baseline_ci_low], [baseline_ci_high], ["tab:green"]
+    labels, values, lows, highs = [f"best single signal ({signal_label(baseline_label)})"], [baseline], \
+        [baseline_ci_low], [baseline_ci_high]
+    colors, markers = [_theme.ink], ["D"]
     for tier in ["A", "B", "C"]:
         for model in sorted(set(models)):
             if (tier, model) in by_cell:
@@ -638,14 +791,16 @@ def plot_rq4_ablation(
                 values.append(v)
                 lows.append(lo)
                 highs.append(hi)
-                colors.append(model_colors.get(model, "tab:gray"))
+                colors.append(_theme.works)
+                markers.append(MODEL_MARKERS.get(model, "o"))
 
     fig, ax = plt.subplots(figsize=(8, 0.6 * len(labels) + 2))
     if null_means is not None and len(null_means):
-        ax.axvspan(min(null_means), max(null_means), color="0.9", zorder=0)
+        ax.axvspan(min(null_means), max(null_means), color=_theme.shade, zorder=0)
         ax.text(np.mean(null_means), len(labels) - 0.6, "permutation null", ha="center", va="bottom",
-                fontsize=8, color="dimgray")
-    _draw_forest(ax, labels, values, lows, highs, "AUROC predicting judge error", colors=colors, reference=baseline)
+                fontsize=8, color=_theme.note)
+    _draw_forest(ax, labels, values, lows, highs, "AUROC predicting judge error", colors=colors, markers=markers,
+                 reference=baseline)
     ax.set_title("Do more features help predict judge error?\n"
                  "(tiers: range over 10 CV repeats; baseline: 95% cluster-bootstrap CI)", fontsize=10)
     return _save(fig, f"rq4_ablation_{model_slug}.png")
@@ -660,10 +815,12 @@ def plot_rq4_progression(
     model_slug: str,
 ) -> Figure:
     """RQ4 tier ablation: forest plot of each tier step's paired AUROC change. A CI
-    excluding 0 means that step is real; muted points are not.
+    excluding 0 means that step is real: blue if it raised AUROC, red if it
+    lowered it; hollow grey points are not real.
 
     Saved to results/figures/rq4_progression_{model_slug}.png.
     """
+    colors, hollow = _direction_styles(ci_low, ci_high, worse_if_positive=False)
     return _forest_plot(
         labels=comparisons,
         values=auroc_diff,
@@ -672,7 +829,8 @@ def plot_rq4_progression(
         xlabel="Δ AUROC, higher tier − lower tier (paired 95% cluster-bootstrap CI)",
         title="Does each added feature tier change AUROC?",
         filename=f"rq4_progression_{model_slug}.png",
-        colors=_significance_colors(ci_low, ci_high),
+        colors=colors,
+        hollow=hollow,
     )
 
 
@@ -686,7 +844,7 @@ def plot_rq4_permutation_nulls(
 ) -> Figure:
     """RQ4 tier ablation: for each (tier, model) cell, every permutation-null AUROC
     (grey dots, labels shuffled within each question) and the observed
-    AUROC (red diamond), on one shared axis.
+    AUROC (ink diamond), on one shared axis.
 
     Saved to results/figures/rq4_permutation_nulls_{model_slug}.png.
     """
@@ -697,15 +855,15 @@ def plot_rq4_permutation_nulls(
     for row, i in enumerate(order):
         null = np.asarray(null_distributions[i], dtype=float)
         ax.scatter(null, row + rng.uniform(-0.15, 0.15, len(null)), s=10, color=_theme.grey, alpha=0.5, zorder=2)
-        ax.scatter([observed[i]], [row], marker="D", s=60, color="tab:red", zorder=3)
-    ax.axvline(0.5, linestyle="--", color=_theme.grey, linewidth=1, zorder=1)
+        ax.scatter([observed[i]], [row], marker="D", s=60, color=_theme.ink, zorder=3)
+    ax.axvline(0.5, color=_theme.grey, zorder=1, **REFERENCE_LINE)
     ax.set_yticks(range(len(order)))
     ax.set_yticklabels([f"Tier {tiers[i]}, {models[i]}" for i in order])
     ax.set_ylim(len(order) - 0.5, -0.5)
     ax.set_xlabel("AUROC predicting judge error")
     ax.legend(handles=[
         Line2D([0], [0], marker="o", linestyle="", color=_theme.grey, label="null (labels shuffled within question)"),
-        Line2D([0], [0], marker="D", linestyle="", color="tab:red", label="observed"),
+        Line2D([0], [0], marker="D", linestyle="", color=_theme.ink, label="observed"),
     ], loc="upper center", bbox_to_anchor=(0.5, -0.14), ncol=2, fontsize=8)
     ax.set_title("Observed AUROC vs. permutation null")
     return _save(fig, f"rq4_permutation_nulls_{model_slug}.png")
@@ -729,13 +887,16 @@ def plot_h4_interaction(
     Saved to results/figures/h4_interaction_{model_slug}.png.
     """
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    cmap = plt.get_cmap("viridis")
-    floor = _theme.cmap_floor
-    colors = [cmap(floor + (1 - floor) * i / max(len(d_human_values) - 1, 1)) for i in range(len(d_human_values))]
+    # A grey ramp, light to dark as consensus grows: a sequential magnitude in
+    # one hue, so no curve reads as a judge. Markers repeat the order.
+    ramp = LinearSegmentedColormap.from_list("ramp", [_theme.ramp_low, _theme.ink])
+    colors = [ramp(i / max(len(d_human_values) - 1, 1)) for i in range(len(d_human_values))]
+    markers = ["o", "s", "^", "D"]
 
     ax = axes[0]
-    for color, d_human_value, curve in zip(colors, d_human_values, predicted_curves):
-        ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
+    for i, (color, d_human_value, curve) in enumerate(zip(colors, d_human_values, predicted_curves)):
+        ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, marker=markers[i % len(markers)], markevery=0.1,
+                label=f"d_human = {d_human_value:.3f}")
     # Rug below the [0, 1] axis so it never overlaps the curves.
     ax.plot(oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color=_theme.ink, alpha=0.3,
             markersize=8, clip_on=False)
@@ -747,8 +908,9 @@ def plot_h4_interaction(
     ax.legend(loc="upper left", fontsize=9, title="human consensus (0.5 = unanimous)")
 
     ax = axes[1]
-    for color, d_human_value, curve in zip(colors, d_human_values, log_odds_curves):
-        ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, label=f"d_human = {d_human_value:.3f}")
+    for i, (color, d_human_value, curve) in enumerate(zip(colors, d_human_values, log_odds_curves)):
+        ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, marker=markers[i % len(markers)], markevery=0.1,
+                label=f"d_human = {d_human_value:.3f}")
     ax.set_xlim(0, 1)
     ax.set_xlabel("meta-model's out-of-fold P(correct)")
     ax.set_ylabel("log-odds of correct")
@@ -775,21 +937,24 @@ def plot_rq4_transfer(
 
     Saved to results/figures/rq4_transfer_{model_slug}.png.
     """
-    labels, values, lows, highs, colors = [], [], [], [], []
+    labels, values, lows, highs, markers, dashed = [], [], [], [], [], []
     for i, model in enumerate(models):
         labels += [f"{model}: in-domain (clean)", f"{model}: transfer (clean → verbose)"]
         values += [baseline_mean[i], transfer_mean[i]]
         lows += [baseline_low[i], transfer_low[i]]
         highs += [baseline_high[i], transfer_high[i]]
-        colors += ["tab:blue", "tab:red"]
+        markers += [MODEL_MARKERS.get(model, "o")] * 2
+        dashed += [False, True]
 
     fig, ax = plt.subplots(figsize=(9, 0.7 * len(labels) + 2))
-    _draw_forest(ax, labels, values, lows, highs, "AUROC predicting judge error", colors=colors, reference=None)
+    _draw_forest(ax, labels, values, lows, highs, "AUROC predicting judge error", colors=[_theme.works] * len(labels),
+                 markers=markers, dashed=dashed, reference=None)
     ax.set_title("Does a meta-model trained on clean inputs survive the padding attack?\n"
-                 "(in-domain: range over 10 CV repeats; transfer: 95% cluster-bootstrap CI)", fontsize=10)
+                 "(in-domain: range over 10 CV repeats; transfer, dashed: 95% cluster-bootstrap CI)", fontsize=10)
     return _save(fig, f"rq4_transfer_{model_slug}.png")
 
 
+@_dark_variant
 def plot_rq4_category_transfer(
     categories: list[str],
     models: list[str],
@@ -798,33 +963,38 @@ def plot_rq4_category_transfer(
 ) -> Figure:
     """Category transfer: held-out AUROC per category (LeaveOneGroupOut), one marker
     per model, categories sorted weakest to strongest. No category is
-    singled out in advance; the dashed line marks chance. Each value is one
+    singled out in advance; the dotted line marks chance. Each value is one
     deterministic split, so there is no interval.
 
     Saved to results/figures/rq4_category_transfer_{model_slug}.png.
     """
     df = pd.DataFrame({"category": categories, "model": models, "auroc": auroc})
     category_order = df.groupby("category")["auroc"].mean().sort_values(ascending=False).index.tolist()
-    model_styles = {"logreg": ("tab:blue", "o"), "histgbm": ("tab:purple", "s")}
 
     fig, ax = plt.subplots(figsize=(7, 5))
-    ax.axvline(0.5, linestyle="--", color="gray", linewidth=1, zorder=1)
+    ax.axvline(0.5, color=_theme.grey, zorder=1, **REFERENCE_LINE)
     for model in sorted(df["model"].unique()):
         model_df = df[df["model"] == model].set_index("category").reindex(category_order)
-        color, marker = model_styles.get(model, ("tab:gray", "o"))
-        ax.scatter(model_df["auroc"], np.arange(len(category_order)), color=color, marker=marker, s=60,
-                   label=model, zorder=2)
+        ax.scatter(model_df["auroc"], np.arange(len(category_order)), color=_theme.works,
+                   marker=MODEL_MARKERS.get(model, "o"), s=60, label=model, zorder=2)
     ax.set_yticks(np.arange(len(category_order)))
     ax.set_yticklabels(category_order)
     ax.set_ylim(len(category_order) - 0.5, -0.5)
     ax.set_xlim(0.45, 0.95)
-    ax.set_xlabel("AUROC on the held-out category (dashed = chance)")
+    ax.set_xlabel("AUROC on the held-out category (dotted = chance)")
     ax.set_title("Does the meta-model generalize to an unseen category?")
     ax.legend(loc="lower right", fontsize=9)
     return _save(fig, f"rq4_category_transfer_{model_slug}.png")
 
 
-_FEATURE_FAMILY_COLORS = {"A": "tab:blue", "B": "tab:green", "C": "tab:purple"}
+# Feature families are categories, told apart at a glance by colour: blue,
+# magenta and ink are the trio that stays apart under colour blindness (blue
+# and teal-blue do not). Each also has its own marker shape.
+_FEATURE_FAMILY_STYLES = {"A": ("works", "o"), "B": ("signal3", "s"), "C": ("ink", "^")}
+
+
+def _family_color(family: str) -> str:
+    return getattr(_theme, _FEATURE_FAMILY_STYLES[family][0])
 _FEATURE_FAMILY_NAMES = {"A": "Tier A: judge's own signals", "B": "Tier B: surface features", "C": "Tier C: token statistics"}
 
 
@@ -845,12 +1015,14 @@ def _sort_coefficient_rows(
 
 def _family_legend_handles(families_present: list[str]) -> list[Line2D]:
     return [
-        Line2D([0], [0], marker="o", linestyle="", color=_FEATURE_FAMILY_COLORS[f], label=_FEATURE_FAMILY_NAMES[f])
+        Line2D([0], [0], marker=_FEATURE_FAMILY_STYLES[f][1], linestyle="", color=_family_color(f),
+               label=_FEATURE_FAMILY_NAMES[f])
         for f in ["A", "B", "C"]
         if f in families_present
     ]
 
 
+@_dark_variant
 def plot_rq4_coefficients(
     features: list[str],
     coef: np.ndarray,
@@ -860,7 +1032,7 @@ def plot_rq4_coefficients(
     model_slug: str,
 ) -> Figure:
     """RQ4's coefficient figure: only the coefficients whose CI excludes
-    0, colored by feature family (all ~37 rows would be too tall for a slide;
+    0, coloured and shaped by feature family (all ~37 rows would be too tall for a slide;
     plot_rq4_coefficients_full() and the CSV have them). Takes the FULL
     table and filters here, so "significant" has one definition. With no
     significant coefficient it still renders, as an empty panel.
@@ -869,18 +1041,20 @@ def plot_rq4_coefficients(
     """
     df = _sort_coefficient_rows(features, coef, ci_low, ci_high, family)
     df = df[(df["ci_low"] > 0) | (df["ci_high"] < 0)].reset_index(drop=True)
-    colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
+    colors = [_family_color(f) for f in df["family"]]
+    markers = [_FEATURE_FAMILY_STYLES[f][1] for f in df["family"]]
 
     fig, ax = plt.subplots(figsize=(7.5, 0.8 * max(len(df), 1) + 1.8))
     _draw_forest(ax, df["feature"].tolist(), df["coef"].to_numpy(), df["ci_low"].to_numpy(),
                  df["ci_high"].to_numpy(), "coefficient on standardized feature (> 0 = judge more likely right)",
-                 colors=colors)
+                 colors=colors, markers=markers)
     ax.legend(handles=_family_legend_handles(sorted(df["family"].unique())), loc="lower right", fontsize=8)
     ax.set_title(f"Which features predict judge error?\n{len(df)} of {len(features)} coefficients clear zero "
                  f"(logistic regression, all tiers)", fontsize=10)
     return _save(fig, f"rq4_coefficients_{model_slug}.png")
 
 
+@_dark_variant
 def plot_rq4_coefficients_full(
     features: list[str],
     coef: np.ndarray,
@@ -891,16 +1065,18 @@ def plot_rq4_coefficients_full(
 ) -> Figure:
     """Appendix companion to plot_rq4_coefficients(): every Tier C feature,
     unannotated at a tight row pitch (~10in tall instead of ~35in); exact
-    values are in the CSV.
+    values are in the CSV. Hollow points have a CI that includes 0.
 
     Saved to results/figures/rq4_coefficients_full_{model_slug}.png.
     """
     df = _sort_coefficient_rows(features, coef, ci_low, ci_high, family)
-    colors = [_FEATURE_FAMILY_COLORS[f] for f in df["family"]]
+    colors = [_family_color(f) for f in df["family"]]
+    markers = [_FEATURE_FAMILY_STYLES[f][1] for f in df["family"]]
 
     fig, ax = plt.subplots(figsize=(8, 0.22 * len(df) + 1.2))
     _draw_forest(ax, df["feature"].tolist(), df["coef"].to_numpy(), df["ci_low"].to_numpy(),
-                 df["ci_high"].to_numpy(), "coefficient on standardized feature", colors=colors, annotate=False)
+                 df["ci_high"].to_numpy(), "coefficient on standardized feature", colors=colors, markers=markers,
+                 hollow=_includes(0.0, df["ci_low"], df["ci_high"]), annotate=False)
     ax.tick_params(axis="y", labelsize=7)
     ax.legend(handles=_family_legend_handles(["A", "B", "C"]), loc="lower right", fontsize=8)
     ax.set_title(f"All meta-model coefficients (exact values: rq4_coefficients_{model_slug}.csv)", fontsize=9)
@@ -916,8 +1092,8 @@ def plot_bayesian_convergence(
     title: str | None = None,
 ) -> Figure:
     """Max R-hat for every fold-fit against D22's 1.01 threshold. A fit is
-    flagged for R-hat > 1.01 (red) or for any divergence (orange ×) - two
-    different problems, so they are drawn differently.
+    flagged for R-hat > 1.01 (red dot) or for any divergence (red ×) - two
+    different problems, so they are drawn differently. Converged fits are ink.
 
     Saved to results/figures/rq4_bayesian_convergence_{model_slug}.png.
     """
@@ -929,17 +1105,17 @@ def plot_bayesian_convergence(
     diverged = divergences > 0
 
     fig, ax = plt.subplots(figsize=(9, 4))
-    ax.axhline(1.01, linestyle="--", color=_theme.grey, linewidth=1, zorder=1)
+    ax.axhline(1.01, color=_theme.grey, zorder=1, **REFERENCE_LINE)
     ok = ~flagged_arr
-    ax.scatter(x[ok], max_rhat_arr[ok], color="tab:blue", zorder=2)
-    ax.scatter(x[high_rhat], max_rhat_arr[high_rhat], color="tab:red", zorder=3)
-    ax.scatter(x[diverged], max_rhat_arr[diverged], marker="x", s=70, color="tab:orange", zorder=4)
+    ax.scatter(x[ok], max_rhat_arr[ok], color=_theme.ink, zorder=2)
+    ax.scatter(x[high_rhat], max_rhat_arr[high_rhat], color=_theme.accent, zorder=3)
+    ax.scatter(x[diverged], max_rhat_arr[diverged], marker="x", s=70, color=_theme.accent, zorder=4)
 
     ax.legend(handles=[
-        Line2D([0], [0], linestyle="--", color=_theme.grey, label="threshold (R-hat 1.01)"),
-        Line2D([0], [0], marker="o", linestyle="", color="tab:blue", label=f"converged ({int(ok.sum())})"),
-        Line2D([0], [0], marker="o", linestyle="", color="tab:red", label=f"R-hat > 1.01 ({int(high_rhat.sum())})"),
-        Line2D([0], [0], marker="x", linestyle="", color="tab:orange",
+        Line2D([0], [0], color=_theme.grey, label="threshold (R-hat 1.01)", **REFERENCE_LINE),
+        Line2D([0], [0], marker="o", linestyle="", color=_theme.ink, label=f"converged ({int(ok.sum())})"),
+        Line2D([0], [0], marker="o", linestyle="", color=_theme.accent, label=f"R-hat > 1.01 ({int(high_rhat.sum())})"),
+        Line2D([0], [0], marker="x", linestyle="", color=_theme.accent,
                label=f"divergences ({int(diverged.sum())} fits, {int(divergences.sum())} total)"),
     ], loc="upper left", bbox_to_anchor=(1.01, 1), fontsize=8)
     ax.set_ylim(min(max_rhat_arr.min(), 1.0) - 0.001, max(max_rhat_arr.max(), 1.01) + 0.003)
@@ -979,14 +1155,15 @@ def plot_rq5_distillation(
     values = [auroc_ensemble, auroc_bayesian, epistemic_auroc_ensemble, epistemic_auroc_bayesian]
     lows = [auroc_ensemble_ci[0], np.nan, epistemic_auroc_ensemble_ci[0], epistemic_auroc_bayesian_ci[0]]
     highs = [auroc_ensemble_ci[1], np.nan, epistemic_auroc_ensemble_ci[1], epistemic_auroc_bayesian_ci[1]]
-    colors = ["tab:orange", "tab:blue", "tab:orange", "tab:blue"]
+    # Signal colours: the ensemble in signal-2, the one-call Bayesian model in blue (the fix).
+    colors = [_signal_color("conf_ens"), _signal_color("p_correct_bayesian")] * 2
 
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
     # errorbar can't take NaN widths, so the point-only row gets zero width.
     safe_lows = [v if np.isnan(lo) else lo for v, lo in zip(values, lows)]
     safe_highs = [v if np.isnan(hi) else hi for v, hi in zip(values, highs)]
-    _draw_forest(ax, labels, values, safe_lows, safe_highs, "AUROC predicting judge error (dashed = chance)",
-                 colors=colors, annotate=False, reference=0.5)
+    _draw_forest(ax, labels, values, safe_lows, safe_highs, "AUROC predicting judge error (dotted = chance)",
+                 colors=colors, markers=["s", "o", "s", "o"], annotate=False, reference=0.5)
     for y, (v, lo, hi) in enumerate(zip(values, lows, highs)):
         text = f"{v:.3f} (point only)" if np.isnan(lo) else f"{v:.3f} [{lo:.3f}, {hi:.3f}]"
         ax.annotate(text, xy=(v, y), xytext=(0, 10), textcoords="offset points", ha="center",
@@ -995,6 +1172,7 @@ def plot_rq5_distillation(
     return _save(fig, f"rq5_distillation_{model_slug}.png")
 
 
+@_dark_variant
 def plot_rq5_verbose_shift(
     aleatoric_clean: float,
     aleatoric_verbose: float,
@@ -1019,31 +1197,26 @@ def plot_rq5_verbose_shift(
     ]
     for ax, label, clean_val, verbose_val, (gap_lo, gap_hi) in panels:
         gap = verbose_val - clean_val
+        colors, hollow = _neutral_styles([gap_lo], [gap_hi])
         _draw_forest(ax, ["verbose − clean"], [gap], [gap_lo], [gap_hi],
                      f"change in mean entropy, nats\n(clean {clean_val:.4f} → verbose {verbose_val:.4f})",
-                     colors=["tab:blue"], decimals=4)
+                     colors=colors, hollow=hollow, decimals=4)
         ax.set_title(label)
     fig.suptitle("Does the meta-model's uncertainty rise under the padding attack?\n(paired 95% cluster-bootstrap CIs)")
     return _save(fig, f"rq5_verbose_shift_{model_slug}.png")
 
 
-def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.png", dark: bool = False) -> Figure:
+@_dark_variant
+def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.png") -> Figure:
     """The three judges side by side, one panel per measure, one row per
     judge population (split by coverage regime or turn where the RQ split
-    it). Rows are coloured by judge.
+    it). Rows are coloured by judge; a point is hollow where its interval
+    includes the reference.
 
-    Each panel: {"title", "xlabel", "reference" (x of the dashed line, or
+    Each panel: {"title", "xlabel", "reference" (x of the dotted line, or
     None), "rows": [(judge, label, value, ci_low, ci_high), ...]}.
-    `dark` draws it in the site's dark theme (same data, same layout).
     Saved to results/figures/{filename}.
     """
-    with plt.rc_context(DARK_RC if dark else {}):
-        return _judge_comparison_figure(panels, filename, dark)
-
-
-def _judge_comparison_figure(panels: list[dict], filename: str, dark: bool) -> Figure:
-    colors = DARK_JUDGE_COLORS if dark else JUDGE_COLORS
-    greys = {"muted": DARK_MUTED, "reference_color": DARK_MUTED} if dark else {}
     n_rows = max(len(p["rows"]) for p in panels)
     ncols = 2
     nrows = int(np.ceil(len(panels) / ncols))
@@ -1057,14 +1230,15 @@ def _judge_comparison_figure(panels: list[dict], filename: str, dark: bool) -> F
             [lo for _, _, _, lo, _ in rows],
             [hi for _, _, _, _, hi in rows],
             panel["xlabel"],
-            colors=[colors.get(judge, "tab:gray") for judge, _, _, _, _ in rows],
+            colors=[_theme.judge_colors.get(judge, _theme.muted) for judge, _, _, _, _ in rows],
             reference=panel.get("reference"),
-            **greys,
+            hollow=_includes(panel.get("reference"), [r[3] for r in rows], [r[4] for r in rows]),
         )
         ax.set_title(panel["title"], fontsize=10)
     for ax in list(axes.flat)[len(panels):]:
         ax.set_visible(False)
-    fig.suptitle("Three judges, same items, same tests (95% cluster-bootstrap CIs)")
+    fig.suptitle("Three judges, same items, same tests "
+                 "(95% cluster-bootstrap CIs; hollow = interval includes the dotted reference)")
     return _save(fig, filename)
 
 
@@ -1083,21 +1257,21 @@ def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Fig
     accepts at. Bottom: the share of all verdicts it accepts at that
     threshold - the price of a lower slip-through, since any signal reaches
     zero slip-through by accepting nothing. Solid = clean inputs, dashed =
-    padded. Colours follow the site: red is the judge's naive confidence (the
-    signal that lets errors through), the judge's own colour its best signal,
-    ink and grey the ones in between.
+    padded. A multi-judge figure, so colours follow the judges: red is each
+    judge's naive confidence (the signal that lets errors through), the
+    judge's own colour its best signal, grey and ink the ones in between.
 
     `curves` is analysis/auto_accept.py's curve table (point estimates).
     Saved to results/figures/auto_accept.png.
     """
     judges = [j for j in AUTO_ACCEPT_FIGURE_SIGNALS if j in set(curves["judge"])]
-    fig, axes = plt.subplots(2, len(judges), figsize=(5.2 * len(judges), 8), sharex=True, sharey="row", squeeze=False)
+    fig, axes = plt.subplots(2, len(judges), figsize=(5.2 * len(judges), 9.4), sharex=True, sharey="row", squeeze=False)
     for col, judge in enumerate(judges):
         signals = AUTO_ACCEPT_FIGURE_SIGNALS[judge]
-        middle = [_theme.line_ink_muted, _theme.line_ink][: len(signals) - 2]
-        colors = [ACCENT_RED, *middle, _theme.judge_colors[judge]]
+        middle = [_theme.muted, _theme.ink][: len(signals) - 2]
+        colors = [_theme.accent, *middle, _theme.judge_colors[judge]]
         for color, signal in zip(colors, signals):
-            for condition, linestyle in [("clean", "-"), ("verbose", "--")]:
+            for condition, linestyle in [("clean", "-"), ("verbose", DASHED)]:
                 df = curves[(curves["judge"] == judge) & (curves["signal"] == signal) & (curves["condition"] == condition)]
                 if df.empty:
                     continue
@@ -1105,11 +1279,13 @@ def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Fig
                 axes[0][col].plot(df["threshold"], df["slip_through"], color=color, linestyle=linestyle, label=label)
                 axes[1][col].plot(df["threshold"], df["accepted_share"], color=color, linestyle=linestyle)
         for row in (0, 1):
-            axes[row][col].axvline(threshold_marker, color=_theme.grey, linestyle=":", linewidth=1)
+            axes[row][col].axvline(threshold_marker, color=_theme.grey, **REFERENCE_LINE)
             axes[row][col].set_xlim(0.5, 1.0)
             axes[row][col].set_ylim(0, 1.02)
         axes[0][col].set_title(judge)
-        axes[0][col].legend(loc="lower left", fontsize=7)
+        # Under the bottom panel: the curves leave no empty corner in either.
+        handles, labels = axes[0][col].get_legend_handles_labels()
+        axes[1][col].legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, -0.16), fontsize=7)
         axes[1][col].set_xlabel("auto-accept when confidence ≥")
     axes[0][0].set_ylabel("share of WRONG verdicts accepted unreviewed")
     axes[1][0].set_ylabel("share of ALL verdicts accepted")

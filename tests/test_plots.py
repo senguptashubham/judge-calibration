@@ -30,12 +30,12 @@ def test_dark_saves_a_suffixed_copy_on_the_dark_background(figures_in_tmp):
 
     assert (figures_in_tmp / "rc.png").exists()
     assert (figures_in_tmp / "rc_dark.png").exists()
-    assert to_hex(light.get_facecolor()) == "#ffffff"
-    assert to_hex(dark.get_facecolor()) == plots.DARK_RC["figure.facecolor"]
+    assert to_hex(light.get_facecolor()) == plots.LIGHT.rc["figure.facecolor"]
+    assert to_hex(dark.get_facecolor()) == plots.DARK.rc["figure.facecolor"]
 
 
-def test_figures_that_save_without_save_helper_get_the_suffix_too(figures_in_tmp):
-    # plot_confidence_gap() calls savefig itself rather than _save().
+def test_a_figure_saved_with_a_footnote_margin_gets_the_suffix_too(figures_in_tmp):
+    # plot_confidence_gap() passes _save() a layout rect that leaves room for its footnote.
     panel = {"title": "", "signals": ["conf_verb"], "gap": [-0.02], "ci_low": [-0.03], "ci_high": [-0.01]}
 
     plots.plot_confidence_gap([panel], title="t", filename="gap.png", dark=True)
@@ -49,3 +49,32 @@ def test_theme_resets_even_when_a_plot_fails():
         plots.plot_risk_coverage({}, (None, None), dark=True)
 
     assert plots._theme is plots.LIGHT
+
+
+def test_single_judge_forests_colour_by_direction_and_hollow_the_non_significant():
+    # ΔECE: > 0 is worse. Rows: significantly worse, significantly better, CI spans 0.
+    colors, hollow = plots._direction_styles([0.01, -0.05, -0.01], [0.03, -0.02, 0.02], worse_if_positive=True)
+
+    assert colors == [plots.LIGHT.accent, plots.LIGHT.works, plots.LIGHT.muted]
+    assert hollow == [False, False, True]
+
+
+def test_a_long_title_over_a_right_shifted_axes_is_kept_inside_the_figure(figures_in_tmp):
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.set_yticks([0, 1], ["a very long tick label", "another long tick label"])
+    ax.set_title("A title long enough to run off the right edge of this figure")
+
+    plots._save(fig, "t.png")
+
+    box = ax.title.get_window_extent(fig.canvas.get_renderer())
+    assert 0 <= box.x0 and box.x1 <= fig.bbox.width
+
+
+def test_touching_tick_labels_are_thinned(figures_in_tmp):
+    fig, ax = plt.subplots(figsize=(1.5, 1.5))
+    ax.set_xlim(0, 10)
+    ax.set_xticks(range(11), [f"{i}.000" for i in range(11)])
+
+    plots._save(fig, "t.png")
+
+    assert len(ax.get_xticks()) < 11

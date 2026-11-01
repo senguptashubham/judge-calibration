@@ -955,6 +955,8 @@ def main_bayesian_comparison(config_path: str) -> None:
         model_slug=config.model_slug,
         label="Bayesian hierarchical",
         overlay=(freq_p_wrong, is_wrong, "logistic regression"),
+        main_role="works",
+        overlay_role="ink",
         title=f"Meta-model calibration, Tier A ({judge_name(config.model_slug)}, out-of-fold)",
         xlabel="predicted P(judge wrong)",
         ylabel="observed error rate",

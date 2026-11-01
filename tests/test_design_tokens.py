@@ -16,7 +16,9 @@ CSS = (ROOT / "site" / "style.css").read_text(encoding="utf-8")
 # marks (lines, dots, bars) need 3:1 on the paper; white text on a fill needs 4.5:1.
 TEXT = ["ink", "ink-2", "ink-3", "accent-text", "works-text"]
 SURFACES = ["paper", "paper-2", "window"]
-MARKS = ["accent", "works", "qwen"]
+MARKS = ["accent", "works", "qwen", "signal-2", "signal-3"]
+# Colours only the figures use (src/plots.py), so the site's CSS doesn't carry them.
+FIGURE_ONLY = {"signal-2", "signal-3"}
 FILLS = ["accent", "qwen-fill", "works-fill", "kev-fill", "autoj-fill"]
 
 
@@ -44,9 +46,11 @@ def test_css_carries_the_token_values_in_both_themes():
 
     assert media_dark == toggle_dark
     for role, value in TOKENS["light"].items():
-        assert light[role] == value, role
+        if role not in FIGURE_ONLY:
+            assert light[role] == value, role
     for role, value in TOKENS["dark"].items():
-        assert {**light, **media_dark}[role] == value, role
+        if role not in FIGURE_ONLY:
+            assert {**light, **media_dark}[role] == value, role
 
 
 @pytest.mark.parametrize("theme", ["light", "dark"])

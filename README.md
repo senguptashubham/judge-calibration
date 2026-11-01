@@ -134,7 +134,7 @@ auto-j values are split by turn 1 / turn 2. \*Among the calls auto-j actually
 answered. †Of the calls that ran; kev-8b and auto-j each skip a small number of
 padded prompts longer than their context limit.
 
-Colours follow the site: <img src="docs/readme/dot-qwen.svg" width="10" alt="blue"> Qwen,
+Colours follow the site: <img src="docs/readme/dot-qwen.svg" width="10" alt="purple"> Qwen,
 <img src="docs/readme/dot-kev.svg" width="10" alt="amber"> kev-8b,
 <img src="docs/readme/dot-autoj.svg" width="10" alt="teal"> auto-j, and red only for
 wrong, flipped or slipped through. The palette was checked to stay
