@@ -188,7 +188,8 @@
 
       <h3 class="subhead">Across all <span data-bind="n_items"></span> comparisons</h3>
       <p class="note">Each judge's confidence here is its order-swap agreement, the one signal all three have. Dots are
-        the estimate, bars its 95% interval (resampling whole questions). kev-8b is split by whether the prompt fits
+        the estimate, hollow when the interval includes the dotted reference; bars are the 95% interval
+        (resampling whole questions). kev-8b is split by whether the prompt fits
         its training length, auto-j by conversation turn.</p>
       <p class="note warn" id="s-autoj-note"></p>
       <div class="measures" id="s-measures"></div>
@@ -234,8 +235,8 @@
 
       <figure class="chart">
         <svg id="curve" role="img" aria-labelledby="curve-title"></svg>
-        <figcaption id="curve-title">Share of wrong verdicts shipped (solid) and of all verdicts accepted (dashed),
-          at every threshold. The marker is your threshold.</figcaption>
+        <figcaption id="curve-title">Share of wrong verdicts shipped (in the judge's colour) and of all verdicts accepted
+          (grey), at every threshold; dashed when the answers are padded. The dotted line is your threshold.</figcaption>
         <div id="tooltip" class="tooltip" hidden></div>
       </figure>
     </section>

@@ -10,10 +10,16 @@
   src: url("fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2");
 }
 
-/* Paper, ink, one accent (red = flipped / wrong / slipped through) and three
-   judge colours used only in data. The judge palette and the accent were
-   checked together for colour-vision separation; amber and teal sit under 3:1
-   on the paper, so every data line also carries a text label. */
+/* Paper, ink, one accent (red = harm: flipped / wrong / slipped through, and the
+   attack switches), blue "works" (the method that helps), and three judge
+   colours used only in data. Values come from design/tokens.json, and
+   tests/test_design_tokens.py checks that they match and that contrast holds.
+   The judge palette and the accent were checked together for colour-vision
+   separation; amber and teal sit under 3:1 on the paper, so every data line
+   also carries a text label. Qwen's purple and works' blue merge for red-green
+   colour-blind readers, so the two never share a view and both are labelled.
+   Line style: dashed = an attacked (swapped or padded) presentation; dotted = a
+   reference line or decoration; solid = everything else. */
 :root {
   color-scheme: light;
   --paper: #f3efe6;
@@ -28,22 +34,28 @@
   --dot-ok: #8a877e;
   --rule: #cfc9bb;
   --accent: #d03b3b;         /* red marks: dots, lines, bars, borders */
-  --accent-text: #d03b3b;    /* red words; a lighter step in dark mode */
+  --accent-text: #b83232;    /* red words: a deeper step than the marks, a lighter one in dark mode */
   --accent-soft: rgba(208, 59, 59, 0.1);
-  --qwen: #2a78d6;
+  --accent-glow: rgba(208, 59, 59, 0.25);   /* hover glow of the red boxes */
+  --tint-glow: 30%;          /* how much of a judge's fill its boxes' hover glow takes */
+  --qwen: #7c4fd0;
   --kev: #eda100;
   --autoj: #1baf7a;
   /* Fill shades: a judge's colour behind text (picked-answer title bars, the method
      graph's selected step). The data colours above are for lines, dots and bars;
      black text on teal or amber scores only APCA Lc 46-50, too faint at 12px, so
-     each fill is the lightest step of the same hue where white text reaches Lc 76.
-     The same fills serve both themes. */
-  --qwen-fill: #2a78d6;
-  --kev-fill: #a66a00;
+     each fill is the lightest step of the same hue where white text reaches Lc 76
+     and 4.5:1. The same fills serve both themes. */
+  --qwen-fill: #7a4cc8;
+  --kev-fill: #a36800;
   --autoj-fill: #00875a;
   --on-qwen: #ffffff;
   --on-kev: #ffffff;
   --on-autoj: #ffffff;
+  --works: #2a78d6;          /* blue marks: the method that helps */
+  --works-text: #1f65bf;     /* blue words; a lighter step in dark mode */
+  --works-fill: #1f65bf;
+  --on-works: #ffffff;
   --display: "Inter", "Helvetica Neue", Arial, system-ui, sans-serif;
   --text: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   --mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
@@ -58,10 +70,11 @@
 }
 
 /* Dark mode: the same roles re-stepped for a warm near-black page, not an
-   automatic inversion. Judge blue and teal and the red marks are unchanged; they
-   pass the palette checks on the dark page as they are. Amber steps from #eda100
-   to #c98500 (L 0.76 is too bright for a dark surface), and red *text* steps
-   lighter to #ea6a64 so small words keep 4.5:1. Title bars stay dark; the light
+   automatic inversion. Teal, works blue and the red marks are unchanged; they
+   pass the palette checks on the dark page as they are. Qwen's purple steps
+   lighter to #a487ea, amber steps from #eda100 to #c98500 (L 0.76 is too bright
+   for a dark surface), and red and blue *text* step lighter (#ea6a64, #5c9ae8) so
+   small words keep 4.5:1. Title bars stay dark; the light
    fill is kept for the active or highlighted thing, as black is in light mode. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -72,11 +85,15 @@
   --ink: #ece7dc;
   --ink-2: #c8c1b3;
   --ink-3: #aaa293;
-  --glow: rgba(236, 231, 220, 0.1);
+  --glow: rgba(236, 231, 220, 0.2);
   --dot-ok: #8f897d;
   --rule: #3d3831;
   --accent-text: #ea6a64;
   --accent-soft: rgba(208, 59, 59, 0.16);
+  --accent-glow: rgba(208, 59, 59, 0.35);
+  --tint-glow: 40%;
+  --qwen: #a487ea;
+  --works-text: #5c9ae8;
   --kev: #c98500;
   --hard: #4a443c;
   --bar: #35302a;
@@ -95,11 +112,15 @@
   --ink: #ece7dc;
   --ink-2: #c8c1b3;
   --ink-3: #aaa293;
-  --glow: rgba(236, 231, 220, 0.1);
+  --glow: rgba(236, 231, 220, 0.2);
   --dot-ok: #8f897d;
   --rule: #3d3831;
   --accent-text: #ea6a64;
   --accent-soft: rgba(208, 59, 59, 0.16);
+  --accent-glow: rgba(208, 59, 59, 0.35);
+  --tint-glow: 40%;
+  --qwen: #a487ea;
+  --works-text: #5c9ae8;
   --kev: #c98500;
   --hard: #4a443c;
   --bar: #35302a;
@@ -194,10 +215,11 @@ h2 { font-size: clamp(32px, 4.6vw, 60px); max-width: 18ch; }
   margin: 0;
   transition: box-shadow 0.25s ease;
 }
-/* Hover: a soft glow behind the window, on top of its hard shadow. */
+/* Hover: a soft glow behind the window, on top of its hard shadow, in the shadow's
+   colour: neutral, red for the red boxes, a judge's colour for a box marked with it. */
 .window:hover { box-shadow: var(--shadow), 0 0 34px 6px var(--glow); }
-.stat.alert:hover, .hero-readout:hover { box-shadow: 4px 4px 0 var(--accent), 0 0 34px 6px rgba(208, 59, 59, 0.25); }
-.answer.picked:hover { box-shadow: 6px 6px 0 var(--pick, var(--ink)), 0 0 34px 6px var(--glow); }
+.stat.alert:hover, .hero-readout:hover, .result-card.wrong:hover { box-shadow: 4px 4px 0 var(--accent), 0 0 34px 6px var(--accent-glow); }
+.answer.picked:hover { box-shadow: 6px 6px 0 var(--pick, var(--ink)), 0 0 34px 6px color-mix(in srgb, var(--pick, var(--ink)) var(--tint-glow), transparent); }
 .titlebar {
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
   background: var(--bar); color: var(--on-bar);
@@ -238,7 +260,7 @@ h2 { font-size: clamp(32px, 4.6vw, 60px); max-width: 18ch; }
   background: transparent; color: var(--on-bar); border: 1px solid var(--on-bar);
 }
 .tb-btn:hover { background: var(--on-bar); color: var(--bar); }
-.tb-btn:focus-visible { outline: 2px solid var(--qwen); outline-offset: 2px; }
+.tb-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .btn {
   font: 14px var(--mono); padding: 8px 14px; cursor: pointer;
   background: var(--window); color: var(--ink);
@@ -248,7 +270,7 @@ h2 { font-size: clamp(32px, 4.6vw, 60px); max-width: 18ch; }
 .btn:active { transform: translate(2px, 2px); box-shadow: none; }
 .btn.primary { background: var(--ink); color: var(--paper); }
 .btn:focus-visible, .segmented button:focus-visible, .switch input:focus-visible + span,
-select:focus-visible, input[type=range]:focus-visible { outline: 3px solid var(--qwen); outline-offset: 2px; }
+select:focus-visible, input[type=range]:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
 
 .stepper { display: flex; align-items: center; gap: 10px; }
 #random { min-width: 100px; }   /* room for "Loading…" without a layout shift */
@@ -291,7 +313,7 @@ select { font: 13px var(--mono); padding: 6px 8px; border: 2px solid var(--ink);
 .banner-row .btn[aria-pressed="true"] { background: var(--window); color: var(--ink); }
 .banner {
   font: 600 18px var(--text); padding: 14px 18px; margin: 0 0 18px;
-  border: 2px dashed var(--rule); color: var(--ink-2);
+  border: 2px solid var(--rule); color: var(--ink-2);
 }
 .banner.flip { border: 2px solid var(--accent); background: var(--accent-soft); color: var(--ink); }
 .banner.flip b { color: var(--accent-text); }
@@ -311,6 +333,8 @@ select { font: 13px var(--mono); padding: 6px 8px; border: 2px solid var(--ink);
 /* Stickers: two short lines each, pinned over the card's top-right corner so they
    never wrap into the title bar, whatever the text. */
 .answer { position: relative; }
+/* An attacked (swapped or padded) presentation is dashed, everywhere on the page. */
+.answer.attacked { border-style: dashed; }
 .stickers { position: absolute; top: -18px; right: 12px; z-index: 2; display: flex; gap: 8px; pointer-events: none; }
 .stamp {
   display: flex; flex-direction: column; align-items: center; min-width: 104px; padding: 4px 10px;
@@ -371,9 +395,11 @@ select { font: 13px var(--mono); padding: 6px 8px; border: 2px solid var(--ink);
 .grid line { stroke: var(--rule); stroke-width: 1; }
 .axis text, .grid text { font: 11px var(--mono); fill: var(--ink-3); }
 .line { fill: none; stroke-width: 2.5; stroke-linejoin: round; }
-.line.accepted { stroke-dasharray: 5 5; stroke-width: 2; }
+.line.accepted { stroke: var(--ink-3); stroke-width: 1.5; }
+.line.attacked { stroke-dasharray: 7 5; }
 .line-label { font: 600 12px var(--text); fill: var(--ink); }
-.threshold-rule { stroke: var(--ink); stroke-width: 1.5; stroke-dasharray: 2 3; }
+.threshold-rule { stroke: var(--ink); stroke-width: 2; stroke-dasharray: 0.5 5; stroke-linecap: round; }
+.marker.accepted { fill: var(--ink-3); }
 .crosshair { stroke: var(--ink-3); stroke-width: 1; }
 .marker { stroke: var(--window); stroke-width: 2; }
 .tooltip {
@@ -444,7 +470,8 @@ select { font: 13px var(--mono); padding: 6px 8px; border: 2px solid var(--ink);
 .vg-cell .vg-mark { position: absolute; top: 6px; right: 8px; }
 .vg-cell .pres { display: none; font-size: 11px; color: var(--ink-3); }
 .vg-cell.flipped { border-color: var(--accent); background: var(--accent-soft); box-shadow: 3px 3px 0 var(--accent); }
-.vg-cell.empty { border-style: dashed; border-color: var(--ink-3); color: var(--ink-3); }
+.vg-cell.attacked { border-style: dashed; }
+.vg-cell.empty { border-color: var(--rule); color: var(--ink-3); }
 .vg-summary { font: 13px var(--mono); color: var(--ink-2); align-self: center; }
 .vg-summary b { color: var(--ink); }
 .vg-summary.unstable b { color: var(--accent-text); }
@@ -455,10 +482,12 @@ select { font: 13px var(--mono); padding: 6px 8px; border: 2px solid var(--ink);
 .measure .row-label { font: 12px var(--mono); fill: var(--ink); paint-order: stroke; stroke: var(--paper); stroke-width: 4px; stroke-linejoin: round; }
 .measure .value-label { font: 600 12px var(--mono); fill: var(--ink); }
 .measure .tick { font: 11px var(--mono); fill: var(--ink-3); }
-.measure .ref { stroke: var(--ink-2); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.measure .ref { stroke: var(--ink-2); stroke-width: 2; stroke-dasharray: 0.5 5; stroke-linecap: round; }
 .measure .axis-line { stroke: var(--rule); }
 .measure .ci { stroke-width: 3; stroke-linecap: round; }
 .measure .est { stroke: var(--window); stroke-width: 2; }
+/* Hollow: the interval includes the reference, so the estimate is not significant. */
+.measure .est.hollow { fill: var(--paper); stroke-width: 2.5; }
 /* Intervals grow out from the estimate each time the panels scroll into view. */
 .measure .ci, .measure .est { transition: transform 0.7s cubic-bezier(.2, .7, .3, 1), opacity 0.5s; }
 .measure .ci { transform: scaleX(0); transform-box: fill-box; transform-origin: center; }
@@ -485,17 +514,18 @@ select { font: 13px var(--mono); padding: 6px 8px; border: 2px solid var(--ink);
 .m-node .m-title { display: block; padding: 8px 8px 2px; font: 700 14px/1.2 var(--text); }
 .m-node .m-sub { display: block; padding: 0 8px 9px; color: var(--ink-2); font-size: 11px; line-height: 1.35; }
 .m-node[aria-pressed="true"] { transform: translate(-2px, -2px); box-shadow: 6px 6px 0 var(--sel, var(--ink)); }
+.m-node[aria-pressed="true"]:hover { box-shadow: 6px 6px 0 var(--sel, var(--ink)), 0 0 34px 6px var(--sel-glow, var(--glow)); }
 .m-node[aria-pressed="true"] .m-bar { background: var(--sel, var(--ink)); color: var(--on-sel, var(--paper)); }
 .m-node[aria-pressed="true"] .m-bar .dot { box-shadow: 0 0 0 1.5px var(--window); }
-.m-node:focus-visible { outline: 3px solid var(--qwen); outline-offset: 2px; }
-.edge { fill: none; stroke: var(--ink-3); stroke-width: 2; stroke-dasharray: 5 7; animation: edge-flow 0.9s linear infinite; opacity: 0.55; }
+.m-node:focus-visible { outline: 3px solid var(--ink); outline-offset: 2px; }
+.edge { fill: none; stroke: var(--ink-3); stroke-width: 2.5; stroke-dasharray: 0.5 7.5; stroke-linecap: round; animation: edge-flow 0.9s linear infinite; opacity: 0.55; }
 .edge.active { stroke: var(--sel, var(--ink)); opacity: 1; stroke-width: 2.5; }
-@keyframes edge-flow { to { stroke-dashoffset: -12; } }
-/* Drawn from the shared end (see drawEdges), so the dashes run the other way. */
+@keyframes edge-flow { to { stroke-dashoffset: -8; } }
+/* Drawn from the shared end (see drawEdges), so the dots run the other way. */
 .edge.rev { animation-direction: reverse; }
 .method-detail { margin-top: 26px; box-shadow: 4px 4px 0 var(--sel, var(--ink)); }
 .method-detail .titlebar { background: var(--sel, var(--ink)); color: var(--on-sel, var(--paper)); }
-.method-detail:hover { box-shadow: 4px 4px 0 var(--sel, var(--ink)), 0 0 34px 6px var(--glow); }
+.method-detail:hover { box-shadow: 4px 4px 0 var(--sel, var(--ink)), 0 0 34px 6px var(--sel-glow, var(--glow)); }
 .method-detail .win-body { max-width: 84ch; }
 .method-detail .win-body p { font-size: 16px; color: var(--ink); margin: 0 0 10px; }
 .method-detail ul { margin: 0; padding-left: 20px; font-size: 16px; }

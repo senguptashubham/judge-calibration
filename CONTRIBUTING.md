@@ -149,8 +149,9 @@ analysis/   rq1 … rq7, human_disagreement, vacuum, decoding_ablation — CLIs 
             compare_judges (three-judge figure), auto_accept (post-hoc, D29),
             demo_bundle → site_data (the site's data)
 site/       static HTML/CSS/JS site; computes no statistic; data/ is built, tracked
-tests/      one file per src/ module except plots and vacuum_test; test_demo_bundle.py,
-            test_site_data.py, test_site_e2e.py (Playwright)
+design/     tokens.json: the colour roles shared by the site and the figures
+tests/      one file per src/ module except vacuum_test; test_demo_bundle.py,
+            test_site_data.py, test_site_e2e.py (Playwright), test_design_tokens.py
 notebooks/  Colab records of the three GPU runs; install, pull and call src/ only
 scripts/    deploy_space.py (Hugging Face Space)
 docs/readme/  README images

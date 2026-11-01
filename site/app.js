@@ -164,6 +164,7 @@
     const humans = T.revealed && item.human.label === letter;
     slot.classList.toggle("picked", picked);
     slot.classList.toggle("human-choice", humans);
+    slot.classList.toggle("attacked", T.swap || T.pad);
     slot.style.setProperty("--pick", judgeFill(T.judge));
     slot.style.setProperty("--on-pick", onJudgeColor(T.judge));
     const stickers = picked || humans ? h("span", { class: "stickers" },
@@ -439,7 +440,7 @@
     // Wide: labels at the line ends. Narrow: they would squeeze the plot, so a key
     // goes above it instead.
     const narrow = W < 560;
-    const m = narrow ? { l: 40, r: 12, t: 50, b: 34 } : { l: 46, r: 170, t: 14, b: 34 };
+    const m = narrow ? { l: 40, r: 12, t: 50, b: 34 } : { l: 46, r: 215, t: 14, b: 34 };
     const x = (t) => m.l + ((t - 0.5) / 0.5) * (W - m.l - m.r);
     const y = (v) => m.t + (1 - v) * (H - m.t - m.b);
     const color = judgeColor(C.judge);
@@ -464,8 +465,11 @@
     clip.append(clipRect);
     svg.append(clip);
     const lines = s("g", { "clip-path": "url(#reveal-clip)" });
-    lines.append(s("path", { class: "line accepted", d: pathFor(series.accepted_share), stroke: color }));
-    lines.append(s("path", { class: "line", d: pathFor(series.slip_through), stroke: color }));
+    // Padded series are dashed; the accepted share is the thin grey line, so the
+    // judge's colour stays on the line that matters, wrong verdicts shipped.
+    const attacked = C.pad ? " attacked" : "", padded = C.pad ? " (padded)" : "";
+    lines.append(s("path", { class: `line accepted${attacked}`, d: pathFor(series.accepted_share) }));
+    lines.append(s("path", { class: `line${attacked}`, d: pathFor(series.slip_through), stroke: color }));
     svg.append(lines);
 
     // Direct labels at the right end - identity is never colour alone.
@@ -485,19 +489,19 @@
     if (narrow) {
       [["wrong verdicts shipped", "line"], ["all verdicts accepted", "line accepted"]].forEach(([text, cls], k) => {
         const ky = 10 + k * 18;
-        svg.append(s("line", { class: cls, x1: 0, x2: 24, y1: ky, y2: ky, stroke: color }));
-        const t = s("text", { class: "line-label", x: 32, y: ky + 4 }); t.textContent = text; svg.append(t);
+        svg.append(s("line", { class: cls + attacked, x1: 0, x2: 24, y1: ky, y2: ky, stroke: color }));
+        const t = s("text", { class: "line-label", x: 32, y: ky + 4 }); t.textContent = text + padded; svg.append(t);
       });
     } else {
-      endLabel(py.slip, "wrong verdicts shipped");
-      endLabel(py.acc, "all verdicts accepted (dashed)");
+      endLabel(py.slip, `wrong verdicts shipped${padded}`);
+      endLabel(py.acc, `all verdicts accepted${padded}`);
     }
 
     // The user's threshold.
     const i = C.tIdx, tx = x(D.thresholds[i]);
     svg.append(s("line", { class: "threshold-rule", x1: tx, x2: tx, y1: m.t, y2: H - m.b }));
-    for (const [v, r] of [[series.slip_through[i], 6], [series.accepted_share[i], 5]]) {
-      svg.append(s("circle", { class: "marker", cx: tx, cy: y(v ?? 0), r, fill: color }));
+    for (const [v, r, cls] of [[series.slip_through[i], 6, "marker"], [series.accepted_share[i], 5, "marker accepted"]]) {
+      svg.append(s("circle", { class: cls, cx: tx, cy: y(v ?? 0), r, fill: color }));
     }
 
     // Hover layer: crosshair + tooltip; click moves the threshold there.
@@ -633,13 +637,13 @@
       ctx.clearRect(0, 0, g.w, g.h);
 
       // Faint rails.
-      ctx.strokeStyle = cssVar("--rule"); ctx.lineWidth = 2; ctx.setLineDash([3, 6]);
+      ctx.strokeStyle = cssVar("--rule"); ctx.lineWidth = 2.5; ctx.lineCap = "round"; ctx.setLineDash([0.5, 6]);
       ctx.beginPath(); ctx.moveTo(g.start.x, g.start.y); ctx.lineTo(g.gateIn.x, g.gateIn.y); ctx.stroke();
       for (const sink of [g.accept, g.human]) {
         ctx.beginPath(); ctx.moveTo(g.gateOut.x, g.gateOut.y);
         ctx.quadraticCurveTo(sink.ctrl.x, sink.ctrl.y, sink.x, sink.y); ctx.stroke();
       }
-      ctx.setLineDash([]);
+      ctx.setLineDash([]); ctx.lineCap = "butt";
 
       // Moving dots.
       dots = dots.filter((d) => {
@@ -894,14 +898,15 @@
   for (const item of D.game) if (!SHOWDOWN.some((s) => s.item_id === item.item_id)) SHOWDOWN.push(item);
   const S = { i: 0 };
 
-  function verdictCell(item, call, base, name) {
+  function verdictCell(item, call, base, name, attacked) {
     const statusText = { skipped: "too long for it", tie: "tie", no_verdict: "no verdict" };
+    const cls = `vg-cell${attacked ? " attacked" : ""}`;
     if (!call.winner) {
-      return h("div", { class: "vg-cell empty", role: "cell" }, h("span", { class: "pres" }, name), statusText[call.status] || "no verdict");
+      return h("div", { class: `${cls} empty`, role: "cell" }, h("span", { class: "pres" }, name), statusText[call.status] || "no verdict");
     }
     const flipped = base.winner && call.winner !== base.winner;
     const right = call.winner === item.human.label;
-    return h("div", { class: `vg-cell${flipped ? " flipped" : ""}`, role: "cell" },
+    return h("div", { class: `${cls}${flipped ? " flipped" : ""}`, role: "cell" },
       h("span", { class: "pres" }, name),
       h("span", { class: `vg-mark ${right ? "ok-mark" : "bad-mark"}`, title: right ? "matches the humans" : "differs from the humans" }, right ? "✓" : "✗"),
       h("span", { class: "who" }, modelOf(item, call.winner)),
@@ -934,7 +939,7 @@
         : [h("b", {}, `flipped ${flips} of ${winners.length - 1} times`)];
       cells.push(
         h("div", { class: "vg-judge", role: "rowheader" }, h("span", { class: "dot", style: { background: judgeColor(judge) } }), judge),
-        ...PRESENTATIONS.map(([c, o, name]) => verdictCell(item, calls[c][o], base, name)),
+        ...PRESENTATIONS.map(([c, o, name]) => verdictCell(item, calls[c][o], base, name, c !== "clean" || o !== "AB")),
         h("div", { class: `vg-summary${flips ? " unstable" : ""}`, role: "cell" }, summary));
     }
     $("s-grid").replaceChildren(...cells);
@@ -948,10 +953,10 @@
 
   // --- the four headline measures, each judge with its 95% interval -------------------
   const MEASURE_TEXT = {
-    auroc: ["Does its uncertainty flag its own mistakes?", "AUROC: 0.5 (dashed) is chance, higher is better."],
-    overconfidence_gap: ["How much more sure than right?", "Mean confidence minus accuracy: 0 (dashed) is honest, above it overconfident."],
+    auroc: ["Does its uncertainty flag its own mistakes?", "AUROC: 0.5 (dotted) is chance, higher is better."],
+    overconfidence_gap: ["How much more sure than right?", "Mean confidence minus accuracy: 0 (dotted) is honest, above it overconfident."],
     flip_rate: ["Does it flip when the answers swap places?", "Share of verdicts that change with the order alone."],
-    delta_ece: ["Does padding make its confidence less honest?", "Calibration error, padded minus original: above 0 (dashed) is worse."],
+    delta_ece: ["Does padding make its confidence less honest?", "Calibration error, padded minus original: above 0 (dotted) is worse."],
   };
   const MEASURE_FORMAT = {
     auroc: (v) => v.toFixed(2),
@@ -998,7 +1003,10 @@
       label.textContent = r.population === "all" ? r.judge : `${r.judge} · ${r.population}`;
       svg.append(label);
       svg.append(s("line", { class: "ci", x1: x(r.ci_low), x2: x(r.ci_high), y1: y, y2: y, stroke: color }));
-      svg.append(s("circle", { class: "est", cx: x(r.value), cy: y, r: 6, fill: color }));
+      // Hollow when the interval includes the reference: not significant.
+      const hollow = measure.reference !== null && r.ci_low <= measure.reference && measure.reference <= r.ci_high;
+      svg.append(s("circle", hollow ? { class: "est hollow", cx: x(r.value), cy: y, r: 6, style: `stroke: ${color}` }
+        : { class: "est", cx: x(r.value), cy: y, r: 6, fill: color }));
       const value = s("text", { class: "value-label", x: W - m.r + 12, y: y + 4 });
       value.textContent = fmt(r.value); svg.append(value);
       const hit = s("rect", { x: 0, y: y - rowH / 2, width: W, height: rowH, fill: "transparent" });
@@ -1155,6 +1163,9 @@
     for (const el of [$("m-graph"), $("m-detail")]) {
       el.style.setProperty("--sel", node.judge ? judgeFill(node.judge) : cssVar("--ink"));
       el.style.setProperty("--on-sel", node.judge ? onJudgeColor(node.judge) : cssVar("--paper"));
+      // The hover glow matches the shadow: the judge's colour for a judge step, else neutral.
+      el.style.setProperty("--sel-glow", node.judge
+        ? `color-mix(in srgb, ${judgeFill(node.judge)} var(--tint-glow), transparent)` : "var(--glow)");
     }
     METHOD_NODES.forEach((n) => $(`m-${n.id}`).setAttribute("aria-pressed", String(n.id === MG.selected)));
     $("m-detail").replaceChildren(
