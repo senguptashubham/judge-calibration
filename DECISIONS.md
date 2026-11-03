@@ -281,8 +281,8 @@ Adding P2/P3 changes the grain of `items.parquet` to one row per
 CONTRIBUTING.md invariant 14.
 
 The risk–coverage machinery also sweeps raw thresholds on each component, with ECE
-on the retained set. The preregistered prediction was that the epistemic threshold
-beats the total one.
+on the retained set. The prediction, made in advance (RQ5 is exploratory in
+`PREREGISTRATION.md`), was that the epistemic threshold beats the total one.
 
 Where: `src/signals.py`, `src/metrics.py`, `analysis/rq5.py --task threshold_sweep`.
 
@@ -385,10 +385,11 @@ Where: `src/bayesian.py`, `tests/test_bayesian.py`.
 **Decision.**
 
 - **Teacher and student.** The teacher is the three-prompt ensemble's predictive
-  distribution. The student is the single-call, P1-only Bayesian meta-model. No LLM is
-  fine-tuned.
+  distribution, which costs 6 calls per item (three prompts, both orders). The student
+  is a Bayesian meta-model on the three signals the two greedy P1 calls give
+  (`conf_verb`, `conf_lp`, `conf_bpe`), so it costs 2 (D31). No LLM is fine-tuned.
 - **Headline.** The headline result is how much of the ensemble's AUROC, ECE and
-  entropy quality survives at one call.
+  entropy quality survives at a third of the calls.
 - **Check against humans.** Separately, the judge-level aleatoric term should track
   `d_human` (where humans disagree), and the epistemic term should not. This runs on
   clean/P1 only.
@@ -519,7 +520,10 @@ would get through if every verdict above a confidence threshold were auto-accept
 **The site.** It is plain HTML, CSS and JavaScript (`site/`), and it **computes no
 statistic**. Its data is built by `analysis/demo_bundle.py` → `analysis/site_data.py`.
 
-- Example items are selected blind to the judges' verdicts, with a fixed seed.
+- Example items come in two kinds, labelled as such on the site. The showcase is
+  selected *on* the primary judge's verdicts, deterministically (shortest first), to
+  show order and padding flips. The game pool and the random examples are selected
+  blind to the verdicts, with a fixed seed.
 - The judge palette was validated for colour-vision separation, and `src/plots.py`
   uses the same palette.
 
@@ -543,3 +547,119 @@ No result changed. Three things did:
    kev is therefore not a close proxy on position bias.
 3. **Positioning of the auto-accept section.** It is placed against SCOPE's conformal
    guarantee and Li et al.'s padding result.
+
+### D31 — Corrections after a pre-submission review
+A review of the write-up against the code found two results that claimed more than
+the analysis showed, and one property of the data that was not disclosed.
+
+1. **RQ5's student was not cheaper than its teacher.** The model described as
+   "single-call" read all of Tier A, including `conf_ens` and its entropy terms (the
+   ensemble's own outputs) and `conf_sc` (4 sampled calls), so it needed 10 calls
+   against the ensemble's 6.
+   - **Change:** the student is now the Bayesian model on `TWO_CALL_COLUMNS`, the same
+     three signals the transfer test and the verbose-shift check already use (D21).
+     It costs 2 calls, a third of the ensemble's.
+   - **Kept:** the all-signals model is still fitted and reported beside it, labelled
+     with its 10 calls, so the earlier numbers remain visible.
+   - **Convergence:** 8 of the two-call model's 50 fold-fits have divergences, 16 in
+     total. Worst R-hat is 1.008. These are reported, and the sampler is not tuned
+     (invariant 11).
+2. **RQ7's padding result was scored only on the calls auto-j answered.** Up to 39.8%
+   of padded calls gave no verdict, and dropping them can raise AUROC by itself.
+   - **Change:** `analysis/rq7.py --task survivorship` puts every padded item that ran
+     back in, counts a missing verdict (no decision line, or auto-j's "Tie", which the
+     project treats as missing throughout) as wrong, and fills the missing signal three
+     ways: escalated (lowest confidence), best case and worst case. The last two bound
+     the AUROC over every possible fill.
+   - **Reading:** REPORT states the answered-calls result only for answered calls, and
+     gives the bounds and the loss in usable accuracy beside it.
+3. **Items are keyed by the order the voters saw.** `build_items()` groups votes by
+   `(question_id, model_a, model_b, turn)`, the order in the source data. A comparison
+   that voters saw in both orders becomes two items: 377 comparisons, 754 of the 1,836
+   labelled items. In 53 of them the two halves name different winners, so a judge
+   that answers consistently is marked wrong on one of the two.
+   - **Change:** none. Merging the halves would change every label and every result;
+     the property is disclosed in REPORT's data section and limitations instead.
+   - **Effect:** the cluster bootstrap resamples whole questions, so both halves always
+     move together and the intervals stay valid. What it changes is how N, the vote
+     counts and the accuracy ceiling read.
+
+Where: `src/features.py::TWO_CALL_COLUMNS`, `analysis/rq5.py`, `analysis/rq7.py`,
+`src/data.py::build_items()`.
+
+### D32 — Meta-models are scored per fold, against signals on the same folds
+**Decision.** Every AUROC of a cross-validated meta-model, and every comparison of
+one with a raw signal or with another meta-model, is computed **per fold**:
+
+- each fold's model is scored on its own held-out questions;
+- a raw signal is scored on exactly those questions;
+- the per-fold difference is averaged over the 5 folds and 10 repeats;
+- its 95% CI comes from a paired bootstrap that resamples questions with the fold
+  assignment held fixed (`boot.py::paired_per_fold_bootstrap`).
+
+The permutation nulls use the same per-fold AUROC. The earlier pooled figures are
+kept in `*_pooled*` columns for reference.
+
+**Why.** A pre-submission audit found three scoring conventions in use, none of them
+like for like:
+
+- RQ4 pooled each repeat's five fold models into one AUROC.
+- RQ5 pooled again, averaging predictions across repeats.
+- The RQ4 transfer test set a pooled cross-validated AUROC against one model fit on
+  all of clean.
+
+Fold models agree on which items are risky more than on the exact scale, so pooling
+them blurs the ranking. A raw signal is never fitted and pays no such cost, so every
+pooled comparison was tilted against the meta-model: by about 0.01–0.015 AUROC in
+RQ4, and enough in the transfer test to hide a real drop. Per-fold scoring asks what
+a deployment asks: does one fitted model rank new items better than the signal?
+
+**Also changed with it:**
+
+- **The transfer test** trains each fold model on clean rows and scores the held-out
+  questions' clean and padded rows. A frozen model fit on all of clean is kept as a
+  secondary check.
+- **The RQ4 tier ablation** keeps the agreed items (D16) as its planned population and
+  adds the same progression on the full 1,819 items as a sensitivity check.
+- **RQ5's epistemic signal** is scored per repeat from that repeat's own posterior
+  draws, so pooling draws across partitions no longer inflates it.
+- **RQ6 and RQ7** compare the meta-model with the better signal on the same folds,
+  with a paired CI, and gain a permutation null (`bayesian.py::permutation_null_bayesian`,
+  n=20, since each permutation is five NUTS fits).
+
+Where: `src/metrics.py::per_fold_auroc_error`, `src/boot.py`, `src/predictor.py`,
+`src/bayesian.py`, `analysis/rq4.py`, `analysis/rq5.py`, `analysis/rq6.py`,
+`analysis/rq7.py`.
+
+### D33 — Every meta-model AUROC gets a permutation null
+**Decision.** Invariant 12 covers every AUROC a fitted meta-model reports, not only
+the RQ4 tier ablation. Each one is set against a null that shuffles `correct` within
+each question and reruns the same cross-validation. Differences and coefficients
+(clean vs padded, one tier vs the next, the H4 interaction) are tested by their
+cluster-bootstrap intervals instead: a label shuffle says nothing about a difference
+between two conditions.
+
+**Why.** A final consistency check found four meta-model results with no null, while
+the invariant read "every RQ4 result" and the README "every predictive result":
+
+- the RQ4 sensitivity check on all 1,819 items (6 cells);
+- the RQ4 Bayesian model, which is also RQ5's all-signals model;
+- RQ5's two-call Bayesian model;
+- the RQ4 category transfer, whose text claimed every category "clears chance".
+
+None was likely to fail (AUROCs of 0.74–0.86 against nulls near 0.5), but that was
+an argument, not a test.
+
+**Result.** All of them clear their nulls:
+
+- full base: every cell at the 100th percentile of 50 shuffles, null means
+  0.507–0.523;
+- Bayesian models (n=20): null means 0.501 (Tier A) and 0.504 (two-call), highest
+  runs 0.553 and 0.537;
+- category transfer (n=50 per category): null means 0.49–0.52, highest run 0.66,
+  below the lowest observed AUROC (0.739).
+
+No existing number changed.
+
+Where: `analysis/rq4.py` (`compute_category_null`, the full-base and Bayesian
+nulls), `analysis/rq5.py`, `analysis/rq6.py::summarize_meta_null`.

@@ -55,6 +55,12 @@ TIER_C_EXTRA_COLUMNS = [
 TIER_B_COLUMNS = TIER_A_COLUMNS + TIER_B_EXTRA_COLUMNS
 TIER_C_COLUMNS = TIER_B_COLUMNS + TIER_C_EXTRA_COLUMNS
 
+# The Tier A signals that the two greedy P1 calls (AB and BA order) give on
+# their own: no sampled draws and no P2/P3 prompts. `verbose` collects
+# exactly these (D21), and RQ5's distilled model uses them so that it costs
+# 2 calls against the 3-prompt ensemble's 6 (D31).
+TWO_CALL_COLUMNS = ["conf_verb", "conf_lp", "conf_bpe"]
+
 
 def load_rq4_population(items_parquet: str) -> pd.DataFrame:
     """The population every RQ4 tier uses (N=1,819): (clean, P1) only
@@ -79,6 +85,13 @@ def build_tier_a(items: pd.DataFrame) -> pd.DataFrame:
     Do the signals combine, or are they redundant?
     """
     return items[TIER_A_COLUMNS].copy()
+
+
+def build_two_call(items: pd.DataFrame) -> pd.DataFrame:
+    """The two-call subset of Tier A: what a model costs when it may read
+    only the greedy P1 verdict in both answer orders.
+    """
+    return items[TWO_CALL_COLUMNS].copy()
 
 
 def build_tier_b(items: pd.DataFrame) -> pd.DataFrame:

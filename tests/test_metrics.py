@@ -19,6 +19,7 @@ from src.metrics import (
     mce,
     oracle_risk_coverage,
     overconfidence_gap,
+    per_fold_auroc_error,
     risk_coverage,
     threshold_sweep,
     truncated_entropy,
@@ -552,3 +553,14 @@ def test_auto_accept_stats_kappa_uses_accepted_items_only():
     human = ["A", "B", "B", "A", "B"]
     stats = auto_accept_stats(conf, correct, 0.9, verdict=verdict, human_label=human)
     assert stats["kappa_among_accepted"] == pytest.approx(cohens_kappa(verdict[:4], human[:4]))
+
+
+def test_per_fold_auroc_ignores_scale_differences_between_folds():
+    # Each fold ranks its error first, but fold 1's model works on a higher
+    # scale. Within each fold the ranking is perfect (1.0); pooled, the two
+    # scales interleave and only 3 of 4 error-correct pairs are ordered.
+    uncertainty = [0.1, 0.2, 0.8, 0.9]
+    correct = [True, False, True, False]
+    fold_id = [0, 0, 1, 1]
+    assert per_fold_auroc_error(uncertainty, correct, fold_id) == pytest.approx(1.0)
+    assert auroc_error(uncertainty, correct) == pytest.approx(0.75)

@@ -10,15 +10,16 @@ vote groups).
 """
 
 import pandas as pd
-import pytest
 
 from src.features import (
     TIER_A_COLUMNS,
     TIER_B_COLUMNS,
     TIER_C_COLUMNS,
+    TWO_CALL_COLUMNS,
     build_tier_a,
     build_tier_b,
     build_tier_c,
+    build_two_call,
     load_rq4_population,
 )
 
@@ -120,6 +121,18 @@ def test_no_nans_in_any_tier_on_a_fully_populated_population():
     items = _fake_items(n=5)
     for build_fn in (build_tier_a, build_tier_b, build_tier_c):
         assert build_fn(items).isna().sum().sum() == 0
+
+
+def test_two_call_set_needs_only_the_two_greedy_p1_calls():
+    # conf_sc needs 4 sampled draws and the ensemble columns need P2/P3, so
+    # neither may enter the model that is costed at two calls (D31).
+    items = _fake_items()
+    two_call = build_two_call(items)
+    assert list(two_call.columns) == TWO_CALL_COLUMNS
+    assert set(TWO_CALL_COLUMNS) < set(TIER_A_COLUMNS)
+    assert set(TWO_CALL_COLUMNS).isdisjoint(
+        {"conf_sc", "conf_ens", "ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_epistemic"}
+    )
 
 
 # --- load_rq4_population: filtering logic -----------------------------

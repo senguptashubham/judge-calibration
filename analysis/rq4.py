@@ -6,20 +6,25 @@ judge error? - plus the Bayesian arm's RQ5 verbose-shift check.
 Each task is its own invocation; several run hundreds of model fits.
 
   ablation             tier A -> B -> C on human_agreed items (N=556),
-                       with permutation nulls and paired tier steps
+                       with permutation nulls and paired tier steps; the
+                       same on the full base (N=1,819) as a sensitivity check
   h4                   correct ~ oof_score * d_human, cluster bootstrap
-  transfer             train on clean, evaluate frozen on verbose
+  transfer             fold models trained on clean score the held-out
+                       questions' clean and verbose rows; a frozen
+                       whole-clean model as a secondary check
   category             LeaveOneGroupOut over the 8 categories
   calibration          meta-model reliability + Tier C coefficients
-  bayesian_comparison  LogReg vs Bayesian hierarchical model, Tier A
+  bayesian_comparison  LogReg vs Bayesian hierarchical model, Tier A, with
+                       the Bayesian model's permutation null
   verbose_shift        Bayesian epistemic/aleatoric, clean vs verbose
 
 Populations differ by task on purpose - each function's docstring says
 which and why. The "rq5_" output name of verbose_shift reflects the RQ it
-answers; it lives here because it reuses 5.7's transfer machinery.
+answers; it lives here because it reuses the transfer machinery.
 """
 
 import argparse
+from typing import Callable
 
 import numpy as np
 import pandas as pd
@@ -30,11 +35,13 @@ from sklearn.preprocessing import StandardScaler
 
 from analysis.rq1 import SIGNALS
 from analysis.rq3 import load_rq3b_items
-from src.boot import cluster_bootstrap, paired_cluster_bootstrap
+from analysis.rq6 import summarize_meta_null
+from src.boot import cluster_bootstrap, paired_cluster_bootstrap, paired_per_fold_bootstrap
 from src.config import Config
 from src.features import (
     TIER_A_COLUMNS,
     TIER_C_EXTRA_COLUMNS,
+    TWO_CALL_COLUMNS,
     build_tier_a,
     build_tier_c,
     load_rq4_population,
@@ -44,13 +51,14 @@ from src.bayesian import (
     NUM_SAMPLES,
     NUM_WARMUP,
     build_group_index,
+    convergence_diagnostics,
     fit_nuts,
     posterior_predictive_entropy_decomposition,
     predict_in_sample,
     repeated_stratified_group_kfold_bayesian,
     summarize_diagnostics,
 )
-from src.metrics import auroc_error, brier, ece, get_bin_edges
+from src.metrics import auroc_error, brier, ece, get_bin_edges, per_fold_auroc_error
 from src.plots import (
     judge_name,
     plot_bayesian_convergence,
@@ -69,12 +77,13 @@ from src.predictor import (
     MODEL_FACTORIES,
     TIER_BUILDERS,
     build_xyg,
+    make_fold_splits,
     encode_features,
     make_logreg,
     permutation_null,
     percentile_of_null,
-    repeated_stratified_group_kfold,
     run_predictor,
+    shuffle_within_groups,
 )
 
 
@@ -115,17 +124,20 @@ def compute_baseline_auroc(population: pd.DataFrame, seed: int) -> dict:
 
 
 def compute_tier_model_result(population: pd.DataFrame, tier_name: str, model_name: str, seed: int) -> dict:
-    """One (tier, model) cell: the D8 protocol's mean AUROC and its
-    across-repeat min/max - D8's headline uncertainty, not a bootstrap CI.
+    """One (tier, model) cell: the D8 protocol's mean per-fold AUROC (D32)
+    and its min/max over the 10 repeats - D8's headline uncertainty, not a
+    bootstrap CI. `auroc_pooled_mean` is the pooled-over-folds AUROC, kept
+    for reference.
     """
     results = run_predictor(population, TIER_BUILDERS[tier_name], model_name, seed)
-    aurocs = [r.auroc for r in results]
+    aurocs = [r.fold_auroc for r in results]
     return {
         "tier": tier_name,
         "model": model_name,
         "auroc_mean": sum(aurocs) / len(aurocs),
         "auroc_low": min(aurocs),
         "auroc_high": max(aurocs),
+        "auroc_pooled_mean": float(np.mean([r.auroc for r in results])),
         "n_repeats": len(results),
     }
 
@@ -153,16 +165,6 @@ def compute_permutation_null_summary(
     }
 
 
-def compute_tier_oof_uncertainty(population: pd.DataFrame, tier_name: str, model_name: str, seed: int) -> np.ndarray:
-    """1 - (out-of-fold P(correct) averaged over the 10 repeats), one value
-    per item, positionally aligned with `population` - on the same
-    uncertainty scale as a raw signal's 1 - conf.
-    """
-    results = run_predictor(population, TIER_BUILDERS[tier_name], model_name, seed)
-    mean_oof_pred = np.mean([r.oof_pred for r in results], axis=0)
-    return 1 - mean_oof_pred
-
-
 def _predictions_df(population: pd.DataFrame, uncertainty: np.ndarray) -> pd.DataFrame:
     """question_id / correct / uncertainty - one shared column name so one
     stat_fn scores any baseline or tier in a paired comparison.
@@ -181,26 +183,47 @@ def _auroc_from_uncertainty(df: pd.DataFrame) -> float:
 
 
 def compare_tier_progression(population: pd.DataFrame, baseline_signal: str, seed: int) -> pd.DataFrame:
-    """Paired cluster-bootstrap CI on each step's AUROC change (baseline ->
-    A, A -> B, B -> C), per model - the same items scored two ways, so the
-    test is whether a step is real, not whether two bars' whiskers overlap.
+    """Each step's AUROC change (baseline -> A, A -> B, B -> C), per model,
+    scored per fold (D32): both sides on the same held-out questions of each
+    fold, the difference averaged over folds and repeats, and a paired
+    bootstrap CI that resamples questions with the folds held fixed. Every
+    tier runs on the same rows with the same seeds, so all tiers share one
+    fold assignment per repeat; the raw baseline signal is scored on those
+    same folds.
 
-    Returns one row per (model, comparison): auroc_diff (higher stage minus
-    lower), ci_low, ci_high.
+    The `pooled_*` columns repeat each step on the repeat-averaged
+    out-of-fold predictions, for reference.
+
+    Returns one row per (model, comparison).
     """
+    correct = population["correct"].to_numpy()
+    groups = population["question_id"].to_numpy()
     baseline_uncertainty = 1 - population[baseline_signal].to_numpy(dtype=float)
 
     rows = []
     for model_name in MODEL_FACTORIES:
-        uncertainty_by_stage = {"baseline": baseline_uncertainty}
-        for tier_name in TIER_BUILDERS:
-            uncertainty_by_stage[tier_name] = compute_tier_oof_uncertainty(population, tier_name, model_name, seed)
+        runs = {tier: run_predictor(population, TIER_BUILDERS[tier], model_name, seed) for tier in TIER_BUILDERS}
+        fold_ids = [r.fold_id for r in runs["A"]]
+        for results in runs.values():
+            if not all(np.array_equal(r.fold_id, f) for r, f in zip(results, fold_ids)):
+                raise RuntimeError("tiers were not split identically; the per-fold comparison would be unpaired")
+
+        per_fold = {"baseline": [baseline_uncertainty] * len(fold_ids)}
+        pooled = {"baseline": baseline_uncertainty}
+        for tier, results in runs.items():
+            per_fold[tier] = [1 - r.oof_pred for r in results]
+            pooled[tier] = 1 - np.mean([r.oof_pred for r in results], axis=0)
 
         for lo, hi in [("baseline", "A"), ("A", "B"), ("B", "C")]:
-            df_hi = _predictions_df(population, uncertainty_by_stage[hi])
-            df_lo = _predictions_df(population, uncertainty_by_stage[lo])
-            diff, ci_low, ci_high = paired_cluster_bootstrap(
-                df_hi, df_lo, _auroc_from_uncertainty, "question_id", seed=seed
+            diff, ci_low, ci_high = paired_per_fold_bootstrap(
+                per_fold[hi], per_fold[lo], correct, groups, fold_ids, seed=seed
+            )
+            pooled_diff, pooled_low, pooled_high = paired_cluster_bootstrap(
+                _predictions_df(population, pooled[hi]),
+                _predictions_df(population, pooled[lo]),
+                _auroc_from_uncertainty,
+                "question_id",
+                seed=seed,
             )
             rows.append(
                 {
@@ -209,6 +232,9 @@ def compare_tier_progression(population: pd.DataFrame, baseline_signal: str, see
                     "auroc_diff": diff,
                     "ci_low": ci_low,
                     "ci_high": ci_high,
+                    "pooled_auroc_diff": pooled_diff,
+                    "pooled_ci_low": pooled_low,
+                    "pooled_ci_high": pooled_high,
                 }
             )
 
@@ -362,11 +388,7 @@ def main_h4(config_path: str) -> None:
 # Features: Tier A minus the signals verbose doesn't have (D21) - leaving
 # conf_verb, conf_lp, conf_bpe - for every model compared.
 
-TRANSFER_SAFE_COLUMNS = [
-    c
-    for c in TIER_A_COLUMNS
-    if c not in {"conf_sc", "conf_ens", "ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_epistemic"}
-]
+TRANSFER_SAFE_COLUMNS = TWO_CALL_COLUMNS
 
 
 def build_transfer_xy(items: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np.ndarray]:
@@ -377,36 +399,80 @@ def build_transfer_xy(items: pd.DataFrame) -> tuple[pd.DataFrame, np.ndarray, np
     return X, y, groups
 
 
-def compute_transfer_baseline(clean_items: pd.DataFrame, model_name: str, seed: int) -> dict:
-    """In-domain baseline: repeated grouped CV on clean alone, with the same
-    reduced features - so the transfer delta measures the move to verbose,
-    not the dropped features.
+N_REPEATS = 10  # D8
+
+
+def compute_transfer_crossfit(clean_items: pd.DataFrame, verbose_items: pd.DataFrame, model_name: str, seed: int) -> dict:
+    """The like-for-like transfer test (D32). In every fold of the D8
+    protocol a model is trained on the clean rows of the training questions,
+    then scores the held-out questions twice: their clean rows (in-domain)
+    and their padded rows (transfer). Both sides come from the same fitted
+    models on the same questions, so the paired per-fold difference
+    isolates the move to padded inputs. Scoring the two sides differently
+    (pooled cross-validation against one model fit on all of clean) would
+    mix the pooling penalty into the difference.
     """
-    X, y, groups = build_transfer_xy(clean_items)
-    results = repeated_stratified_group_kfold(X, y, groups, MODEL_FACTORIES[model_name], seed=seed)
-    aurocs = [r.auroc for r in results]
-    return {"auroc_mean": sum(aurocs) / len(aurocs), "auroc_low": min(aurocs), "auroc_high": max(aurocs)}
+    X_clean, y_clean, groups = build_transfer_xy(clean_items)
+    X_verbose, y_verbose, _ = build_transfer_xy(verbose_items)
+
+    clean_uncertainty, verbose_uncertainty, fold_ids = [], [], []
+    for i in range(N_REPEATS):
+        repeat_seed = seed + i
+        clean_pred = np.full(len(y_clean), np.nan)
+        verbose_pred = np.full(len(y_clean), np.nan)
+        fold_id = np.full(len(y_clean), -1)
+        for k, (train_idx, test_idx) in enumerate(make_fold_splits(X_clean, y_clean, groups, 5, repeat_seed)):
+            model = MODEL_FACTORIES[model_name](repeat_seed)
+            model.fit(X_clean.iloc[train_idx], y_clean[train_idx])
+            clean_pred[test_idx] = model.predict_proba(X_clean.iloc[test_idx])[:, 1]
+            verbose_pred[test_idx] = model.predict_proba(X_verbose.iloc[test_idx])[:, 1]
+            fold_id[test_idx] = k
+        clean_uncertainty.append(1 - clean_pred)
+        verbose_uncertainty.append(1 - verbose_pred)
+        fold_ids.append(fold_id)
+
+    clean_aurocs = [per_fold_auroc_error(u, y_clean, f) for u, f in zip(clean_uncertainty, fold_ids)]
+    verbose_aurocs = [per_fold_auroc_error(u, y_verbose, f) for u, f in zip(verbose_uncertainty, fold_ids)]
+    delta, ci_low, ci_high = paired_per_fold_bootstrap(
+        verbose_uncertainty, clean_uncertainty, y_verbose, groups, fold_ids, seed=seed, correct_b=y_clean
+    )
+    return {
+        "clean_auroc": float(np.mean(clean_aurocs)),
+        "clean_auroc_low": min(clean_aurocs),
+        "clean_auroc_high": max(clean_aurocs),
+        "verbose_auroc": float(np.mean(verbose_aurocs)),
+        "verbose_auroc_low": min(verbose_aurocs),
+        "verbose_auroc_high": max(verbose_aurocs),
+        "delta_auroc": delta,
+        "delta_ci_low": ci_low,
+        "delta_ci_high": ci_high,
+    }
 
 
-def compute_transfer_auroc(clean_items: pd.DataFrame, verbose_items: pd.DataFrame, model_name: str, seed: int) -> dict:
-    """Fit once on all of clean, evaluate the frozen model on verbose - one
-    offline-trained model's deployment behavior, not training variance.
-    The CI resamples verbose's questions only, since the model is fixed.
+def compute_transfer_frozen(clean_items: pd.DataFrame, verbose_items: pd.DataFrame, model_name: str, seed: int) -> dict:
+    """The secondary check: one model fit on all of clean, frozen, scored on
+    clean (in-sample) and on verbose, with a paired cluster-bootstrap CI on
+    the difference. In-sample scoring flatters the clean side slightly, so
+    this is a check on direction, not the headline.
     """
-    X_train, y_train, _ = build_transfer_xy(clean_items)
-    X_test, y_test, groups_test = build_transfer_xy(verbose_items)
-
+    X_clean, y_clean, groups = build_transfer_xy(clean_items)
+    X_verbose, y_verbose, _ = build_transfer_xy(verbose_items)
     model = MODEL_FACTORIES[model_name](seed)
-    model.fit(X_train, y_train)
-    pred = model.predict_proba(X_test)[:, 1]
-
-    eval_df = pd.DataFrame({"question_id": groups_test, "correct": y_test, "pred": pred})
-
-    def _auroc(df: pd.DataFrame) -> float:
-        return float(roc_auc_score(df["correct"].to_numpy(), df["pred"].to_numpy()))
-
-    point, ci_low, ci_high = cluster_bootstrap(eval_df, _auroc, "question_id", seed=seed)
-    return {"auroc": point, "ci_low": ci_low, "ci_high": ci_high}
+    model.fit(X_clean, y_clean)
+    clean_df = pd.DataFrame({"question_id": groups, "correct": y_clean,
+                             "uncertainty": 1 - model.predict_proba(X_clean)[:, 1]})
+    verbose_df = pd.DataFrame({"question_id": groups, "correct": y_verbose,
+                               "uncertainty": 1 - model.predict_proba(X_verbose)[:, 1]})
+    delta, ci_low, ci_high = paired_cluster_bootstrap(
+        verbose_df, clean_df, _auroc_from_uncertainty, "question_id", seed=seed
+    )
+    return {
+        "frozen_clean_auroc": _auroc_from_uncertainty(clean_df),
+        "frozen_verbose_auroc": _auroc_from_uncertainty(verbose_df),
+        "frozen_delta_auroc": delta,
+        "frozen_delta_ci_low": ci_low,
+        "frozen_delta_ci_high": ci_high,
+    }
 
 
 def main_transfer(config_path: str) -> None:
@@ -417,32 +483,19 @@ def main_transfer(config_path: str) -> None:
 
     rows = []
     for model_name in MODEL_FACTORIES:
-        baseline = compute_transfer_baseline(clean_items, model_name, config.seed)
-        transfer = compute_transfer_auroc(clean_items, verbose_items, model_name, config.seed)
-        delta = transfer["auroc"] - baseline["auroc_mean"]
-
+        crossfit = compute_transfer_crossfit(clean_items, verbose_items, model_name, config.seed)
+        frozen = compute_transfer_frozen(clean_items, verbose_items, model_name, config.seed)
         print(
-            f"{model_name}: in-domain (clean) AUROC={baseline['auroc_mean']:.4f} "
-            f"[{baseline['auroc_low']:.4f}, {baseline['auroc_high']:.4f}] (D8 across-repeat spread)"
+            f"{model_name}: per-fold AUROC clean={crossfit['clean_auroc']:.4f}, padded={crossfit['verbose_auroc']:.4f}; "
+            f"delta={crossfit['delta_auroc']:.4f} [{crossfit['delta_ci_low']:.4f}, {crossfit['delta_ci_high']:.4f}] "
+            f"(same fold models, paired)"
         )
         print(
-            f"{model_name}: transfer (clean->verbose) AUROC={transfer['auroc']:.4f} "
-            f"[{transfer['ci_low']:.4f}, {transfer['ci_high']:.4f}] (cluster-bootstrap over verbose)"
+            f"{model_name}: frozen model clean={frozen['frozen_clean_auroc']:.4f}, "
+            f"padded={frozen['frozen_verbose_auroc']:.4f}; delta={frozen['frozen_delta_auroc']:.4f} "
+            f"[{frozen['frozen_delta_ci_low']:.4f}, {frozen['frozen_delta_ci_high']:.4f}]"
         )
-        print(f"{model_name}: delta AUROC (transfer - in-domain) = {delta:.4f}")
-
-        rows.append(
-            {
-                "model": model_name,
-                "baseline_auroc_mean": baseline["auroc_mean"],
-                "baseline_auroc_low": baseline["auroc_low"],
-                "baseline_auroc_high": baseline["auroc_high"],
-                "transfer_auroc": transfer["auroc"],
-                "transfer_ci_low": transfer["ci_low"],
-                "transfer_ci_high": transfer["ci_high"],
-                "delta_auroc": delta,
-            }
-        )
+        rows.append({"model": model_name, **crossfit, **frozen})
 
     table = pd.DataFrame.from_records(rows)
     table_path = f"{config.paths.results_dir}/rq4_transfer_{config.model_slug}.csv"
@@ -452,12 +505,15 @@ def main_transfer(config_path: str) -> None:
     for dark in (False, True):
         plot_rq4_transfer(
             models=table["model"].tolist(),
-            baseline_mean=table["baseline_auroc_mean"].to_numpy(),
-            baseline_low=table["baseline_auroc_low"].to_numpy(),
-            baseline_high=table["baseline_auroc_high"].to_numpy(),
-            transfer_mean=table["transfer_auroc"].to_numpy(),
-            transfer_low=table["transfer_ci_low"].to_numpy(),
-            transfer_high=table["transfer_ci_high"].to_numpy(),
+            clean_mean=table["clean_auroc"].to_numpy(),
+            clean_low=table["clean_auroc_low"].to_numpy(),
+            clean_high=table["clean_auroc_high"].to_numpy(),
+            verbose_mean=table["verbose_auroc"].to_numpy(),
+            verbose_low=table["verbose_auroc_low"].to_numpy(),
+            verbose_high=table["verbose_auroc_high"].to_numpy(),
+            delta=table["delta_auroc"].to_numpy(),
+            delta_low=table["delta_ci_low"].to_numpy(),
+            delta_high=table["delta_ci_high"].to_numpy(),
             model_slug=config.model_slug,
             dark=dark,
         )
@@ -478,15 +534,53 @@ def compute_category_held_out_auroc(population: pd.DataFrame, model_name: str, s
     y = population["correct"].astype(int).to_numpy()
     groups = population["category"].to_numpy()
 
-    rows = []
+    aurocs = _category_aurocs(X, y, groups, model_name, seed)
+    rows = [
+        {"category": category, "model": model_name, "n": int((groups == category).sum()), "auroc": auroc}
+        for category, auroc in aurocs.items()
+    ]
+    return pd.DataFrame.from_records(rows)
+
+
+def _category_aurocs(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, model_name: str, seed: int) -> dict:
+    """{held-out category: AUROC} for one LeaveOneGroupOut pass."""
+    aurocs = {}
     for train_idx, test_idx in LeaveOneGroupOut().split(X, y, groups):
         model = MODEL_FACTORIES[model_name](seed)
         model.fit(X.iloc[train_idx], y[train_idx])
         pred = model.predict_proba(X.iloc[test_idx])[:, 1]
-        auroc = roc_auc_score(y[test_idx], pred)
-        rows.append({"category": groups[test_idx][0], "model": model_name, "n": len(test_idx), "auroc": auroc})
+        aurocs[groups[test_idx][0]] = roc_auc_score(y[test_idx], pred)
+    return aurocs
 
-    return pd.DataFrame.from_records(rows)
+
+def compute_category_null(population: pd.DataFrame, model_name: str, seed: int, n: int = 50) -> pd.DataFrame:
+    """Invariant 12 for the category transfer: shuffle `correct` within each
+    question (so every question keeps its error rate), rerun the same
+    LeaveOneGroupOut pass, and record each held-out category's AUROC.
+    Permutation i seeds the shuffle with seed + i.
+
+    Returns one row per category: category, model, null_mean, null_max.
+    """
+    X = encode_features(build_tier_a(population))
+    y = population["correct"].astype(int).to_numpy()
+    groups = population["category"].to_numpy()
+    question_ids = population["question_id"].to_numpy()
+
+    null_runs = [
+        _category_aurocs(X, shuffle_within_groups(y, question_ids, np.random.default_rng(seed + i)), groups, model_name, seed)
+        for i in range(n)
+    ]
+    return pd.DataFrame.from_records(
+        [
+            {
+                "category": category,
+                "model": model_name,
+                "null_mean": float(np.mean([run[category] for run in null_runs])),
+                "null_max": float(np.max([run[category] for run in null_runs])),
+            }
+            for category in null_runs[0]
+        ]
+    )
 
 
 def main_category(config_path: str) -> None:
@@ -499,9 +593,13 @@ def main_category(config_path: str) -> None:
     tables = []
     for model_name in MODEL_FACTORIES:
         result = compute_category_held_out_auroc(population, model_name, config.seed)
+        result = result.merge(compute_category_null(population, model_name, config.seed), on=["category", "model"])
         tables.append(result)
         for _, row in result.iterrows():
-            print(f"{model_name}, {row['category']}: n={row['n']}, AUROC={row['auroc']:.4f}")
+            print(
+                f"{model_name}, {row['category']}: n={row['n']}, AUROC={row['auroc']:.4f} "
+                f"(null mean {row['null_mean']:.4f}, max {row['null_max']:.4f}, n=50)"
+            )
         print(
             f"{model_name}: spread across categories = "
             f"[{result['auroc'].min():.4f}, {result['auroc'].max():.4f}]"
@@ -613,6 +711,40 @@ def main_ablation(config_path: str) -> None:
             model_slug=config.model_slug,
             dark=dark,
         )
+
+    # Sensitivity check: the same progression on the full RQ4 base. The
+    # agreed-items cut (D16) is the planned population; dropping 69% of the
+    # items can hide a small effect, so the full base is reported beside it.
+    full_population = load_rq4_population(config.paths.items_parquet).reset_index(drop=True)
+    full_baseline = compute_baseline_auroc(full_population, config.seed)
+    print()
+    print(f"Sensitivity: the same progression on the full RQ4 base, N={len(full_population)} "
+          f"(baseline {full_baseline['signal']} AUROC={full_baseline['auroc']:.4f})")
+    full_progression = compare_tier_progression(full_population, full_baseline["signal"], config.seed)
+    full_progression.insert(0, "baseline_signal", full_baseline["signal"])
+    full_path = f"{config.paths.results_dir}/rq4_ablation_progression_full_{config.model_slug}.csv"
+    full_progression.to_csv(full_path, index=False)
+    for _, row in full_progression.iterrows():
+        print(
+            f"  {row['model']}, {row['comparison']}: "
+            f"delta_auroc={row['auroc_diff']:.4f} [{row['ci_low']:.4f}, {row['ci_high']:.4f}]"
+        )
+    print(f"Wrote {len(full_progression)} rows to {full_path}")
+
+    print("Permutation null on the full base (n=50 per cell):")
+    full_null_rows = []
+    for tier_name in TIER_BUILDERS:
+        for model_name in MODEL_FACTORIES:
+            null_summary = compute_permutation_null_summary(full_population, tier_name, model_name, config.seed)
+            full_null_rows.append({k: v for k, v in null_summary.items() if k != "null_aurocs"})
+            print(
+                f"  Tier {tier_name}, {model_name}: observed={null_summary['observed_auroc']:.4f}, "
+                f"null mean={null_summary['null_mean']:.4f} (std={null_summary['null_std']:.4f}), "
+                f"percentile={null_summary['percentile']:.1%}"
+            )
+    full_null_path = f"{config.paths.results_dir}/rq4_ablation_null_full_{config.model_slug}.csv"
+    pd.DataFrame.from_records(full_null_rows).to_csv(full_null_path, index=False)
+    print(f"Wrote {len(full_null_rows)} rows to {full_null_path}")
 
 
 # --- Meta-model calibration and coefficients -----------------------
@@ -800,36 +932,54 @@ def main_calibration(config_path: str) -> None:
 
 
 def compute_frequentist_arm(population: pd.DataFrame, seed: int) -> dict:
-    """Tier A + logreg: the per-repeat AUROCs (D8 spread) and the OOF
-    P(correct) averaged over repeats (for ECE/Brier).
+    """Tier A + logreg: the per-repeat per-fold AUROCs (D8 range, D32), the
+    pooled ones for reference, and the OOF P(correct) averaged over repeats
+    (for ECE/Brier).
     """
     results = run_predictor(population, build_tier_a, "logreg", seed)
     return {
-        "aurocs": np.array([r.auroc for r in results]),
+        "aurocs": np.array([r.fold_auroc for r in results]),
+        "pooled_aurocs": np.array([r.auroc for r in results]),
         "mean_oof_correct": np.mean([r.oof_pred for r in results], axis=0),
     }
 
 
 def compute_bayesian_arm(
-    population: pd.DataFrame, seed: int, num_warmup: int = NUM_WARMUP, num_samples: int = NUM_SAMPLES, num_chains: int = NUM_CHAINS
+    population: pd.DataFrame,
+    seed: int,
+    num_warmup: int = NUM_WARMUP,
+    num_samples: int = NUM_SAMPLES,
+    num_chains: int = NUM_CHAINS,
+    feature_builder: Callable[[pd.DataFrame], pd.DataFrame] = build_tier_a,
 ) -> dict:
-    """Tier A Bayesian hierarchical model under the same protocol (about 7
-    minutes for the 50 fold-fits).
+    """Bayesian hierarchical model under the same protocol (about 7 minutes
+    for the 50 fold-fits), on Tier A unless `feature_builder` says otherwise.
+
+    `aurocs` are the per-repeat per-fold AUROCs (D32). `fold_ids`,
+    `oof_by_repeat` and `epistemic_by_repeat` keep each repeat separate, so
+    a caller can score the model per fold; `epistemic_by_repeat` comes from
+    that repeat's own posterior draws.
 
     `pooled_draws` concatenates every repeat's posterior draws rather than
     averaging them: each repeat is an independent refit on a different
     partition, so pooling keeps both posterior and partition variability.
     float32 keeps the (40,000 x 1,819) array at about 290 MB.
     """
-    X, y, groups = build_xyg(population, build_tier_a)
+    X, y, groups = build_xyg(population, feature_builder)
     results = repeated_stratified_group_kfold_bayesian(
         X, y, groups, seed=seed, num_warmup=num_warmup, num_samples=num_samples, num_chains=num_chains
     )
     return {
-        "aurocs": np.array([r.auroc for r in results]),
+        "aurocs": np.array([r.fold_auroc for r in results]),
+        "pooled_aurocs": np.array([r.auroc for r in results]),
         "mean_oof_correct": np.mean([r.oof_pred for r in results], axis=0),
         "pooled_draws": np.concatenate([r.oof_draws for r in results], axis=0).astype(np.float32),
         "fold_diagnostics": [fold_diag for r in results for fold_diag in r.fold_diagnostics],
+        "fold_ids": [r.fold_id for r in results],
+        "oof_by_repeat": [r.oof_pred for r in results],
+        "epistemic_by_repeat": [
+            posterior_predictive_entropy_decomposition(r.oof_draws)["epistemic"] for r in results
+        ],
     }
 
 
@@ -888,6 +1038,11 @@ def main_bayesian_comparison(config_path: str) -> None:
     print("Fitting Bayesian arm (Tier A hierarchical logit, D8 10x5 repeated CV - ~9 min)...")
     bayes = compute_bayesian_arm(population, config.seed)
 
+    print("Permutation null for the Bayesian arm (n=20, five NUTS fits each - ~15 min)...")
+    X, y, groups = build_xyg(population, build_tier_a)
+    bayes_null = summarize_meta_null(X, y, groups, bayes["aurocs"].mean(), config.seed)
+    print(f"  {bayes_null}")
+
     freq_p_wrong = 1 - freq["mean_oof_correct"]
     bayes_p_wrong = 1 - bayes["mean_oof_correct"]
 
@@ -907,6 +1062,7 @@ def main_bayesian_comparison(config_path: str) -> None:
                 "auroc_mean": freq["aurocs"].mean(),
                 "auroc_low": freq["aurocs"].min(),
                 "auroc_high": freq["aurocs"].max(),
+                "auroc_pooled_mean": freq["pooled_aurocs"].mean(),
                 "ece": freq_ece,
                 "brier": freq_brier,
                 "nll": np.nan,
@@ -917,10 +1073,12 @@ def main_bayesian_comparison(config_path: str) -> None:
                 "auroc_mean": bayes["aurocs"].mean(),
                 "auroc_low": bayes["aurocs"].min(),
                 "auroc_high": bayes["aurocs"].max(),
+                "auroc_pooled_mean": bayes["pooled_aurocs"].mean(),
                 "ece": bayes_ece,
                 "brier": bayes_brier,
                 "nll": bayes_nll,
                 "coverage_90": bayes_coverage,
+                **bayes_null,
                 **summarize_diagnostics(bayes["fold_diagnostics"]),
             },
         ]
@@ -978,7 +1136,7 @@ def main_bayesian_comparison(config_path: str) -> None:
 
 # --- Verbose-shift validation (RQ5, D21) ----------------
 #
-# Preregistered prediction (D23): under the clean -> verbose shift, epistemic
+# Prediction made in advance (D23; RQ5 is exploratory): under the clean -> verbose shift, epistemic
 # rises while aleatoric stays flat. The model is fit ONCE on all of clean
 # with the transfer test's features and evaluated with predict_in_sample()
 # on both conditions - clean and verbose share all 80 questions, so each
@@ -1042,6 +1200,8 @@ def main_verbose_shift(config_path: str) -> None:
 
     print("Fitting Bayesian model ONCE on all of clean (no CV, mirrors the transfer test's design)...")
     mcmc, question_id_to_index, scaler = fit_verbose_shift_model(clean_items, config.seed)
+    diagnostics = convergence_diagnostics(mcmc)
+    print(f"Bayesian convergence (single fit, invariant 13): {diagnostics}")
 
     clean_entropy = compute_condition_entropy(mcmc, clean_items, question_id_to_index, scaler)
     verbose_entropy = compute_condition_entropy(mcmc, verbose_items, question_id_to_index, scaler)
@@ -1084,6 +1244,7 @@ def main_verbose_shift(config_path: str) -> None:
                 "epistemic_rose": epistemic_rose,
                 "aleatoric_flat": aleatoric_flat,
                 "prediction_held": prediction_held,
+                **diagnostics,
             }
         ]
     )
@@ -1092,7 +1253,7 @@ def main_verbose_shift(config_path: str) -> None:
     print(f"Wrote {len(table)} rows to {table_path}")
 
     verdict = "HELD" if prediction_held else "DID NOT HOLD"
-    print(f"Preregistered prediction (epistemic rises, aleatoric stays flat, D21/D23): {verdict}")
+    print(f"Prediction made in advance (epistemic rises, aleatoric stays flat, D21/D23): {verdict}")
 
     plot_rq5_verbose_shift(
         aleatoric_clean=aleatoric_clean,

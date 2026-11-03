@@ -1,4 +1,7 @@
-comparison,gap,ci_low,ci_high
-auroc_ensemble_minus_bayesian,0.0038884445892533037,-0.010788594448234943,0.01984659377907949
-epistemic_auroc_ensemble_minus_bayesian,-0.22011344450697545,-0.26702577823987117,-0.17145129342184048
-pct_auroc_edge_retained,98.67344446908311,,
+model,comparison,gap,ci_low,ci_high
+bayesian_two_call,auroc_model_minus_ensemble,-0.016869207282531086,-0.03403610424617646,0.002671580462971936
+bayesian_two_call,epistemic_auroc_model_minus_ensemble,0.20692336074854306,0.15334228438288028,0.26184133126364845
+bayesian_two_call,pct_auroc_edge_retained,94.24571714537336,,
+bayesian_all_signals,auroc_model_minus_ensemble,0.006335997367797272,-0.006331082427712109,0.01921538303114507
+bayesian_all_signals,epistemic_auroc_model_minus_ensemble,0.22197283290039643,0.17546174312182572,0.26613605340892765
+bayesian_all_signals,pct_auroc_edge_retained,102.16128241296975,,

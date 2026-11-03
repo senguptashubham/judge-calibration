@@ -28,7 +28,8 @@ from sklearn.preprocessing import StandardScaler
 
 from src.config import Config
 from src.features import load_rq4_population
-from src.predictor import TIER_BUILDERS, build_xyg, make_fold_splits
+from src.metrics import per_fold_auroc_error
+from src.predictor import TIER_BUILDERS, build_xyg, make_fold_splits, shuffle_within_groups
 
 # NUTS settings for every fit. 2,000 draws per chain: at 1,000, 10-15 of each
 # run's 50 fold-fits landed just above R-hat 1.01 (D22).
@@ -248,8 +249,9 @@ def predict_in_sample(
 
 @dataclass
 class BayesianRepeatResult:
-    """One repeat of repeated_stratified_group_kfold_bayesian(). oof_pred
-    and oof_draws are positional against X.iloc, like RepeatResult.
+    """One repeat of repeated_stratified_group_kfold_bayesian(). oof_pred,
+    oof_draws and fold_id are positional against X.iloc, like RepeatResult;
+    `fold_auroc` is the per-fold headline (D32), `auroc` the pooled one.
     """
 
     seed: int
@@ -257,6 +259,8 @@ class BayesianRepeatResult:
     oof_draws: np.ndarray  # (n_draws, n_rows) every posterior draw's P(correct)
     auroc: float
     fold_diagnostics: list[dict]  # one convergence_diagnostics() dict per fold
+    fold_id: np.ndarray  # (n_rows,) the fold each row was held out in
+    fold_auroc: float
 
 
 def repeated_stratified_group_kfold_bayesian(
@@ -291,8 +295,10 @@ def repeated_stratified_group_kfold_bayesian(
         oof_pred = np.full(len(X), np.nan)
         oof_draws = np.full((num_samples * num_chains, len(X)), np.nan)
         fold_diagnostics = []
+        fold_id = np.full(len(X), -1)
 
-        for train_idx, test_idx in make_fold_splits(X, y, groups, n_splits, repeat_seed):
+        for k, (train_idx, test_idx) in enumerate(make_fold_splits(X, y, groups, n_splits, repeat_seed)):
+            fold_id[test_idx] = k
             scaler = StandardScaler().fit(X.iloc[train_idx])
             X_train, y_train = scaler.transform(X.iloc[train_idx]), y[train_idx]
             X_test = scaler.transform(X.iloc[test_idx])
@@ -316,8 +322,45 @@ def repeated_stratified_group_kfold_bayesian(
             oof_pred[test_idx] = per_draw_probs.mean(axis=0)
 
         auroc = float(roc_auc_score(y, oof_pred))
-        results.append(BayesianRepeatResult(repeat_seed, oof_pred, oof_draws, auroc, fold_diagnostics))
+        fold_auroc = per_fold_auroc_error(1 - oof_pred, y, fold_id)
+        results.append(
+            BayesianRepeatResult(repeat_seed, oof_pred, oof_draws, auroc, fold_diagnostics, fold_id, fold_auroc)
+        )
     return results
+
+
+def permutation_null_bayesian(
+    X: pd.DataFrame,
+    y: np.ndarray,
+    groups: np.ndarray,
+    n: int = 20,
+    n_splits: int = 5,
+    seed: int = 0,
+    num_warmup: int = NUM_WARMUP,
+    num_samples: int = NUM_SAMPLES,
+    num_chains: int = NUM_CHAINS,
+) -> np.ndarray:
+    """Invariant 12 for the hierarchical model: predictor.permutation_null()'s
+    recipe - shuffle `y` within each question, run one grouped 5-fold CV,
+    record the per-fold AUROC (D32) - with NUTS in place of the frequentist
+    fit. Each permutation is five NUTS fits, so n defaults to 20, enough to
+    place an observed AUROC far above its null; it cannot resolve a
+    percentile finer than 5%.
+
+    Returns n null per-fold AUROCs.
+    """
+    y = np.asarray(y)
+    groups = np.asarray(groups)
+    null_aurocs = np.empty(n)
+    for i in range(n):
+        permutation_seed = seed + i
+        y_shuffled = shuffle_within_groups(y, groups, np.random.default_rng(permutation_seed))
+        [result] = repeated_stratified_group_kfold_bayesian(
+            X, y_shuffled, groups, n_splits=n_splits, n_repeats=1, seed=permutation_seed,
+            num_warmup=num_warmup, num_samples=num_samples, num_chains=num_chains,
+        )
+        null_aurocs[i] = result.fold_auroc
+    return null_aurocs
 
 
 def _binary_entropy_vec(p: np.ndarray) -> np.ndarray:
@@ -391,8 +434,8 @@ if __name__ == "__main__":
     )
     elapsed = time.perf_counter() - start
 
-    aurocs = np.array([r.auroc for r in results])
-    print(f"  AUROC mean={aurocs.mean():.4f}, spread=[{aurocs.min():.4f}, {aurocs.max():.4f}]")
+    aurocs = np.array([r.fold_auroc for r in results])
+    print(f"  per-fold AUROC mean={aurocs.mean():.4f}, range over repeats=[{aurocs.min():.4f}, {aurocs.max():.4f}]")
     print("  (D8: the across-repeat spread is the headline uncertainty, not a within-split CI)")
 
     all_diag = [fold_diag for r in results for fold_diag in r.fold_diagnostics]

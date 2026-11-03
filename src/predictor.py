@@ -10,7 +10,8 @@ target while keeping every question_id's rows in one fold.
 5-fold CV repeated over 10 seeds (D8). With only ~80 questions, effective N
 for split-to-split noise is ~80, not ~1,800 rows, so the headline
 uncertainty is the ACROSS-REPEAT spread of each repeat's AUROC, never one
-split's CI.
+split's CI. The headline AUROC is per fold (D32): each fold's model scored
+on its own held-out rows, averaged over the folds.
 
 `python -m src.predictor --config configs/run.yaml --tier B --model logreg [--permutation-null]`
 """
@@ -30,6 +31,7 @@ from sklearn.preprocessing import StandardScaler
 
 from src.config import Config
 from src.features import build_tier_a, build_tier_b, build_tier_c, load_rq4_population
+from src.metrics import per_fold_auroc_error
 
 _CATEGORICAL_COLUMNS = ("category",)
 _BOOLEAN_COLUMNS = ("longer_is_chosen", "flipped")
@@ -95,12 +97,16 @@ def make_fold_splits(
 @dataclass
 class RepeatResult:
     """One repeat of repeated_stratified_group_kfold(). `oof_pred[i]` is the
-    prediction for X.iloc[i] - positional, not by X's index labels.
+    prediction for X.iloc[i] and `fold_id[i]` the fold it was held out in -
+    positional, not by X's index labels. `fold_auroc` is the headline
+    (per-fold, D32); `auroc` pools the five folds' predictions.
     """
 
     seed: int
     oof_pred: np.ndarray
     auroc: float
+    fold_id: np.ndarray
+    fold_auroc: float
 
 
 def repeated_stratified_group_kfold(
@@ -130,14 +136,19 @@ def repeated_stratified_group_kfold(
     for i in range(n_repeats):
         repeat_seed = seed + i
         oof_pred = np.full(len(X), np.nan)
+        fold_id = np.full(len(X), -1)
 
-        for train_idx, test_idx in make_fold_splits(X, y, groups, n_splits, repeat_seed):
+        for k, (train_idx, test_idx) in enumerate(make_fold_splits(X, y, groups, n_splits, repeat_seed)):
             model = make_model(repeat_seed)
             model.fit(X.iloc[train_idx], y[train_idx])
             oof_pred[test_idx] = model.predict_proba(X.iloc[test_idx])[:, 1]
+            fold_id[test_idx] = k
 
         auroc = roc_auc_score(y, oof_pred)
-        results.append(RepeatResult(seed=repeat_seed, oof_pred=oof_pred, auroc=auroc))
+        fold_auroc = per_fold_auroc_error(1 - oof_pred, y, fold_id)
+        results.append(
+            RepeatResult(seed=repeat_seed, oof_pred=oof_pred, auroc=auroc, fold_id=fold_id, fold_auroc=fold_auroc)
+        )
 
     return results
 
@@ -174,7 +185,8 @@ def permutation_null(
     only track question difficulty still score above 0.5 under it.
     Permutation i seeds both the shuffle and the split with seed + i.
 
-    Returns n null AUROCs.
+    Returns n null per-fold AUROCs, the same measure the observed AUROC
+    uses (D32).
     """
     y = np.asarray(y)
     groups = np.asarray(groups)
@@ -187,7 +199,7 @@ def permutation_null(
         [result] = repeated_stratified_group_kfold(
             X, y_shuffled, groups, make_model, n_splits=n_splits, n_repeats=1, seed=permutation_seed
         )
-        null_aurocs[i] = result.auroc
+        null_aurocs[i] = result.fold_auroc
 
     return null_aurocs
 
@@ -251,11 +263,11 @@ if __name__ == "__main__":
     population = load_rq4_population(config.paths.items_parquet)
 
     repeats = run_predictor(population, TIER_BUILDERS[args.tier], args.model, config.seed)
-    aurocs = np.array([r.auroc for r in repeats])
+    aurocs = np.array([r.fold_auroc for r in repeats])
 
     print(f"Tier {args.tier}, {args.model}, N={len(population)}, {len(repeats)} repeats:")
-    print(f"  AUROC mean={aurocs.mean():.4f}, spread=[{aurocs.min():.4f}, {aurocs.max():.4f}]")
-    print("  (D8: the across-repeat spread is the headline uncertainty, not a within-split CI)")
+    print(f"  per-fold AUROC mean={aurocs.mean():.4f}, range over repeats=[{aurocs.min():.4f}, {aurocs.max():.4f}]")
+    print("  (D8: the across-repeat range is the headline uncertainty, not a within-split CI)")
 
     if args.permutation_null:
         X, y, groups = build_xyg(population, TIER_BUILDERS[args.tier])

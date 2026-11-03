@@ -288,6 +288,33 @@ def auroc_error(uncertainty: npt.ArrayLike, correct: npt.ArrayLike) -> float:
     return float(roc_auc_score(error_arr, uncertainty_arr))
 
 
+def per_fold_auroc_error(uncertainty: npt.ArrayLike, correct: npt.ArrayLike, fold_id: npt.ArrayLike) -> float:
+    """auroc_error() inside each cross-validation fold, averaged over folds:
+
+        per_fold_AUROC = (1 / K) * sum_k auroc_error(uncertainty[fold k], correct[fold k])
+
+    Why per fold rather than one AUROC over the pooled out-of-fold
+    predictions: each fold is scored by a different fitted model, and those
+    models agree on which items are risky more than on the exact scale. One
+    model might put an item at 0.70 that another would put at 0.78. Pooling
+    ranks the five folds' predictions against each other, so those scale
+    differences blur the ranking and lower the AUROC. A raw signal is never
+    fitted, has one scale everywhere, and pays no such penalty, so pooled
+    scoring tilts any meta-model-versus-signal comparison against the
+    meta-model. Scoring each fold's model on its own held-out rows asks what
+    a deployment asks: does one fitted model rank new items well? (D32)
+
+    Raises ValueError, through auroc_error(), if any fold holds a single
+    class.
+    """
+    uncertainty_arr = np.asarray(uncertainty, dtype=float)
+    correct_arr = np.asarray(correct)
+    fold_arr = np.asarray(fold_id)
+    return float(np.mean([
+        auroc_error(uncertainty_arr[fold_arr == k], correct_arr[fold_arr == k]) for k in np.unique(fold_arr)
+    ]))
+
+
 def risk_coverage(
     uncertainty: npt.ArrayLike,
     correct: npt.ArrayLike,

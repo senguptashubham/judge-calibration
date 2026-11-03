@@ -6,7 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.boot import cluster_bootstrap, paired_cluster_bootstrap
+from src.boot import cluster_bootstrap, paired_cluster_bootstrap, paired_per_fold_bootstrap
+from src.metrics import per_fold_auroc_error
 
 _MEAN_STAT = lambda d: d["value"].mean()  # noqa: E731
 
@@ -150,3 +151,32 @@ def test_paired_cluster_bootstrap_deterministic_with_same_seed():
     result_2 = paired_cluster_bootstrap(df_a, df_b, _MEAN_STAT, "question_id", n=500, seed=7)
 
     assert result_1 == result_2
+
+
+def _per_fold_dataset(seed=0, n_groups=40, rows_per_group=5, n_repeats=3):
+    """Error labels, a weak and a strong uncertainty score, and one fold
+    assignment per repeat that keeps every group in a single fold."""
+    rng = np.random.default_rng(seed)
+    groups = np.repeat(np.arange(n_groups), rows_per_group)
+    correct = rng.random(len(groups)) > 0.3
+    strong = np.where(correct, 0.3, 0.7) + rng.normal(0, 0.2, len(groups))
+    weak = np.where(correct, 0.45, 0.55) + rng.normal(0, 0.2, len(groups))
+    folds = [rng.permutation(n_groups)[groups] % 5 for _ in range(n_repeats)]
+    return correct, groups, strong, weak, folds
+
+
+def test_per_fold_bootstrap_of_a_score_against_itself_is_exactly_zero():
+    correct, groups, strong, _, folds = _per_fold_dataset()
+    diff, low, high = paired_per_fold_bootstrap([strong] * 3, [strong] * 3, correct, groups, folds, n=200)
+    assert (diff, low, high) == (0.0, 0.0, 0.0)
+
+
+def test_per_fold_bootstrap_point_is_the_mean_per_fold_difference():
+    correct, groups, strong, weak, folds = _per_fold_dataset()
+    diff, low, high = paired_per_fold_bootstrap([strong] * 3, [weak] * 3, correct, groups, folds, n=500)
+    expected = np.mean([
+        per_fold_auroc_error(strong, correct, f) - per_fold_auroc_error(weak, correct, f) for f in folds
+    ])
+    assert diff == pytest.approx(expected)
+    assert low < diff < high
+    assert low > 0  # the strong score is clearly better on these data

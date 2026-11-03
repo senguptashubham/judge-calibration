@@ -77,7 +77,7 @@ done
 
 # auto-j-13b (RQ7)
 python -m src.autoj_signals --config $A
-for t in calibration position_swap verbosity bayesian_recalibration; do
+for t in calibration position_swap verbosity survivorship bayesian_recalibration; do
   python -m analysis.rq7 --config $A --task $t
 done
 
@@ -94,17 +94,18 @@ Then run `git status`. If everything reproduced, it is empty: every tracked CSV 
 
 ## Expected runtime
 
-A full run takes about 60–80 minutes on a laptop CPU. Most of that is five steps:
+A full run takes about 2.5–3 hours on a laptop CPU. Most of that is six steps:
 
 | Step | Time |
 |---|---|
-| `analysis.rq5 --task distillation` | ~10 min |
-| `analysis.rq4 --task bayesian_comparison` | ~9 min |
-| `analysis.rq7 --task bayesian_recalibration` | ~9 min |
-| `analysis.rq6 --task bayesian_recalibration` | ~9 min |
-| `analysis.auto_accept` | ~6 min |
+| `analysis.rq7 --task bayesian_recalibration` (with permutation nulls) | ~26 min |
+| `analysis.rq6 --task bayesian_recalibration` (with permutation nulls) | ~25 min |
+| `analysis.rq5 --task distillation` (two Bayesian models, with permutation nulls) | ~43 min |
+| `analysis.rq4 --task bayesian_comparison` (with permutation null) | ~25 min |
+| `analysis.rq4 --task ablation` (both populations, with permutation nulls) | ~15 min |
+| `analysis.auto_accept` | ~5 min |
 
-The Bayesian steps fit NumPyro NUTS models with fixed seeds.
+The Bayesian steps fit NumPyro NUTS models with fixed seeds. Run them one at a time: each holds about 40,000 posterior draws per item, and two at once can exhaust a 16 GB laptop's memory.
 
 ## Expected numbers
 
@@ -118,12 +119,15 @@ The 95% intervals come from a cluster bootstrap over `question_id`.
 | AUROC of stated confidence (`conf_verb`) | 0.639 [0.608, 0.672] | same |
 | Verdicts that flip when the answers swap | 27.8% [24.8%, 30.8%] | `results/rq3a_table_qwen2.5_7b_instruct.csv` |
 | ΔECE under padding (`conf_bpe`, verbose − clean) | +0.043 [0.011, 0.052] | `results/rq3_table_qwen2.5_7b_instruct.csv` |
-| RQ4 Tier A logreg AUROC − best single signal | +0.005 [−0.031, 0.039] | `results/rq4_ablation_progression_qwen2.5_7b_instruct.csv` |
-| RQ4 frequentist vs Bayesian AUROC | 0.796 vs 0.795; worst R-hat 1.008, 0 divergences | `results/rq4_bayesian_comparison_qwen2.5_7b_instruct.csv` |
-| RQ5 three-prompt ensemble vs one-call Bayesian AUROC | 0.793 vs 0.789 | `results/rq5_distillation_qwen2.5_7b_instruct.csv` |
+| RQ4 Tier A logreg − best single signal, per fold, agreed items | +0.019 [−0.008, 0.047] | `results/rq4_ablation_progression_qwen2.5_7b_instruct.csv` |
+| RQ4 transfer, logreg, padded − clean, per fold | −0.030 [−0.051, −0.010] | `results/rq4_transfer_qwen2.5_7b_instruct.csv` |
+| RQ4 frequentist vs Bayesian per-fold AUROC | 0.806 vs 0.800; worst R-hat 1.008, 0 divergences | `results/rq4_bayesian_comparison_qwen2.5_7b_instruct.csv` |
+| RQ4 Bayesian permutation null (mean / max) | 0.501 / 0.553 | same |
+| RQ5 two-call Bayesian − ensemble, per fold | −0.017 [−0.034, 0.003] | `results/rq5_distillation_gaps_qwen2.5_7b_instruct.csv` |
 | Wrong verdicts let through when auto-accepting `conf_verb` ≥ 0.9 | 98.4% | `results/auto_accept.csv` |
 | kev-8b AUROC / flip rate (in coverage) | 0.772 / 24.6% | `results/judge_comparison.csv` |
 | auto-j-13b AUROC / flip rate (turn 1) | 0.683 / 12.5% | same |
+| auto-j-13b turn-2 share correct, clean → padded, a missing verdict counted as wrong | 0.781 → 0.431 | `results/rq7_survivorship_autoj_13b_gptq_4bits.csv` |
 
 Because the NUTS seeds are fixed, the Bayesian results came out bit-identical on the verification run. Different hardware or a different JAX build may change the samples slightly. If that happens, the conclusions in `REPORT.md` should still hold.
 
@@ -132,7 +136,7 @@ Because the NUTS seeds are fixed, the Bayesian results came out bit-identical on
 **Date:** 31 October 2026.
 
 **Setup:**
-- a fresh `git clone` of `github.com/senguptashubham/judge-calibration` at `6fb2c8a`. Later commits change only documentation and the floating-point last digit of one table (see below);
+- a fresh `git clone` of `github.com/senguptashubham/judge-calibration` at `6fb2c8a`. Later commits change documentation, the floating-point last digit of one table, and the outputs covered by the in-place rerun (see below);
 - a new venv on Python 3.11.15 and `pip install -e .`;
 - `runs/` copied in from the original runs. The same files, byte for byte, are the ones published in the dataset.
 
@@ -140,3 +144,5 @@ Because the NUTS seeds are fixed, the Bayesian results came out bit-identical on
 - Every command above exited with code 0, in about 58 minutes of compute.
 - `git status` showed one file: the κ columns of `results/rq2_table_qwen2.5_7b_instruct.csv` differed in the 16th decimal place. The committed table had been generated before a final change to `cohens_kappa()`'s weighted branch. It was regenerated, and is now byte-identical to the fresh-clone output; every other tracked output matched as committed.
 - `pytest`: 301 passed, 1 skipped. The skipped module is `tests/test_site_e2e.py` (16 browser tests). It needs Playwright, which the base install leaves out. To run it, use `pip install -e ".[site]" && playwright install chromium`, which brings the total to 317.
+
+**Reruns after D31–D33 (2–3 November 2026).** The RQ5 distillation and the RQ7 survivorship check (D31), every meta-model AUROC, which is now scored per fold (D32), and the permutation nulls added for the remaining meta-models (D33) changed after the run above. The full command sequence was rerun in place on the original machine: every step exited with code 0, `git status` showed only the outputs those decisions change, `site/data/` was unchanged, and `pytest` passed in full. A fresh-clone run was not repeated.

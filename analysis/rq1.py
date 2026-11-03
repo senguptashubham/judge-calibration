@@ -18,7 +18,7 @@ import pandas as pd
 
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
-from src.metrics import auroc_error, brier, brier_decomposition, cohens_kappa, ece, mce, overconfidence_gap
+from src.metrics import brier, brier_decomposition, cohens_kappa, ece, mce, overconfidence_gap
 from src.plots import plot_reliability_diagram
 
 # The ranking signals (AUROC, risk-coverage, RQ4's baseline).
