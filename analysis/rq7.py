@@ -1,7 +1,7 @@
 """RQ7: does purpose-built judge training (auto-j-13b) resist the same
 failure modes? (D28)
 
-`python -m analysis.rq7 --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}`
+`python -m analysis.rq7 --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,survivorship,bayesian_recalibration}`
 
 - Signals: conf_sc_autoj (self-consistency; clean only, since verbose has
   no sampled draws) and conf_sc_bpe_autoj (order-swap entropy from
@@ -9,6 +9,8 @@ failure modes? (D28)
   conf_sc_bpe_autoj_greedy - the same signal from the two greedy calls -
   so clean and verbose are scored on the same construction.
 - Every test is split by turn (1 vs 2), both always reported.
+- The survivorship task re-scores the verbosity attack with the padded
+  items that gave no usable verdict put back in, under three fills.
 - The calibration task also writes how often auto-j gives no verdict at
   all, by condition and turn, over every call that ran.
 - auto-j's signals have different null patterns from each other and from
@@ -31,7 +33,7 @@ from analysis.rq3 import (
     confidence_gap_panel,
     verbosity_panel,
 )
-from analysis.rq6 import compute_signal_calibration
+from analysis.rq6 import compare_meta_model_to_best_signal, compute_signal_calibration, summarize_meta_null
 from src.autoj_signals import no_verdict_table
 from src.bayesian import repeated_stratified_group_kfold_bayesian, summarize_diagnostics
 from src.judge_autoj import AutojConfig
@@ -242,6 +244,117 @@ def main_verbosity(config_path: str) -> None:
         )
 
 
+# --- Survivorship check on the verbosity attack -----------------------------
+#
+# main_verbosity scores only the padded items that came back with a usable
+# verdict, and up to 39.8% of padded calls did not. If the dropped items were
+# the hard ones, a rise in AUROC could come from losing them rather than from
+# the signal. This check puts every padded item that ran back in, counts a
+# missing verdict as wrong, and fills the missing signal three ways:
+#   escalated   - lowest confidence for every filled item: what a pipeline
+#                 does with a call that returned nothing;
+#   best_case   - lowest confidence where wrong, highest where right;
+#   worst_case  - highest confidence where wrong, lowest where right.
+# best_case and worst_case bound the AUROC over every possible fill of the
+# missing values. Items skipped as over-length never ran and stay out.
+
+SURVIVORSHIP_FILLS = ["escalated", "best_case", "worst_case"]
+# conf_sc_bpe_autoj_greedy is 1 - H(p) in nats, so its floor is 1 - ln 2;
+# its probability form runs from 0.5 to 1.
+_SIGNAL_FLOOR, _SIGNAL_CEILING = 1 - np.log(2), 1.0
+_PROB_FLOOR, _PROB_CEILING = 0.5, 1.0
+
+
+def load_rq7_survivorship_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(clean_items, verbose_items): labelled items whose clean side has the
+    verbosity signal and `correct`, and whose padded calls all ran. The
+    verbose side keeps its missing values; fill_missing_verdicts() fills them.
+    """
+    items = pd.read_parquet(items_parquet)
+    items = items[items["human_label"].notna()]
+    clean_all = items[items["condition"] == "clean"]
+    verbose_all = items[items["condition"] == "verbose"]
+
+    clean_valid = clean_all[VERBOSITY_SIGNALS].notna().all(axis=1) & clean_all["correct"].notna()
+    verbose_ran = ~verbose_all["any_skipped"].astype(bool)
+    ids = set(clean_all.loc[clean_valid, "item_id"]) & set(verbose_all.loc[verbose_ran, "item_id"])
+
+    clean_items = clean_all[clean_all["item_id"].isin(ids)].copy()
+    verbose_items = verbose_all[verbose_all["item_id"].isin(ids)].copy()
+    return clean_items, verbose_items
+
+
+def fill_missing_verdicts(items: pd.DataFrame, signal: str, prob_col: str, fill: str) -> pd.DataFrame:
+    """A copy of `items` with every row missing `signal` or `correct` filled
+    in: `correct` becomes False where it is missing, and `signal`/`prob_col`
+    take the floor or ceiling that `fill` (one of SURVIVORSHIP_FILLS) gives.
+    Rows with both values present are unchanged.
+    """
+    if fill not in SURVIVORSHIP_FILLS:
+        raise ValueError(f"fill={fill!r} is not one of {SURVIVORSHIP_FILLS}")
+    out = items.copy()
+    missing = (out[signal].isna() | out["correct"].isna()).to_numpy()
+    correct = out["correct"].where(out["correct"].notna(), False).astype(bool).to_numpy()
+
+    if fill == "escalated":
+        confident = np.zeros(len(out), dtype=bool)
+    elif fill == "best_case":
+        confident = correct
+    else:
+        confident = ~correct
+
+    out["correct"] = correct
+    out[signal] = np.where(missing, np.where(confident, _SIGNAL_CEILING, _SIGNAL_FLOOR), out[signal])
+    out[prob_col] = np.where(missing, np.where(confident, _PROB_CEILING, _PROB_FLOOR), out[prob_col])
+    return out
+
+
+def main_survivorship(config_path: str) -> None:
+    """main_verbosity's paired deltas, per turn, once on the answered items
+    only (main_verbosity's population) and once per SURVIVORSHIP_FILLS on
+    every padded item that ran.
+    """
+    config = AutojConfig.from_yaml(config_path)
+    signal = VERBOSITY_SIGNALS[0]
+    prob_col = CALIBRATION_FORM[signal]
+    answered_clean, answered_verbose = load_rq7_paired_items(config.paths.items_parquet)
+    clean_items, verbose_items = load_rq7_survivorship_items(config.paths.items_parquet)
+    print(f"RQ7 survivorship population: N={len(clean_items)} items whose padded calls all ran")
+
+    rows = []
+    for turn in [1, 2]:
+        clean_turn = clean_items[clean_items["turn"] == turn]
+        verbose_turn = verbose_items[verbose_items["turn"] == turn]
+        n_filled = int((verbose_turn[signal].isna() | verbose_turn["correct"].isna()).sum())
+        populations = [
+            ("answered_only", answered_clean[answered_clean["turn"] == turn],
+             answered_verbose[answered_verbose["turn"] == turn], 0),
+        ] + [
+            (fill, clean_turn, fill_missing_verdicts(verbose_turn, signal, prob_col, fill), n_filled)
+            for fill in SURVIVORSHIP_FILLS
+        ]
+
+        for name, clean_t, verbose_t, filled in populations:
+            metrics = compute_signal_rq3b_metrics(
+                clean_t, verbose_t, signal, "correct", config.n_bins, config.seed, prob_col
+            )
+            rows.append({"turn": turn, "population": name, "n": len(clean_t), "n_filled": filled, **metrics})
+            print(
+                f"  turn={turn} {name} (N={len(clean_t)}, filled={filled}): "
+                f"delta_AUROC={metrics['delta_auroc_verbose_minus_clean']:.4f} "
+                f"[{metrics['delta_auroc_ci_low']:.4f}, {metrics['delta_auroc_ci_high']:.4f}], "
+                f"delta_ECE={metrics['delta_ece_verbose_minus_clean']:.4f} "
+                f"[{metrics['delta_ece_ci_low']:.4f}, {metrics['delta_ece_ci_high']:.4f}], "
+                f"delta_accuracy={metrics['delta_accuracy_verbose_minus_clean']:.4f} "
+                f"[{metrics['delta_accuracy_ci_low']:.4f}, {metrics['delta_accuracy_ci_high']:.4f}]"
+            )
+
+    table = pd.DataFrame.from_records(rows)
+    table_path = f"{config.paths.results_dir}/rq7_survivorship_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+
 # --- Bayesian recalibration ------------------------------------------------
 
 
@@ -268,34 +381,22 @@ def main_bayesian_recalibration(config_path: str) -> None:
         X, y, groups = build_xyg(both_present, build_autoj_tier)
         results = repeated_stratified_group_kfold_bayesian(X, y, groups, seed=config.seed)
 
-        aurocs = np.array([r.auroc for r in results])
         fold_diagnostics = [fd for r in results for fd in r.fold_diagnostics]
         diagnostics = summarize_diagnostics(fold_diagnostics)
-
-        best_single_auroc = max(
-            compute_signal_calibration(
-                both_present[both_present[signal].notna()], signal, config.n_bins, config.seed
-            )["auroc"]
-            for signal in AUTOJ_SIGNALS
-        )
+        comparison = compare_meta_model_to_best_signal(both_present, results, AUTOJ_SIGNALS, config.seed)
+        null = summarize_meta_null(X, y, groups, comparison["meta_model_auroc_mean"], config.seed)
 
         print(
-            f"  meta-model AUROC={aurocs.mean():.4f} [{aurocs.min():.4f}, {aurocs.max():.4f}] "
-            f"(D8 across-repeat spread) vs. best single signal AUROC={best_single_auroc:.4f}"
+            f"  meta-model per-fold AUROC={comparison['meta_model_auroc_mean']:.4f} "
+            f"[{comparison['meta_model_auroc_min']:.4f}, {comparison['meta_model_auroc_max']:.4f}] (range over repeats); "
+            f"minus best signal ({comparison['best_single_signal']}) on the same folds: "
+            f"{comparison['meta_minus_best_signal']:+.4f} "
+            f"[{comparison['meta_minus_best_ci_low']:+.4f}, {comparison['meta_minus_best_ci_high']:+.4f}]"
         )
+        print(f"  permutation null: {null}")
         print(f"  convergence: {diagnostics}")
 
-        rows.append(
-            {
-                "turn": turn,
-                "n": len(both_present),
-                "meta_model_auroc_mean": aurocs.mean(),
-                "meta_model_auroc_min": aurocs.min(),
-                "meta_model_auroc_max": aurocs.max(),
-                "best_single_signal_auroc": best_single_auroc,
-                **diagnostics,
-            }
-        )
+        rows.append({"turn": turn, "n": len(both_present), **comparison, **null, **diagnostics})
 
         plot_bayesian_convergence(
             max_rhat=np.array([fd["max_rhat"] for fd in fold_diagnostics]),
@@ -315,7 +416,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument(
-        "--task", required=True, choices=["calibration", "position_swap", "verbosity", "bayesian_recalibration"]
+        "--task", required=True, choices=["calibration", "position_swap", "verbosity", "survivorship", "bayesian_recalibration"]
     )
     args = parser.parse_args()
 
@@ -325,5 +426,7 @@ if __name__ == "__main__":
         main_position_swap(args.config)
     elif args.task == "verbosity":
         main_verbosity(args.config)
+    elif args.task == "survivorship":
+        main_survivorship(args.config)
     elif args.task == "bayesian_recalibration":
         main_bayesian_recalibration(args.config)

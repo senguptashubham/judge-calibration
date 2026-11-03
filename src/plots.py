@@ -192,21 +192,23 @@ def judge_name(model_slug: str) -> str:
 
 
 def _fit_titles(fig: Figure, renderer) -> None:
-    """Keeps every axes title inside the figure. A title is centred over its
-    axes, so over an axes pushed right by long tick labels a long title can run
-    off the right edge while the left margin is empty: slide it just far enough
-    to fit, and shrink its font first if it is wider than the figure."""
+    """Keeps every axes title and x-axis label inside the figure. Both are
+    centred on their axes, so on an axes pushed right by long tick labels a
+    long one can run off the right edge while the left margin is empty: slide
+    it just far enough to fit, and shrink its font first if it is wider than
+    the figure. Both are positioned in axes fractions along x, so one rule
+    moves either."""
     pad = 0.01 * fig.bbox.width
     for ax in fig.axes:
-        title = ax.title
-        if not title.get_text():
-            continue
-        while title.get_window_extent(renderer).width > fig.bbox.width - 2 * pad and title.get_fontsize() > 7:
-            title.set_fontsize(title.get_fontsize() - 0.5)
-        box = title.get_window_extent(renderer)
-        shift = min(0.0, fig.bbox.width - pad - box.x1) or max(0.0, pad - box.x0)
-        if shift:
-            title.set_x(title.get_position()[0] + shift / ax.bbox.width)
+        for text in (ax.title, ax.xaxis.label):
+            if not text.get_text():
+                continue
+            while text.get_window_extent(renderer).width > fig.bbox.width - 2 * pad and text.get_fontsize() > 7:
+                text.set_fontsize(text.get_fontsize() - 0.5)
+            box = text.get_window_extent(renderer)
+            shift = min(0.0, fig.bbox.width - pad - box.x1) or max(0.0, pad - box.x0)
+            if shift:
+                text.set_x(text.get_position()[0] + shift / ax.bbox.width)
 
 
 def _thin_crowded_ticks(fig: Figure, renderer) -> None:
@@ -826,7 +828,7 @@ def plot_rq4_progression(
         values=auroc_diff,
         ci_low=ci_low,
         ci_high=ci_high,
-        xlabel="Δ AUROC, higher tier − lower tier (paired 95% cluster-bootstrap CI)",
+        xlabel="Δ per-fold AUROC, higher tier − lower tier (paired 95% cluster-bootstrap CI)",
         title="Does each added feature tier change AUROC?",
         filename=f"rq4_progression_{model_slug}.png",
         colors=colors,
@@ -923,34 +925,42 @@ def plot_h4_interaction(
 @_dark_variant
 def plot_rq4_transfer(
     models: list[str],
-    baseline_mean: np.ndarray,
-    baseline_low: np.ndarray,
-    baseline_high: np.ndarray,
-    transfer_mean: np.ndarray,
-    transfer_low: np.ndarray,
-    transfer_high: np.ndarray,
+    clean_mean: np.ndarray,
+    clean_low: np.ndarray,
+    clean_high: np.ndarray,
+    verbose_mean: np.ndarray,
+    verbose_low: np.ndarray,
+    verbose_high: np.ndarray,
+    delta: np.ndarray,
+    delta_low: np.ndarray,
+    delta_high: np.ndarray,
     model_slug: str,
 ) -> Figure:
-    """Transfer test (clean -> verbose): per model, in-domain AUROC (clean CV, D8 across-repeat
-    spread) next to transfer AUROC (fit on clean, evaluated on verbose, 95%
-    cluster-bootstrap CI), on a zoomed axis.
+    """Transfer test (D32): per model, the per-fold AUROC of the same fold
+    models on the held-out questions' clean rows and on their padded rows,
+    each with its range over 10 CV repeats. The padded row's label carries
+    the paired difference and its 95% cluster-bootstrap CI, since the two
+    ranges alone cannot show whether the drop is significant.
 
     Saved to results/figures/rq4_transfer_{model_slug}.png.
     """
     labels, values, lows, highs, markers, dashed = [], [], [], [], [], []
     for i, model in enumerate(models):
-        labels += [f"{model}: in-domain (clean)", f"{model}: transfer (clean → verbose)"]
-        values += [baseline_mean[i], transfer_mean[i]]
-        lows += [baseline_low[i], transfer_low[i]]
-        highs += [baseline_high[i], transfer_high[i]]
+        labels += [
+            f"{model}: clean",
+            f"{model}: padded (Δ {delta[i]:+.3f} [{delta_low[i]:+.3f}, {delta_high[i]:+.3f}])",
+        ]
+        values += [clean_mean[i], verbose_mean[i]]
+        lows += [clean_low[i], verbose_low[i]]
+        highs += [clean_high[i], verbose_high[i]]
         markers += [MODEL_MARKERS.get(model, "o")] * 2
         dashed += [False, True]
 
     fig, ax = plt.subplots(figsize=(9, 0.7 * len(labels) + 2))
     _draw_forest(ax, labels, values, lows, highs, "AUROC predicting judge error", colors=[_theme.works] * len(labels),
                  markers=markers, dashed=dashed, reference=None)
-    ax.set_title("Does a meta-model trained on clean inputs survive the padding attack?\n"
-                 "(in-domain: range over 10 CV repeats; transfer, dashed: 95% cluster-bootstrap CI)", fontsize=10)
+    ax.set_title("A meta-model trained on clean inputs, scored on padded ones\n"
+                 "(same fold models; per-fold AUROC, range over 10 CV repeats; padded rows dashed)", fontsize=10)
     return _save(fig, f"rq4_transfer_{model_slug}.png")
 
 
@@ -1127,48 +1137,48 @@ def plot_bayesian_convergence(
 
 @_dark_variant
 def plot_rq5_distillation(
-    auroc_ensemble: float,
-    auroc_ensemble_ci: tuple[float, float],
-    auroc_bayesian: float,
-    epistemic_auroc_ensemble: float,
-    epistemic_auroc_ensemble_ci: tuple[float, float],
-    epistemic_auroc_bayesian: float,
-    epistemic_auroc_bayesian_ci: tuple[float, float],
+    ensemble_calls: int,
+    models: list[dict],
     model_slug: str,
 ) -> Figure:
-    """RQ5 distillation: the 3-call ensemble vs the 1-call Bayesian model on error
-    detection (AUROC) and on how well each one's own epistemic signal
-    detects errors.
-
-    The Bayesian AUROC has no interval on purpose: every other point has a
-    cluster-bootstrap CI, and borrowing D8's across-repeat spread for it
-    would imply a false equivalence between two kinds of interval.
+    """RQ5 distillation (D32): each Bayesian meta-model minus the 3-prompt
+    ensemble, scored per fold on the same held-out questions, with paired
+    95% cluster-bootstrap CIs. Two rows per model: ranking errors (AUROC)
+    and how well each one's own epistemic signal flags errors. Above zero
+    means the meta-model does better. `models` holds one dict per model
+    with `name`, `n_calls`, `auroc_gap` and `epistemic_gap` (each a
+    (diff, low, high) tuple), and the per-fold values that label the rows.
 
     Saved to results/figures/rq5_distillation_{model_slug}.png.
     """
-    labels = [
-        "error detection: ensemble (3 calls)",
-        "error detection: Bayesian (1 call)",
-        "its epistemic signal: ensemble",
-        "its epistemic signal: Bayesian",
-    ]
-    values = [auroc_ensemble, auroc_bayesian, epistemic_auroc_ensemble, epistemic_auroc_bayesian]
-    lows = [auroc_ensemble_ci[0], np.nan, epistemic_auroc_ensemble_ci[0], epistemic_auroc_bayesian_ci[0]]
-    highs = [auroc_ensemble_ci[1], np.nan, epistemic_auroc_ensemble_ci[1], epistemic_auroc_bayesian_ci[1]]
-    # Signal colours: the ensemble in signal-2, the one-call Bayesian model in blue (the fix).
-    colors = [_signal_color("conf_ens"), _signal_color("p_correct_bayesian")] * 2
+    styles = {
+        "bayesian_two_call": ("Bayesian, 3 signals", _signal_color("p_correct_bayesian"), "o"),
+        "bayesian_all_signals": ("Bayesian, all signals", _theme.ink, "D"),
+    }
+    labels, values, lows, highs, colors, markers = [], [], [], [], [], []
+    for key, title, value_key, ensemble_key in [
+        ("auroc_gap", "ranking", "auroc", "ensemble_auroc"),
+        ("epistemic_gap", "own epistemic signal", "epistemic_auroc", "ensemble_epistemic"),
+    ]:
+        for m in models:
+            name, color, marker = styles[m["name"]]
+            diff, low, high = m[key]
+            labels.append(f"{title}: {name}, {m['n_calls']} calls ({m[value_key]:.3f} vs {m[ensemble_key]:.3f})")
+            values.append(diff)
+            lows.append(low)
+            highs.append(high)
+            colors.append(color)
+            markers.append(marker)
 
-    fig, ax = plt.subplots(figsize=(7.5, 4.5))
-    # errorbar can't take NaN widths, so the point-only row gets zero width.
-    safe_lows = [v if np.isnan(lo) else lo for v, lo in zip(values, lows)]
-    safe_highs = [v if np.isnan(hi) else hi for v, hi in zip(values, highs)]
-    _draw_forest(ax, labels, values, safe_lows, safe_highs, "AUROC predicting judge error (dotted = chance)",
-                 colors=colors, markers=["s", "o", "s", "o"], annotate=False, reference=0.5)
+    fig, ax = plt.subplots(figsize=(8.5, 2.4 + 0.55 * len(labels)))
+    _draw_forest(ax, labels, values, lows, highs,
+                 f"Δ per-fold AUROC vs the {ensemble_calls}-call ensemble (dotted = no difference)",
+                 colors=colors, markers=markers, annotate=False, reference=0.0)
     for y, (v, lo, hi) in enumerate(zip(values, lows, highs)):
-        text = f"{v:.3f} (point only)" if np.isnan(lo) else f"{v:.3f} [{lo:.3f}, {hi:.3f}]"
-        ax.annotate(text, xy=(v, y), xytext=(0, 10), textcoords="offset points", ha="center",
-                    fontsize=8, color=_theme.note)
-    ax.set_title("A single-call Bayesian model vs. a 3-prompt ensemble\n(95% cluster-bootstrap CIs)", fontsize=10)
+        ax.annotate(f"{v:+.3f} [{lo:+.3f}, {hi:+.3f}]", xy=(v, y), xytext=(0, 10), textcoords="offset points",
+                    ha="center", fontsize=8, color=_theme.note)
+    ax.set_title("Bayesian meta-models vs. a 3-prompt ensemble\n(same held-out folds, paired 95% cluster-bootstrap CIs)",
+                 fontsize=10)
     return _save(fig, f"rq5_distillation_{model_slug}.png")
 
 
@@ -1184,7 +1194,7 @@ def plot_rq5_verbose_shift(
 ) -> Figure:
     """Verbose-shift check: the change in mean aleatoric and epistemic entropy from
     clean to verbose, for the one Bayesian model fit on clean, with the
-    paired-bootstrap CI the preregistered verdict rests on. Two panels on
+    paired-bootstrap CI the verdict on the D23 prediction rests on. Two panels on
     separate axes - epistemic is ~100x smaller than aleatoric. The
     prediction was: epistemic rises (> 0), aleatoric stays at 0.
 

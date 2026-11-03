@@ -73,28 +73,41 @@ three judges, and it is interactive in section 04 of the site.
      AUROC **0.794** for Qwen, 0.77–0.78 for kev-8b, 0.68 for auto-j.
    - Abstaining on the items it is least sure of cuts Qwen's error rate from 24%
      to 14% while keeping three quarters of the items, and to 8% keeping half.
-3. **Filler padding silently breaks Qwen's best signal.**
-   - Padding doesn't change how often Qwen is right, but its best signal's
-     calibration degrades significantly (ΔECE +0.043 [0.011, 0.052]), and error
-     detection drops for every signal.
+3. **Filler padding silently weakens Qwen's best signal.**
+   - Padding doesn't measurably change how often Qwen is right, but its best
+     signal's calibration degrades significantly (ΔECE +0.043 [0.011, 0.052];
+     confirmed on the bin-free overconfidence gap, +0.031 [0.012, 0.051]), and
+     error detection drops for every signal.
+   - A meta-model trained on clean answers degrades too: −0.030 [−0.051, −0.010]
+     AUROC on padded ones. Combining the signals buys no robustness.
    - An abstention policy tuned on clean data would lose reliability with no
      accuracy-side warning.
    - The other two judges' calibration holds up under the same attack.
-4. **A learned meta-model adds nothing over the best single signal.**
-   - For all three judges, a model combining every cheap feature (logistic
-     regression, gradient boosting, Bayesian hierarchical) never significantly
-     beats the best single uncertainty signal.
+4. **A learned meta-model adds little or nothing over the best single signal.**
+   - For Qwen, the best meta-model scores +0.014 to +0.019 AUROC above the best
+     single signal, scored on the same held-out folds, and that edge is not
+     significant on either population tested. Surface features add nothing
+     detectable; token-level features make it slightly worse.
+   - For kev-8b a Bayesian model over its two signals adds nothing detectable. For
+     auto-j it adds a small amount on turn 1 (+0.018 [0.003, 0.033]) and nothing
+     detectable on turn 2.
    - The meta-model's edge does grow where humans agree (H4 interaction +2.38
-     [1.68, 3.07]), so errors are learnable where the ground truth is clear.
-5. **A single-call model can replace a 3-prompt ensemble.** A Bayesian
-   meta-model keeps 98.7% of the ensemble's discrimination at a third of the
-   inference cost, and is better calibrated (ECE 0.034 vs 0.071). But its
-   uncertainty does *not* rise under the padding attack, the one situation where
+     [1.68, 3.07]), so errors are learnable where the ground truth is clear. This
+     rests on the 595 items with at least two votes, only 31 of them split.
+5. **Two calls instead of six, with no detectable loss.** On the two answer-order calls alone, a
+   Bayesian meta-model costs a third of the 3-prompt ensemble's 6 calls. Its
+   ranking of errors is not detectably worse (−0.017 AUROC [−0.034, +0.003]), it
+   is better calibrated (ECE 0.030 vs 0.071), and its uncertainty score flags
+   errors far better (+0.207), mostly because it tracks its own predicted error.
+   That score does *not* rise under the padding attack, the one situation where
    it would be needed.
-6. **Judge-specific training helps with position bias, but fails in a new way.**
+6. **A judge built for judging flips less, but fails in a new way.**
    auto-j-13b flips its verdict on an answer-order swap half as often as the
    others (12–14% vs 21–28%). Under padding, though, it produces no verdict at
-   all on up to **39.8%** of calls, a failure neither other judge can have.
+   all on up to **39.8%** of calls, a failure neither other judge can have;
+   counted as failures, padding cuts its share of correct turn-2 verdicts from
+   0.78 to 0.43. It also differs from the others in base model, size and
+   quantization, so none of this can be put down to its training alone.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/readme/trick-dark.png">
@@ -122,9 +135,9 @@ site's "Trick the judge" section.*
 | Best signal AUROC (error detection) | 0.794 | 0.772 / 0.781 | ~0.68 |
 | Best signal's overconfidence | +0.10 | +0.07 / +0.05 | +0.13 / +0.10 |
 | Position-swap flip rate | 27.8% | 24.6% / 21.1% | 12.5% / 13.8% |
-| Padding breaks best signal's calibration? | yes | no | no\* |
+| Padding worsens best signal's calibration? | yes | no | no\* |
 | Calls with no usable verdict under padding† | 0% | 0% | 13.6% / 39.8% |
-| Meta-model significantly beats best signal? | no | no | no |
+| Meta-model significantly beats best signal? | no | no | turn 1 only (+0.018) |
 
 kev-8b is an open stand-in, and its results are not results about any commercial
 system; the commercial Jev has been evaluated directly by
@@ -148,7 +161,7 @@ distinguishable for colour-blind readers.
 | RQ2 | Is any cheap uncertainty signal informative about error? |
 | RQ3 | Does uncertainty flag errors caused by position and verbosity bias, or is the fooled judge still confident? |
 | RQ4 | Can a cheap supervised meta-model beat the best single signal at predicting judge error? |
-| RQ5 | Does an ensemble over judge prompts improve uncertainty, and does that survive distillation to one call? |
+| RQ5 | Does an ensemble over judge prompts improve uncertainty, and does that survive distillation to fewer calls? |
 | RQ6 | Does kev-8b, an open stand-in for a commercial decision-only judge, resist the same failure modes? |
 | RQ7 | Does auto-j-13b, trained specifically to judge, resist them? |
 
@@ -163,8 +176,9 @@ so items are not independent. The main safeguards:
 - **Paired comparisons.** Clean vs attacked, and one signal vs another, are
   compared on the same items with a paired bootstrap, using the same signal
   construction on both sides.
-- **A permutation null for every predictive result.** Labels are shuffled
-  within each question, so the null keeps each question's difficulty.
+- **A permutation null for every meta-model.** Labels are shuffled within each
+  question, so the null keeps each question's difficulty. Differences between
+  conditions are tested with paired intervals.
 - **Accuracy is always reported with Cohen's κ, and ECE with AUROC and the
   signed overconfidence gap.** Each of these can look good alone while hiding a
   useless judge.
@@ -173,8 +187,8 @@ so items are not independent. The main safeguards:
 - **Bayesian fits ship with convergence diagnostics** (R-hat, ESS,
   divergences), and a held-out question's random intercept is drawn from the
   population prior, never fitted.
-- **Negative results are reported as such.** Two preregistered predictions
-  failed (RQ5) and are written up as failures.
+- **Negative results are reported as such.** Two predictions made in advance
+  failed (RQ5, exploratory in the preregistration) and are written up as failures.
 
 The full list of statistical rules is in [`CONTRIBUTING.md`](CONTRIBUTING.md) §2. Every
 non-obvious choice and its reasoning is in [`DECISIONS.md`](DECISIONS.md).
@@ -266,6 +280,12 @@ table through each RQ's analysis to the site's data.
 - One benchmark (MT-Bench), 80 questions, and a single human vote behind most
   labels (1,241 of the 1,836 labelled items), so human disagreement is measured
   coarsely and only on the other 595.
+- Items follow the order the voters saw the two answers in, so a comparison voters
+  saw both ways round counts as two items (754 of the 1,836). In 53 such pairs the
+  two halves name different winners, which a consistent judge cannot both match.
+- The three judges differ in base model, size, quantization, prompt format and
+  training at once, and no judge-versus-judge test was run, so they are compared
+  side by side rather than ranked.
 - kev-8b was never trained to judge, so RQ6 tests how far its calibration
   carries over to an unfamiliar task, not a like-for-like comparison.
 - auto-j-13b is run 4-bit quantized. Its signals are built from

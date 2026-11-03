@@ -31,8 +31,8 @@ from analysis.rq3 import (
     confidence_gap_panel,
     verbosity_panel,
 )
-from src.bayesian import repeated_stratified_group_kfold_bayesian, summarize_diagnostics
-from src.boot import cluster_bootstrap, paired_cluster_bootstrap
+from src.bayesian import permutation_null_bayesian, repeated_stratified_group_kfold_bayesian, summarize_diagnostics
+from src.boot import cluster_bootstrap, paired_per_fold_bootstrap
 from src.judge_kev import KevConfig
 from src.metrics import auroc_error, brier, ece, overconfidence_gap
 from src.plots import (
@@ -261,6 +261,50 @@ def build_kev_tier(population: pd.DataFrame) -> pd.DataFrame:
     return population[KEV_SIGNALS]
 
 
+def compare_meta_model_to_best_signal(population: pd.DataFrame, results: list, signals: list[str], seed: int) -> dict:
+    """D32's like-for-like check for a judge's Bayesian meta-model: its
+    per-fold AUROC against the better of its input signals, both scored on
+    the same held-out folds, with a paired per-fold bootstrap CI on the
+    difference. The better signal is picked on its whole-population AUROC,
+    which can only favour the signal. Shared by RQ6 and RQ7.
+    """
+    correct = population["correct"].astype(bool).to_numpy()
+    signal_aurocs = {s: auroc_error(1 - population[s].to_numpy(dtype=float), correct) for s in signals}
+    best = max(signal_aurocs, key=signal_aurocs.get)
+    fold_aurocs = np.array([r.fold_auroc for r in results])
+    diff, ci_low, ci_high = paired_per_fold_bootstrap(
+        [1 - r.oof_pred for r in results],
+        [1 - population[best].to_numpy(dtype=float)] * len(results),
+        correct,
+        population["question_id"].to_numpy(),
+        [r.fold_id for r in results],
+        seed=seed,
+    )
+    return {
+        "meta_model_auroc_mean": fold_aurocs.mean(),
+        "meta_model_auroc_min": fold_aurocs.min(),
+        "meta_model_auroc_max": fold_aurocs.max(),
+        "meta_model_auroc_pooled_mean": float(np.mean([r.auroc for r in results])),
+        "best_single_signal": best,
+        "best_single_signal_auroc": signal_aurocs[best],
+        "meta_minus_best_signal": diff,
+        "meta_minus_best_ci_low": ci_low,
+        "meta_minus_best_ci_high": ci_high,
+    }
+
+
+def summarize_meta_null(X: pd.DataFrame, y: np.ndarray, groups: np.ndarray, observed: float, seed: int) -> dict:
+    """Invariant 12 for the meta-model: its per-fold AUROC against a
+    within-question permutation null (bayesian.permutation_null_bayesian,
+    n=20, since each permutation is five NUTS fits)."""
+    null_aurocs = permutation_null_bayesian(X, y, groups, n=20, seed=seed)
+    return {
+        "null_mean": float(null_aurocs.mean()),
+        "null_max": float(null_aurocs.max()),
+        "null_percentile": float(np.mean(null_aurocs <= observed)),
+    }
+
+
 def main_bayesian_recalibration(config_path: str) -> None:
     """D22's check per regime: does a Bayesian meta-model over both signals
     beat the best single signal at predicting kev's own errors? Full D8
@@ -277,32 +321,22 @@ def main_bayesian_recalibration(config_path: str) -> None:
         X, y, groups = build_xyg(population, build_kev_tier)
         results = repeated_stratified_group_kfold_bayesian(X, y, groups, seed=config.seed)
 
-        aurocs = np.array([r.auroc for r in results])
         fold_diagnostics = [fd for r in results for fd in r.fold_diagnostics]
         diagnostics = summarize_diagnostics(fold_diagnostics)
-
-        best_single_auroc = max(
-            compute_signal_calibration(population, signal, config.n_bins, config.seed)["auroc"]
-            for signal in KEV_SIGNALS
-        )
+        comparison = compare_meta_model_to_best_signal(population, results, KEV_SIGNALS, config.seed)
+        null = summarize_meta_null(X, y, groups, comparison["meta_model_auroc_mean"], config.seed)
 
         print(
-            f"  meta-model AUROC={aurocs.mean():.4f} [{aurocs.min():.4f}, {aurocs.max():.4f}] "
-            f"(D8 across-repeat spread) vs. best single signal AUROC={best_single_auroc:.4f}"
+            f"  meta-model per-fold AUROC={comparison['meta_model_auroc_mean']:.4f} "
+            f"[{comparison['meta_model_auroc_min']:.4f}, {comparison['meta_model_auroc_max']:.4f}] (range over repeats); "
+            f"minus best signal ({comparison['best_single_signal']}) on the same folds: "
+            f"{comparison['meta_minus_best_signal']:+.4f} "
+            f"[{comparison['meta_minus_best_ci_low']:+.4f}, {comparison['meta_minus_best_ci_high']:+.4f}]"
         )
+        print(f"  permutation null: {null}")
         print(f"  convergence: {diagnostics}")
 
-        rows.append(
-            {
-                "regime": regime,
-                "n": len(population),
-                "meta_model_auroc_mean": aurocs.mean(),
-                "meta_model_auroc_min": aurocs.min(),
-                "meta_model_auroc_max": aurocs.max(),
-                "best_single_signal_auroc": best_single_auroc,
-                **diagnostics,
-            }
-        )
+        rows.append({"regime": regime, "n": len(population), **comparison, **null, **diagnostics})
 
         plot_bayesian_convergence(
             max_rhat=np.array([fd["max_rhat"] for fd in fold_diagnostics]),

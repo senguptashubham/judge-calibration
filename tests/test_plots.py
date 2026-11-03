@@ -70,6 +70,17 @@ def test_a_long_title_over_a_right_shifted_axes_is_kept_inside_the_figure(figure
     assert 0 <= box.x0 and box.x1 <= fig.bbox.width
 
 
+def test_a_long_xlabel_under_a_right_shifted_axes_is_kept_inside_the_figure(figures_in_tmp):
+    fig, ax = plt.subplots(figsize=(4, 3))
+    ax.set_yticks([0, 1], ["a very long tick label", "another long tick label"])
+    ax.set_xlabel("An x-axis label long enough to run off the right edge of this figure")
+
+    plots._save(fig, "t.png")
+
+    box = ax.xaxis.label.get_window_extent(fig.canvas.get_renderer())
+    assert 0 <= box.x0 and box.x1 <= fig.bbox.width
+
+
 def test_touching_tick_labels_are_thinned(figures_in_tmp):
     fig, ax = plt.subplots(figsize=(1.5, 1.5))
     ax.set_xlim(0, 10)

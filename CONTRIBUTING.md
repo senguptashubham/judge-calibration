@@ -25,7 +25,7 @@ whether their uncertainty can drive abstain-and-escalate evaluation.
 | RQ2 | Does any cheap signal flag errors? | AUROC, risk–coverage, AURC, κ@coverage |
 | RQ3 | Does uncertainty flag errors caused by order or padding? | flip rate, confidence on flipped vs not, paired ΔECE/ΔAUROC |
 | RQ4 | Does a meta-model beat the best single signal? | AUROC under repeated grouped CV, vs. best signal and a permutation null |
-| RQ5 | Does a 3-prompt ensemble help, and does it survive distillation to one call? | ensemble vs. one-call AUROC/ECE; aleatoric vs. `d_human` |
+| RQ5 | Does a 3-prompt ensemble help, and does it survive distillation to fewer calls? | ensemble (6 calls) vs. two-call Bayesian AUROC/ECE; aleatoric vs. `d_human` |
 | RQ6 | Does kev-8b show the same failures? Split by `input_tokens` ≤ 1,024 | RQ1/RQ3/RQ4 tests |
 | RQ7 | Does auto-j-13b show the same failures? Split by turn | RQ1/RQ3/RQ4 tests |
 
@@ -81,8 +81,10 @@ if you find it in existing code.
 
     No neural nets, no tuning and no nested CV. Features are standardized on the
     training fold only.
-12. **Every RQ4 result ships with a permutation null.** It shuffles `correct` *within*
-    each `question_id` and re-runs the same grouped CV.
+12. **Every meta-model AUROC ships with a permutation null.** It shuffles `correct`
+    *within* each `question_id` and re-runs the same cross-validation (D33). A
+    difference or a coefficient (clean vs padded, one tier vs the next, the H4
+    interaction) is tested by its cluster-bootstrap interval instead.
 13. **Every Bayesian result ships with R-hat, ESS and the divergence count.** A
     held-out question's intercept is marginalized over the population prior, never
     taken from a fitted value (D22).
@@ -92,6 +94,13 @@ if you find it in existing code.
 14. **Filter `items.parquet` to `prompt_variant == "P1"` before any RQ1–RQ4
     analysis**, and also to `condition == "clean"` for RQ1, RQ2 and RQ4's core tiers.
     RQ3 and the transfer tests read `verbose` deliberately (D20).
+
+**Scoring**
+
+15. **Score a cross-validated meta-model per fold** (`metrics.py::per_fold_auroc_error`),
+    never on the pooled out-of-fold predictions. Compare it with a signal or another
+    model on the same held-out folds, with `boot.py::paired_per_fold_bootstrap`
+    (D32). Pooling folds penalizes every fitted model against a raw signal.
 
 ## 3. Data
 
@@ -151,7 +160,8 @@ analysis/   rq1 … rq7, human_disagreement, vacuum, decoding_ablation — CLIs 
 site/       static HTML/CSS/JS site; computes no statistic; data/ is built, tracked
 design/     tokens.json: the colour roles shared by the site and the figures
 tests/      one file per src/ module except vacuum_test; test_demo_bundle.py,
-            test_site_data.py, test_site_e2e.py (Playwright), test_design_tokens.py
+            test_site_data.py, test_site_e2e.py (Playwright), test_design_tokens.py,
+            test_rq7.py (the survivorship fill)
 notebooks/  Colab records of the three GPU runs; install, pull and call src/ only
 scripts/    deploy_space.py (Hugging Face Space)
 docs/readme/  README images
@@ -181,6 +191,8 @@ REPORT.md · README.md · REPRODUCE.md · DECISIONS.md · PREREGISTRATION.md (fr
   - Cohen's κ against the hand-computed case (p_o = 0.85, p_e = 0.5 → κ = 0.70);
   - the tie-policy branches in `build_items()`;
   - grouped folds that differ between seeds;
+  - a per-fold AUROC that ignores scale differences between folds (the 1.0 vs 0.75
+    case);
   - a cluster bootstrap that is wider than a row bootstrap;
   - held-out intercepts that are marginalized;
   - Bayesian predictions that don't change when a feature is rescaled.
@@ -210,7 +222,7 @@ python -m analysis.rq1 --config configs/run.yaml      # rq2, rq3, human_disagree
 python -m analysis.rq4 --config configs/run.yaml --task {ablation,h4,transfer,category,calibration,bayesian_comparison,verbose_shift}
 python -m analysis.rq5 --config configs/run.yaml --task {threshold_sweep,distillation,human_disagreement}
 python -m analysis.rq6 --config configs/run_kev.yaml   --task {calibration,position_swap,verbosity,bayesian_recalibration}
-python -m analysis.rq7 --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,bayesian_recalibration}
+python -m analysis.rq7 --config configs/run_autoj.yaml --task {calibration,position_swap,verbosity,survivorship,bayesian_recalibration}
 # GPU only (Colab, fresh venv, pip install -e ".[colab]"): src.judge, src.judge_autoj; src.judge_kev needs kev.serve
 ```
 

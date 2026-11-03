@@ -1,9 +1,11 @@
-"""Cluster bootstrap and paired cluster bootstrap over question_id (invariants 2, 3)."""
+"""Cluster bootstrap, paired cluster bootstrap, and the paired per-fold
+AUROC bootstrap, all over question_id (invariants 2, 3; D32)."""
 
 from typing import Callable
 
 import numpy as np
 import pandas as pd
+from scipy.stats import rankdata
 
 
 def cluster_bootstrap(
@@ -178,4 +180,96 @@ def paired_cluster_bootstrap(
         [alpha / 2, 1 - alpha / 2],
     )
 
+    return float(point_diff), float(ci_low), float(ci_high)
+
+
+def _auroc_error_fast(uncertainty: np.ndarray, is_error: np.ndarray) -> float:
+    """metrics.auroc_error() through the Mann-Whitney rank formula, with
+    tied values given their average rank (identical to roc_auc_score). The
+    per-fold bootstrap below calls it hundreds of thousands of times, so it
+    skips roc_auc_score's input checks. NaN when one class is missing.
+    """
+    n_error = int(is_error.sum())
+    n_correct = len(is_error) - n_error
+    if n_error == 0 or n_correct == 0:
+        return float("nan")
+    ranks = rankdata(uncertainty)
+    return float((ranks[is_error].sum() - n_error * (n_error + 1) / 2) / (n_error * n_correct))
+
+
+def paired_per_fold_bootstrap(
+    uncertainty_a: list[np.ndarray],
+    uncertainty_b: list[np.ndarray],
+    correct: np.ndarray,
+    groups: np.ndarray,
+    fold_ids: list[np.ndarray],
+    n: int = 2000,
+    ci: float = 0.95,
+    seed: int = 0,
+    correct_b: np.ndarray | None = None,
+) -> tuple[float, float, float]:
+    """Paired cluster-bootstrap CI for the per-fold AUROC difference
+    (metrics.per_fold_auroc_error), averaged over CV repeats (D32):
+
+        diff = mean over repeats r, folds k of
+               auroc_error(a_r[fold k]) - auroc_error(b_r[fold k])
+
+    Each list holds one array per repeat, all positionally aligned with
+    `correct` and `groups`. A raw signal, which has no folds, is passed as
+    the same array for every repeat; it is still scored fold by fold, on
+    exactly the rows the meta-model's fold is scored on, so the two sides
+    are compared like for like (invariant 3). `correct_b`, when given, is
+    side b's own label for the same items: clean and padded copies of an
+    item share a question and a fold but can differ in whether the judge
+    was right.
+
+    Each replicate resamples question values once (invariant 2), keeps every
+    row's fold assignment fixed, and recomputes the difference on the
+    resampled rows. Holding the folds fixed measures uncertainty over which
+    questions were sampled, given the fitted fold models, which is the
+    variation the comparison is about. A fold left with one class in a
+    replicate is skipped in that replicate's average.
+
+    Returns (point_diff, ci_low, ci_high).
+    """
+    if not (len(uncertainty_a) == len(uncertainty_b) == len(fold_ids)):
+        raise ValueError("uncertainty_a, uncertainty_b and fold_ids need one array per repeat")
+    if n <= 0:
+        raise ValueError("n must be positive")
+    if not 0 < ci < 1:
+        raise ValueError("ci must be between 0 and 1")
+
+    is_error = ~np.asarray(correct, dtype=bool)
+    is_error_b = is_error if correct_b is None else ~np.asarray(correct_b, dtype=bool)
+    groups = np.asarray(groups)
+    a = [np.asarray(x, dtype=float) for x in uncertainty_a]
+    b = [np.asarray(x, dtype=float) for x in uncertainty_b]
+    folds = [np.asarray(f) for f in fold_ids]
+
+    def _diff(rows: np.ndarray) -> float:
+        per_repeat = []
+        for a_r, b_r, f_r in zip(a, b, folds):
+            fold_of_row = f_r[rows]
+            per_fold = []
+            for k in np.unique(fold_of_row):
+                in_fold = rows[fold_of_row == k]
+                per_fold.append(
+                    _auroc_error_fast(a_r[in_fold], is_error[in_fold])
+                    - _auroc_error_fast(b_r[in_fold], is_error_b[in_fold])
+                )
+            per_repeat.append(np.nanmean(per_fold))
+        return float(np.mean(per_repeat))
+
+    point_diff = _diff(np.arange(len(groups)))
+
+    unique_groups = np.array(sorted(set(groups.tolist()), key=str))
+    rows_by_group = {g: np.flatnonzero(groups == g) for g in unique_groups}
+    rng = np.random.default_rng(seed)
+    bootstrap_diffs = np.empty(n)
+    for i in range(n):
+        sampled = rng.choice(unique_groups, size=len(unique_groups), replace=True)
+        bootstrap_diffs[i] = _diff(np.concatenate([rows_by_group[g] for g in sampled]))
+
+    alpha = 1 - ci
+    ci_low, ci_high = np.quantile(bootstrap_diffs, [alpha / 2, 1 - alpha / 2])
     return float(point_diff), float(ci_low), float(ci_high)
