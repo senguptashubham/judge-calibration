@@ -34,13 +34,14 @@ it worse calibrated. No meta-model beats it detectably (the best, +0.014 to
 +0.019 AUROC, is not significant), and a meta-model trained on clean answers loses
 about 0.03 AUROC on padded ones. A Bayesian model on just the two answer-order
 calls ranks errors as well as a 6-call prompt ensemble within the data's
-resolution, and is better calibrated. All three judges are overconfident. In practice, auto-accepting verdicts
+resolution when each cross-validation fold is scored separately, and is better
+calibrated. All three judges are overconfident. In practice, auto-accepting verdicts
 stated at 90% confidence or more would let 98.4% of the judge's wrong verdicts through.
 
 ## Contents
 
 - [Introduction](#introduction)
-- [Method](#method)
+- [Method](#method) · [Departures from the preregistration](#departures-from-the-preregistration)
 - [Related work](#related-work)
 - [RQ1 — Is the judge's stated confidence calibrated?](#rq1--is-the-judges-stated-confidence-calibrated)
 - [RQ2 — Is any cheap uncertainty signal informative about error?](#rq2--is-any-cheap-uncertainty-signal-informative-about-error)
@@ -236,8 +237,14 @@ scored against the verdict it is a confidence in (D7; methods note
   comparison's interval comes from a paired bootstrap that resamples questions with
   the folds held fixed. Pooling all folds' predictions into one AUROC would blur
   the ranking with the fold models' small differences in scale and understate
-  every meta-model against a raw signal. A single model's uncertainty across CV
-  repeats is reported as the range over the 10 repeats, not as a CI.
+  every meta-model against a raw signal. Forman and Scholz (2010) describe this
+  pitfall: a pooled AUROC "will downgrade classifiers that rank well if they have
+  poor calibration across folds". The data here show the same pattern: the
+  ensemble, a raw signal, scores 0.793 either way, while the two-call Bayesian
+  model scores 0.776 per fold and 0.752 pooled. The convention was settled after
+  the first results, and three conclusions depend on it (see "Departures from the
+  preregistration"). A single model's uncertainty across CV repeats is reported as
+  the range over the 10 repeats, not as a CI.
 - **AUROC and ties.** Tied scores count as half a correct ordering (the
   Mann–Whitney convention, as in scikit-learn). This matters for the discrete
   signals: 40% of error–correct pairs are tied for stated confidence and 58% for
@@ -272,6 +279,46 @@ scored against the verdict it is a confidence in (D7; methods note
   It reports R-hat, effective sample size and divergences with every fit. A held-out
   question's intercept is drawn from the population prior, never fitted, so no
   information leaks across folds.
+
+### Departures from the preregistration
+
+`PREREGISTRATION.md` fixed the questions, the confirmatory and exploratory split and
+the analysis settings before the full run. Five things differ from it.
+
+- **RQ5's student is counted in calls, not prompts.** The plan set a
+  "single-call, P1-only" student against a "3-call" ensemble, counting prompts. Every
+  prompt is judged in both answer orders (D19), so in calls the ensemble costs 6 and
+  the P1 student 2: the same one-to-three ratio. The student here reads exactly the
+  two greedy P1 calls, through `conf_verb`, `conf_lp` and `conf_bpe` (D31). A
+  one-call student, reading a single answer order, would give up the order-swap
+  signal, the strongest in the study (RQ2), and was not fitted.
+- **H4's bucketed comparison was not run.** The plan allowed it if at least 100
+  items were contested, and the preregistration counted 123. That count included 24
+  tied items and 68 exact 50/50 splits, which have no majority label to score a
+  verdict against. Only 31 contested items remain, so H4 is tested in its continuous
+  form alone, as D9 specifies.
+- **RQ6 and RQ7 were added after the preregistration**, and are exploratory.
+- **Meta-models are scored per fold (D32), a convention settled after the first
+  results.** The preregistration names the metric, AUROC under repeated grouped
+  cross-validation, but not how the folds are combined. Per-fold scoring is the
+  like-for-like comparison with a raw signal (see Statistics), and the pooled
+  figures stay in the result tables. Three conclusions depend on it:
+  - RQ5: the two-call model shows no detectable loss against the ensemble per fold
+    (0.776 vs 0.793), but trails it by about 0.04 pooled (0.752), a gap with no
+    paired interval;
+  - RQ7: auto-j's turn-1 meta-model gain (+0.018 per fold) disappears pooled
+    (0.680 vs the signal's 0.683);
+  - RQ4's sensitivity check on all 1,819 items: pooled, Tier B shows a borderline
+    gain; per fold, logistic regression's small token-level penalty is significant.
+
+  Every other meta-model conclusion is the same either way, including RQ4's
+  headline and the transfer test, whose planned frozen-model version shows the same
+  significant drop.
+- **Some checks were added.** Every meta-model AUROC has a permutation null (D33);
+  the tier ablation is repeated on all 1,819 items beside its planned agreed-items
+  population (D16); and auto-j's padding result is bounded for the calls that gave
+  no verdict (D31). Apart from the bucketed H4 test above, no planned comparison was
+  dropped or replaced.
 
 ---
 
@@ -785,7 +832,9 @@ just above the best signal, with an interval that only just reaches zero.
 Surface features again add nothing. Token-level features make both models
 slightly worse, significantly so: 13 noisy features cost a little out of sample.
 Pooling the five fold models' predictions instead shows a borderline gain for
-Tier B (+0.014 [0.0005, 0.029]), which does not survive like-for-like scoring.
+Tier B (+0.014 [0.0005, 0.029]), which does not survive like-for-like scoring, and
+leaves logistic regression's token-level penalty non-significant (−0.004
+[−0.009, 0.001]); gradient boosting's penalty is significant either way.
 Every cell on the full base also clears its own permutation null: observed
 per-fold AUROCs of 0.793–0.806 against null means of 0.507–0.523, each at the
 100th percentile of 50 shuffles (`rq4_ablation_null_full_qwen2.5_7b_instruct.csv`).
@@ -801,7 +850,7 @@ Figures:
 *Population: clean/P1, `human_label` non-null, `n_human_votes >= 2` (D9's own
 population, deliberately not the tier ablation's `human_agreed`-restricted one — H4 needs
 every contested item) — **N = 595** (79/80 groups). "The predictor" = Tier A
-+ logreg specifically, a documented choice: 5.5 found no tier/model reliably
++ logreg specifically, a documented choice: the tier ablation found no tier/model reliably
 beats another, so Tier A is representative rather than arbitrary, and it
 avoids a second population cut Tier B/C's `len_ratio` requirement would
 force. Method (D15, mandatory): out-of-fold `P(correct)` from the fixed
@@ -827,7 +876,7 @@ log-odds slope per unit of `d_human`, which runs only from 0.167 to 0.5 here, so
 across the observed range the slope grows by about 0.8. And the observed range is
 thin at one end: of the 595 items, 564 are unanimous (`d_human` = 0.5), 28 sit at
 0.167 and 3 at 0.25 (RQ2's human-disagreement section). The contested end of the
-interaction therefore rests on 31 items, which the cluster-bootstrap interval
+interaction therefore rests on 31 items from 19 questions, which the cluster-bootstrap interval
 reflects but a reader of the figure, which draws a full line for each value,
 might not.
 
@@ -1037,7 +1086,8 @@ reads only the greedy P1 verdict in both orders, through the three signals that
 pair gives (`conf_verb`, `conf_lp`, `conf_bpe`). Scored on the same held-out
 questions (D32), it ranks errors 0.017 AUROC below the ensemble, 95% CI
 [−0.034, +0.003]: no detectable difference, and the data rule out a loss larger
-than about 0.034. It halves the ensemble's ECE, and its uncertainty score flags
+than about 0.034. This depends on scoring each fold separately; pooled, the gap is
+about 0.04 (see the distillation section). It halves the ensemble's ECE, and its uncertainty score flags
 errors far better than the ensemble's. But that score does not widen under the
 padding attack, which is exactly the condition where it would need to be trusted
 most.
@@ -1090,14 +1140,18 @@ The ensemble scored that way gives 0.793 for ranking and 0.559 for entropy quali
 **Ranking: no detectable loss at a third of the calls.** The two-call model keeps
 94% of the ensemble's AUROC edge over chance (0.5). Its paired difference,
 −0.017 [−0.034, +0.003], includes zero, so the data cannot distinguish its ranking
-from the ensemble's; they do rule out a loss larger than about 0.034. The
-all-signals model is also indistinguishable from the ensemble (+0.006, CI includes
+from the ensemble's; they do rule out a loss larger than about 0.034. This
+reading depends on per-fold scoring (D32). Pooling each repeat's five fold models
+instead gives the two-call model 0.752 against the ensemble's 0.793, a gap of
+about 0.04 that has no paired interval; the ensemble, a raw signal, scores the same
+either way, so the gap reflects the fold models' differences in scale (see
+Statistics). The all-signals model is also indistinguishable from the ensemble (+0.006, CI includes
 zero), but it contains the ensemble's own signals and costs more calls. **ECE
 favors both Bayesian models** (0.030 and 0.034 vs 0.071), as expected: `conf_ens`
 is a raw judge signal that has never been calibrated, unlike the cross-validated
 meta-models. The ensemble's ECE is computed on its probability form,
 `conf_ens_prob` (the three-prompt average p on the AB verdict's side), for the
-same reason as RQ1's `conf_bpe_prob`; scoring 1 − entropy directly had given 0.101.
+same reason as RQ1's `conf_bpe_prob`; scoring 1 − entropy directly would give 0.101.
 
 **Entropy quality: the meta-model's uncertainty score flags errors far better,
 but it is mostly its predicted error.** The two-call model's own epistemic signal
@@ -1577,7 +1631,8 @@ fails in a way neither of them could: under padding it often gives no
 verdict at all.** Overconfidence replicates for a third architecture in a row.
 Unlike the other two judges, combining auto-j's two signals in a Bayesian
 meta-model does help a little on turn 1 (+0.018 AUROC over the better signal,
-CI just clearing zero), though not on turn 2. Position-swap flip rate is roughly **half** the primary judge's and
+CI just clearing zero, and only when each fold is scored separately), though not
+on turn 2. Position-swap flip rate is roughly **half** the primary judge's and
 kev-8b's own. auto-j differs from the primary judge in training, but also in
 base model, size, quantization and prompt format, so this comparison cannot
 say which of those makes the difference. Under the verbosity attack, auto-j
@@ -1787,7 +1842,9 @@ the difference, and a within-question permutation null (n=20).
 +0.018 [0.003, 0.033].** It is the only judge and population in this project
 where combining a judge's signals detectably helps. The interval only just clears
 zero, and with as many intervals as this report computes, one this close to zero
-could be a chance result; read it as suggestive. On turn 2 the difference,
+could be a chance result; read it as suggestive. It also depends on per-fold
+scoring (D32): pooling each repeat's fold models gives 0.680 against the signal's
+0.683, no gain. On turn 2 the difference,
 +0.010, is not significant. `conf_sc_autoj` and `conf_sc_bpe_autoj` share one of
 their two underlying self-consistency proportions (correlated, not collinear, the
 same distinction D28 draws for kev's signal pair), which limits how much combining
@@ -2026,8 +2083,9 @@ items where the human votes were split. The meta-model's own results point the s
 way: its edge in predicting errors grows with how strongly the humans agreed (RQ4,
 H4). The data are consistent with this reading, but do not prove it. The silver
 lining is a Bayesian model on the two answer-order calls. At a third of the
-ensemble's calls it shows no detectable loss in ranking (−0.017 AUROC, CI
-[−0.034, +0.003]) and is better calibrated, and its uncertainty score flags errors
+ensemble's calls it shows no detectable loss in ranking when each fold is scored
+separately (−0.017 AUROC, CI [−0.034, +0.003]; pooled, about 0.04 behind) and is
+better calibrated, and its uncertainty score flags errors
 far better than the ensemble's, though mostly because it tracks the model's own
 predicted error. It failed, though, at the one thing it was specifically meant to do: recognising when
 the inputs had shifted.
@@ -2357,6 +2415,9 @@ entropy AURCs are not affected: those signals have almost no exact ties.
 
 - Badshah, S., Emami, A. and Sajjad, H. (2026). SCOPE: selective conformal
   optimized pairwise LLM judging. ICML 2026. arXiv:2602.13110.
+- Forman, G. and Scholz, M. (2010). Apples-to-apples in cross-validation studies:
+  pitfalls in classifier performance measurement. ACM SIGKDD Explorations
+  Newsletter 12(1), 49–57. doi:10.1145/1882471.1882479.
 - Geifman, Y. and El-Yaniv, R. (2017). Selective classification for deep neural
   networks. NeurIPS 2017.
 - Houlsby, N., Huszár, F., Ghahramani, Z. and Lengyel, M. (2011). Bayesian active

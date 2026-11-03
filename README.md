@@ -89,14 +89,17 @@ three judges, and it is interactive in section 04 of the site.
      significant on either population tested. Surface features add nothing
      detectable; token-level features make it slightly worse.
    - For kev-8b a Bayesian model over its two signals adds nothing detectable. For
-     auto-j it adds a small amount on turn 1 (+0.018 [0.003, 0.033]) and nothing
+     auto-j it adds a small amount on turn 1 (+0.018 [0.003, 0.033], borderline,
+     and only when each cross-validation fold is scored separately) and nothing
      detectable on turn 2.
    - The meta-model's edge does grow where humans agree (H4 interaction +2.38
      [1.68, 3.07]), so errors are learnable where the ground truth is clear. This
      rests on the 595 items with at least two votes, only 31 of them split.
 5. **Two calls instead of six, with no detectable loss.** On the two answer-order calls alone, a
    Bayesian meta-model costs a third of the 3-prompt ensemble's 6 calls. Its
-   ranking of errors is not detectably worse (−0.017 AUROC [−0.034, +0.003]), it
+   ranking of errors is not detectably worse when each cross-validation fold is
+   scored separately (−0.017 AUROC [−0.034, +0.003]; pooling the folds'
+   predictions puts it about 0.04 behind), it
    is better calibrated (ECE 0.030 vs 0.071), and its uncertainty score flags
    errors far better (+0.207), mostly because it tracks its own predicted error.
    That score does *not* rise under the padding attack, the one situation where
@@ -137,7 +140,7 @@ site's "Trick the judge" section.*
 | Position-swap flip rate | 27.8% | 24.6% / 21.1% | 12.5% / 13.8% |
 | Padding worsens best signal's calibration? | yes | no | no\* |
 | Calls with no usable verdict under padding† | 0% | 0% | 13.6% / 39.8% |
-| Meta-model significantly beats best signal? | no | no | turn 1 only (+0.018) |
+| Meta-model significantly beats best signal? | no | no | turn 1 only (+0.018, borderline) |
 
 kev-8b is an open stand-in, and its results are not results about any commercial
 system; the commercial Jev has been evaluated directly by

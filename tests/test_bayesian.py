@@ -16,6 +16,7 @@ from src.bayesian import (
     posterior_predictive_entropy_decomposition,
     predict_held_out,
     predict_in_sample,
+    permutation_null_bayesian,
     repeated_stratified_group_kfold_bayesian,
 )
 
@@ -418,3 +419,39 @@ def test_epistemic_is_zero_when_draws_agree_perfectly():
     draws = np.full((30, 5), 0.37)
     result = posterior_predictive_entropy_decomposition(draws)
     assert result["epistemic"] == pytest.approx(np.zeros(5), abs=1e-9)
+
+
+# --- permutation_null_bayesian (invariant 12) -------------------------
+
+
+def test_permutation_null_bayesian_fits_within_question_shuffles_with_a_fresh_seed_each(monkeypatch):
+    # Stub the NUTS fit so the test checks only what the null feeds it:
+    # every question keeps its own labels, the labels do move, and each
+    # permutation gets its own seed.
+    import src.bayesian as bayesian
+
+    X, y, question_ids = _tiny_cv_data()
+    calls = []
+
+    def fake_cv(X, y_shuffled, groups, n_splits, n_repeats, seed, **kwargs):
+        calls.append((y_shuffled.copy(), seed))
+        return [type("R", (), {"fold_auroc": 0.5})()]
+
+    monkeypatch.setattr(bayesian, "repeated_stratified_group_kfold_bayesian", fake_cv)
+    null = permutation_null_bayesian(X, y, question_ids, n=4, seed=7)
+
+    assert null.shape == (4,)
+    assert [seed for _, seed in calls] == [7, 8, 9, 10]
+    for y_shuffled, _ in calls:
+        for q in np.unique(question_ids):
+            assert y_shuffled[question_ids == q].sum() == y[question_ids == q].sum()
+    assert any((y_shuffled != y).any() for y_shuffled, _ in calls)
+
+
+def test_permutation_null_bayesian_returns_one_auroc_per_permutation():
+    X, y, question_ids = _tiny_cv_data()
+    null = permutation_null_bayesian(
+        X, y, question_ids, n=2, n_splits=2, seed=0, num_warmup=10, num_samples=10, num_chains=2
+    )
+    assert null.shape == (2,)
+    assert np.all((null >= 0.0) & (null <= 1.0))

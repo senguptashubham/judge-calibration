@@ -100,7 +100,8 @@ if you find it in existing code.
 15. **Score a cross-validated meta-model per fold** (`metrics.py::per_fold_auroc_error`),
     never on the pooled out-of-fold predictions. Compare it with a signal or another
     model on the same held-out folds, with `boot.py::paired_per_fold_bootstrap`
-    (D32). Pooling folds penalizes every fitted model against a raw signal.
+    (D32). Pooling folds penalizes every fitted model against a raw signal
+    (Forman and Scholz, 2010).
 
 ## 3. Data
 

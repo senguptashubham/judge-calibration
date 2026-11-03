@@ -627,6 +627,25 @@ a deployment asks: does one fitted model rank new items better than the signal?
   with a paired CI, and gain a permutation null (`bayesian.py::permutation_null_bayesian`,
   n=20, since each permutation is five NUTS fits).
 
+**Support.** Forman and Scholz (2010, SIGKDD Explorations 12(1)) describe the same
+pitfall: a pooled AUROC "will downgrade classifiers that rank well if they have
+poor calibration across folds". Their one exception, a fold with no positives,
+cannot happen under stratified folds. The data agree: the ensemble, a raw signal,
+scores 0.793 per fold and pooled, while the two-call Bayesian model scores 0.776
+and 0.752.
+
+**Which conclusions depend on it.** The convention was chosen after the first
+results, so REPORT states where it matters:
+
+- RQ5: the two-call model's "no detectable loss" holds per fold; pooled, it trails
+  the ensemble by about 0.04.
+- RQ7: auto-j's turn-1 gain (+0.018) holds per fold only; pooled, 0.680 vs 0.683.
+- RQ4's full-base sensitivity check: pooled shows a borderline Tier B gain; per
+  fold, logistic regression's token-level penalty is significant.
+
+RQ4's headline, RQ6 and the transfer test (whose planned frozen-model version shows
+the same drop) are the same either way.
+
 Where: `src/metrics.py::per_fold_auroc_error`, `src/boot.py`, `src/predictor.py`,
 `src/bayesian.py`, `analysis/rq4.py`, `analysis/rq5.py`, `analysis/rq6.py`,
 `analysis/rq7.py`.
