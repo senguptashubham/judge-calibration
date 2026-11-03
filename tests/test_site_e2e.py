@@ -135,6 +135,7 @@ def test_a_game_round_shows_each_result_in_view_and_ends_in_the_scoreboard(open_
             return [r.top, r.bottom, document.querySelector('.topbar').offsetHeight]; }""")
         assert top >= bar - 1 and bottom <= page.viewport_size["height"] + 1
         page.click("#g-result .btn.primary")
+        wait_until_scroll_settles(page)    # a person reads the next question before answering
     assert page.is_visible("#g-final") and not page.is_visible("#g-play")
     assert page.locator("#g-pips li.right, #g-pips li.wrong").count() == 5
 
