@@ -17,6 +17,12 @@ d_human. d_human takes just 3 distinct values here, which supports a
 monotonic claim but not a linear one. Writes
 results/d_human_correlations_table_{model_slug}.csv and
 results/figures/d_human_correlations_{model_slug}.png.
+
+Multi-vote sensitivity (D34, `--task multivote`): RQ1's overconfidence gap and
+RQ2's AUROC for the four signals on these 595 items, the ones whose label
+rests on more than one vote. The subset is easier as well as cleaner, so it
+is read beside the full-population numbers, not as a correction of them.
+Writes results/multivote_sensitivity_{model_slug}.csv.
 """
 
 import argparse
@@ -24,9 +30,10 @@ import argparse
 import numpy as np
 import pandas as pd
 
-from analysis.rq1 import SIGNALS, load_rq1_items
+from analysis.rq1 import CALIBRATION_FORM, SIGNALS, load_rq1_items
 from src.boot import cluster_bootstrap
 from src.config import Config
+from src.metrics import auroc_error, cohens_kappa, overconfidence_gap
 from src.plots import plot_d_human_correlations, plot_human_disagreement
 
 
@@ -127,6 +134,46 @@ def compute_d_human_correlation(items: pd.DataFrame, signal: str, seed: int) -> 
     return {"spearman": point, "spearman_ci_low": ci_low, "spearman_ci_high": ci_high}
 
 
+def compute_multivote_sensitivity(items: pd.DataFrame, seed: int) -> pd.DataFrame:
+    """Per signal, on the multi-vote items: the overconfidence gap of its
+    calibration form (D7) and AUROC(uncertainty -> error), plus the verdict's
+    accuracy and κ (invariant 5), each with a cluster-bootstrap CI.
+    """
+    def _ci(fn) -> tuple[float, float, float]:
+        return cluster_bootstrap(items, fn, "question_id", n=2000, seed=seed)
+
+    accuracy = _ci(lambda df: df["correct"].astype(float).mean())
+    kappa = _ci(lambda df: cohens_kappa(df["judge_verdict"], df["human_label"]))
+
+    rows = []
+    for signal in SIGNALS:
+        calibration_col = CALIBRATION_FORM[signal]
+        gap = _ci(lambda df: overconfidence_gap(df[calibration_col].to_numpy(), df["correct"].to_numpy()))
+        auroc = _ci(lambda df: auroc_error(1 - df[signal].to_numpy(dtype=float), df["correct"].to_numpy()))
+        rows.append(
+            {
+                "signal": signal,
+                "n": len(items),
+                "n_questions": items["question_id"].nunique(),
+                "accuracy": accuracy[0], "accuracy_ci_low": accuracy[1], "accuracy_ci_high": accuracy[2],
+                "kappa": kappa[0], "kappa_ci_low": kappa[1], "kappa_ci_high": kappa[2],
+                "overconfidence_gap": gap[0], "overconfidence_gap_ci_low": gap[1], "overconfidence_gap_ci_high": gap[2],
+                "auroc": auroc[0], "auroc_ci_low": auroc[1], "auroc_ci_high": auroc[2],
+            }
+        )
+    return pd.DataFrame.from_records(rows)
+
+
+def main_multivote(config_path: str) -> None:
+    config = Config.from_yaml(config_path)
+    items = load_disagreement_items(config.paths.items_parquet)
+    table = compute_multivote_sensitivity(items, config.seed)
+    print(table.to_string(index=False))
+    table_path = f"{config.paths.results_dir}/multivote_sensitivity_{config.model_slug}.csv"
+    table.to_csv(table_path, index=False)
+    print(f"Wrote {len(table)} rows to {table_path}")
+
+
 def main(config_path: str) -> None:
     config = Config.from_yaml(config_path)
     items = load_disagreement_items(config.paths.items_parquet)
@@ -194,5 +241,8 @@ def main(config_path: str) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--task", choices=["all", "multivote"], default="all")
     args = parser.parse_args()
-    main(args.config)
+    if args.task == "all":
+        main(args.config)
+    main_multivote(args.config)

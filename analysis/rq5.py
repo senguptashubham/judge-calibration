@@ -52,7 +52,9 @@ from src.boot import cluster_bootstrap, paired_cluster_bootstrap, paired_per_fol
 from src.config import Config
 from src.features import build_tier_a, build_two_call, load_rq4_population
 from src.metrics import aurc, auroc_error, ece, oracle_risk_coverage, per_fold_auroc_error, risk_coverage, threshold_sweep
-from src.plots import judge_name, plot_d_human_correlations, plot_risk_coverage, plot_rq5_distillation
+from src.plots import (
+    judge_name, plot_bayesian_convergence, plot_d_human_correlations, plot_risk_coverage, plot_rq5_distillation,
+)
 from src.predictor import build_xyg
 
 ENTROPY_SIGNALS = ["ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_epistemic"]
@@ -206,6 +208,7 @@ def fit_distilled_model(
         "epistemic_by_repeat": bayes["epistemic_by_repeat"],
         "fold_ids": bayes["fold_ids"],
         "diagnostics": summarize_diagnostics(bayes["fold_diagnostics"]),
+        "fold_diagnostics": bayes["fold_diagnostics"],
     }
 
 
@@ -280,6 +283,22 @@ def main_distillation(config_path: str) -> None:
             f"ECE {fit['ece']:.4f}; keeps {pct_retained:.1f}% of the ensemble's edge over chance"
         )
         print(f"{name} convergence: {fit['diagnostics']}; permutation null: {null}")
+
+        # The all-signals model is RQ4's Bayesian model, whose convergence
+        # figure rq4.py already draws; the two-call model needs its own
+        # (invariant 13).
+        if name == "bayesian_two_call":
+            fold_diagnostics = fit["fold_diagnostics"]
+            for dark in (False, True):
+                plot_bayesian_convergence(
+                    max_rhat=np.array([fd["max_rhat"] for fd in fold_diagnostics]),
+                    flagged=np.array([fd["flagged"] for fd in fold_diagnostics]),
+                    n_divergences=np.array([fd["n_divergences"] for fd in fold_diagnostics]),
+                    model_slug=config.model_slug,
+                    title=f"Bayesian model convergence ({judge_name(config.model_slug)}, two-call model)",
+                    filename=f"rq5_bayesian_convergence_two_call_{config.model_slug}.png",
+                    dark=dark,
+                )
 
     rows.insert(
         0,

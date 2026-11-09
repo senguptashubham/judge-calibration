@@ -1100,12 +1100,15 @@ def plot_bayesian_convergence(
     model_slug: str,
     n_divergences: np.ndarray | None = None,
     title: str | None = None,
+    filename: str | None = None,
 ) -> Figure:
     """Max R-hat for every fold-fit against D22's 1.01 threshold. A fit is
     flagged for R-hat > 1.01 (red dot) or for any divergence (red ×) - two
     different problems, so they are drawn differently. Converged fits are ink.
 
-    Saved to results/figures/rq4_bayesian_convergence_{model_slug}.png.
+    Saved to results/figures/`filename`, by default
+    rq4_bayesian_convergence_{model_slug}.png (the RQ4 meta-model and its RQ6/RQ7
+    reuses); RQ5 passes its own name.
     """
     max_rhat_arr = np.asarray(max_rhat, dtype=float)
     flagged_arr = np.asarray(flagged, dtype=bool)
@@ -1132,7 +1135,7 @@ def plot_bayesian_convergence(
     ax.set_xlabel("fold-fit (5 folds × 10 repeats)")
     ax.set_ylabel("worst R-hat in the fit")
     ax.set_title(title or f"Bayesian model convergence ({judge_name(model_slug)})")
-    return _save(fig, f"rq4_bayesian_convergence_{model_slug}.png")
+    return _save(fig, filename or f"rq4_bayesian_convergence_{model_slug}.png")
 
 
 @_dark_variant

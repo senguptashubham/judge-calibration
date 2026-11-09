@@ -160,7 +160,7 @@ analysis/   rq1 … rq7, human_disagreement, vacuum, decoding_ablation — CLIs 
             demo_bundle → site_data (the site's data)
 site/       static HTML/CSS/JS site; computes no statistic; data/ is built, tracked
 design/     tokens.json: the colour roles shared by the site and the figures
-tests/      one file per src/ module except vacuum_test; test_demo_bundle.py,
+tests/      one file per src/ module (vacuum_test: its parsing step only); test_demo_bundle.py,
             test_site_data.py, test_site_e2e.py (Playwright), test_design_tokens.py,
             test_rq7.py (the survivorship fill)
 notebooks/  Colab records of the three GPU runs; install, pull and call src/ only

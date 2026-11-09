@@ -682,3 +682,94 @@ No existing number changed.
 
 Where: `analysis/rq4.py` (`compute_category_null`, the full-base and Bayesian
 nulls), `analysis/rq5.py`, `analysis/rq6.py::summarize_meta_null`.
+
+### D34 — Rationale recorded and checks added after review of the presentation
+A reviewer's questions on the presentation showed design choices whose reasons had
+never been written down, and one claim that had never been tested. Each item says
+what was decided, why, and how its result is read. The reading rules were written
+down before any of the checks were run.
+
+1. **Padding is symmetric, at one level.** `verbose_pad` pads both answers, which
+   departs from Zheng et al.'s one-sided attack. The owner confirmed the reason after
+   the review:
+   - Padding both answers keeps the human label valid. Neither answer gains
+     information, so the comparison the voters judged is unchanged.
+   - The test asks whether confidence signals survive a shift that adds no
+     information. It does not ask whether the judge prefers longer answers, which
+     Zheng et al. already measured.
+
+   **Limitation.** There is one style and one amount: `n_repeats = 3`, which makes
+   prompts about 2.9× longer. No dose–response was run, because a new padding level
+   is a GPU re-run. Every padded prompt (at most 11,746 tokens) fits Qwen's context
+   window, so the primary judge has no truncation confound.
+2. **B = 2,000 bootstrap resamples.** The original choice was conventional and its
+   reason was not recorded.
+   - **Check:** re-run four headline intervals with the reported seed (1234) and four
+     other seeds (0–3) at B = 2,000, and once at B = 10,000:
+     - RQ1's stated-confidence gap;
+     - RQ2's `conf_bpe` AUROC;
+     - RQ3b's ΔAUROC for `conf_bpe`;
+     - the debiasing Δaccuracy.
+   - **Reading rule:** report the largest endpoint shift. Any interval that crosses
+     zero under some seed is flagged borderline in REPORT, as two already are.
+3. **Vacuum test sizes and confidence.** The 40 + 20 pairs were planned as a sanity
+   check, with no power target. The positional splits already reject 50/50
+   (p = 0.006 and p = 0.0004). The claim that confidence is *higher* on vacuum pairs
+   (0.970 and 0.973 against 0.949) had never been tested.
+   - **Check:** a cluster-bootstrap CI (B = 2,000) on mean `conf_verb`, vacuum type
+     minus the real clean/P1 items. Both samples are resampled together by
+     `question_id`, because vacuum pairs come from real questions and repeat them.
+   - **Reading rule:**
+     - CI above zero: "higher than on real items";
+     - CI includes zero: "no lower than on real items";
+     - CI below zero: report it as contradicting the finding.
+4. **Single-vote labels.** 1,241 of the 1,836 items rest on one vote.
+   - **Check:** on the 595 items with at least two votes, compute the overconfidence
+     gap of the four AB-verdict signals (probability forms, D7) and their AUROC, each
+     with a cluster bootstrap.
+   - **Reading rule:**
+     - "every signal is overconfident" holds on the subset only if every gap CI
+       clears zero;
+     - the order-swap signal's lead is compared by point estimate only, with no new
+       paired test;
+     - the subset is easier as well as cleaner (accuracy rises), so a smaller gap
+       there is not read as "less overconfident when the labels are better".
+5. **ECE bin counts differ by construction (D14).** Stated confidence in the AB
+   verdict takes 4 values, so its ECE is exact per value. The order-averaged
+   confidence takes 16 values, so it gets 10 equal-mass bins, 7 after duplicate edges
+   are dropped. The two ECEs therefore use different estimators. The bin-free gap
+   (0.192 → 0.038) and Brier score (0.215 → 0.150) move the same way.
+6. **The two-call model gets a convergence figure,** as every other Bayesian result
+   already has (invariant 13). Its diagnostics were reported in text only. The
+   sampler stays untuned, as D31 decided.
+7. **The vacuum loader moved to `src/`.** `analysis/vacuum.py` read `raw_output`
+   itself, against invariant 7, although it used the production parser.
+   `load_vacuum_calls` now lives in `src/vacuum_test.py`. No number changed.
+
+**Result.** No reading rule overturned a finding.
+
+- **Bootstrap:** across seeds 0–3 and B = 10,000, the four intervals' endpoints
+  moved by at most 0.0019 (the RQ2 AUROC). None crossed zero, and the point
+  estimates were unchanged.
+- **Vacuum:** the confidence gap clears zero for both types:
+  - identical pairs +0.021 [0.006, 0.033];
+  - empty pairs +0.023 [0.004, 0.040].
+
+  So "higher than on real items" stands.
+- **Multi-vote (N = 595, 79 questions):** accuracy 0.770, κ 0.538. Every gap clears
+  zero:
+  - `conf_verb` +0.180;
+  - `conf_lp` +0.229;
+  - `conf_sc` +0.158;
+  - `conf_bpe_prob` +0.094.
+
+  By point estimate, the AUROC order is unchanged: `conf_bpe` 0.816, `conf_lp`
+  0.778, `conf_verb` 0.664, `conf_sc` 0.655.
+- **Two-call convergence figure:** drawn from a re-run of the RQ5 distillation with
+  fixed seeds. Every tracked RQ5 output came out byte-identical, and the
+  diagnostics match REPORT: 8 of 50 fits with divergences, 16 in total, worst
+  R-hat 1.008, lowest ESS 617. The figure is
+  `rq5_bayesian_convergence_two_call_qwen2.5_7b_instruct.png`.
+
+Where: `src/perturb.py`, `src/vacuum_test.py`, `analysis/vacuum.py`,
+`analysis/rq5.py`.

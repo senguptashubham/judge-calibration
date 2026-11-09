@@ -44,6 +44,16 @@ def test_a_figure_saved_with_a_footnote_margin_gets_the_suffix_too(figures_in_tm
     assert not (figures_in_tmp / "gap.png").exists()
 
 
+def test_convergence_plot_keeps_its_default_name_unless_given_one(figures_in_tmp):
+    args = dict(max_rhat=np.array([1.003, 1.004]), flagged=np.array([False, False]), model_slug="m")
+
+    plots.plot_bayesian_convergence(**args)
+    plots.plot_bayesian_convergence(**args, filename="rq5_bayesian_convergence_two_call_m.png", dark=True)
+
+    assert (figures_in_tmp / "rq4_bayesian_convergence_m.png").exists()
+    assert (figures_in_tmp / "rq5_bayesian_convergence_two_call_m_dark.png").exists()
+
+
 def test_theme_resets_even_when_a_plot_fails():
     with pytest.raises(Exception):
         plots.plot_risk_coverage({}, (None, None), dark=True)

@@ -6,10 +6,16 @@ Writes {runs_dir}/vacuum.jsonl - calls.parquet's provenance fields plus a
 `vacuum_type` ("identical"|"empty") - and the matching logprobs files.
 
 Run: python -m src.vacuum_test --config configs/run.yaml
+
+`load_vacuum_calls()` is the parsing step for this checkpoint, kept in src/
+so analysis code never reads raw model output (invariant 7).
 """
 
 import argparse
+import json
 from pathlib import Path
+
+import pandas as pd
 
 from src.config import Config
 from src.data import item_id
@@ -23,8 +29,28 @@ from src.judge import (
     logprobs_path,
     write_logprobs,
 )
+from src.parse import parse_verdict_and_confidence
 from src.perturb import vacuum_empty, vacuum_identical
 from src.prompts import prompt_hash, render_prompt
+
+
+def load_vacuum_calls(checkpoint_path: str | Path) -> pd.DataFrame:
+    """vacuum.jsonl -> one row per call: vacuum_type, question_id (the
+    cluster key for any bootstrap), and the production parser's verdict and
+    confidence fields.
+    """
+    records = []
+    with open(checkpoint_path, "r", encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            records.append(
+                {
+                    "vacuum_type": row["vacuum_type"],
+                    "question_id": row["question_id"],
+                    **parse_verdict_and_confidence(row["raw_output"]),
+                }
+            )
+    return pd.DataFrame.from_records(records)
 
 
 def main(cfg: Config) -> None:

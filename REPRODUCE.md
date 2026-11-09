@@ -125,6 +125,8 @@ The 95% intervals come from a cluster bootstrap over `question_id`.
 | RQ4 Bayesian permutation null (mean / max) | 0.501 / 0.553 | same |
 | RQ5 two-call Bayesian − ensemble, per fold | −0.017 [−0.034, 0.003] | `results/rq5_distillation_gaps_qwen2.5_7b_instruct.csv` |
 | Wrong verdicts let through when auto-accepting `conf_verb` ≥ 0.9 | 98.4% | `results/auto_accept.csv` |
+| Vacuum confidence minus real items (identical / empty) | +0.021 [0.006, 0.033] / +0.023 [0.004, 0.040] | `results/vacuum_qwen2.5_7b_instruct.csv` |
+| Multi-vote items (N = 595): `conf_verb` gap, `conf_bpe` AUROC | +0.180 [0.139, 0.218], 0.816 | `results/multivote_sensitivity_qwen2.5_7b_instruct.csv` |
 | kev-8b AUROC / flip rate (in coverage) | 0.772 / 24.6% | `results/judge_comparison.csv` |
 | auto-j-13b AUROC / flip rate (turn 1) | 0.683 / 12.5% | same |
 | auto-j-13b turn-2 share correct, clean → padded, a missing verdict counted as wrong | 0.781 → 0.431 | `results/rq7_survivorship_autoj_13b_gptq_4bits.csv` |
@@ -146,3 +148,7 @@ Because the NUTS seeds are fixed, the Bayesian results came out bit-identical on
 - `pytest`: 301 passed, 1 skipped. The skipped module is `tests/test_site_e2e.py` (16 browser tests). It needs Playwright, which the base install leaves out. To run it, use `pip install -e ".[site]" && playwright install chromium`, which brings the total to 317.
 
 **Reruns after D31–D33 (2–3 November 2026).** The RQ5 distillation and the RQ7 survivorship check (D31), every meta-model AUROC, which is now scored per fold (D32), and the permutation nulls added for the remaining meta-models (D33) changed after the run above. The full command sequence was rerun in place on the original machine: every step exited with code 0, `git status` showed only the outputs those decisions change, `site/data/` was unchanged, and `pytest` passed in full. A fresh-clone run was not repeated.
+
+**Reruns after D34 (November 2026).** `analysis.vacuum`, `analysis.human_disagreement` and `analysis.rq5 --task distillation` were rerun in place, each exiting with code 0.
+- **What changed:** the vacuum table gained its confidence-gap columns, with the existing values unchanged. Two outputs are new: `multivote_sensitivity_qwen2.5_7b_instruct.csv` and the two-call convergence figure.
+- **What stayed the same:** every other tracked output was byte-identical, including all RQ5 tables, and `site/data/` was unchanged.

@@ -237,7 +237,7 @@ MT-Bench human votes ──► src/data.py ──► items_labels.parquet
 | [`REPORT.md`](REPORT.md) | Results and interpretation, one section per RQ |
 | [`REPRODUCE.md`](REPRODUCE.md) | Reproducing every result from the published checkpoints: commands, runtimes, expected numbers |
 | [`site/`](site) | The interactive site: `index.html`, `style.css`, `app.js`, built data in `data/`, bundled fonts in `fonts/` |
-| [`DECISIONS.md`](DECISIONS.md) | Design decisions and their reasoning (D1–D30) |
+| [`DECISIONS.md`](DECISIONS.md) | Design decisions and their reasoning (D1–D34) |
 | [`PREREGISTRATION.md`](PREREGISTRATION.md) | Hypotheses and settings frozen before the main run |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Statistical invariants, data schemas, layout, commands |
 | `src/` | Pipeline: data, prompts, judges, parsing, signals, metrics, bootstrap, predictors, Bayesian model, plots |

@@ -77,7 +77,8 @@ the main judge studied here, disagrees with the human majority on about a quarte
 the items. That is acceptable if the judge can say when it is unsure. A pipeline could
 then accept its confident verdicts and pass the rest to a human: selective evaluation,
 or abstain-and-escalate. The open question is whether the judge's confidence can be
-trusted for that decision. In testing terms, a judge is an automated oracle, and an oracle is only useful if you know when not to trust it.
+trusted for that decision. In testing terms, a judge is an automated oracle, and an 
+oracle is only useful if you know when not to trust it.
 
 Prior work has mostly measured judge accuracy and bias (Zheng et al., 2023; Shi et
 al., 2025). Calibration has been measured on objective-answer benchmarks across many
@@ -131,7 +132,7 @@ verdicts would cost. The report closes with the Discussion, Limitations and Exte
 ## Method
 
 The design was frozen in `PREREGISTRATION.md` before the full run. Every design
-decision and its reasoning is in `DECISIONS.md` (D1–D30), cited below by number.
+decision and its reasoning is in `DECISIONS.md` (D1–D34), cited below by number.
 
 ### Data
 
@@ -173,6 +174,16 @@ Every item is judged under two conditions, each in both answer orders:
   (`src/perturb.py::verbose_pad`): the answer is kept verbatim, then its own
   sentences are restated as a numbered list three times. This adds length and no
   information.
+  - **Both answers are padded, unlike in Zheng et al.** Their version pads one
+    answer to test whether the judge prefers the longer one. Here both answers are
+    padded, so neither gains information and the human label for the comparison
+    stays valid. What changes is only how much text the judge reads. The test
+    therefore asks whether the confidence signals survive a shift that adds no
+    information, not whether the judge favours length (D34).
+  - **There is one padding level.** Prompts become about 2.9 times longer, and the
+    longest padded prompt is 11,746 tokens, well inside the primary judge's context
+    window, so no padded prompt is truncated. No other amount of padding was tried
+    (Limitations).
 - **Order.** Each condition is judged with the answers shown as (A, B) and again
   swapped as (B, A). Order is an axis of every condition, not a condition of its
   own (D5).
@@ -192,7 +203,10 @@ general MT-Bench rubric, which RQ1–RQ4 use alone; **P2**, correctness first; a
 **P3**, helpfulness first. Only one sentence differs between them
 (`src/prompts.py`). Prompt templates are frozen and hashed, and every call row
 records its model, prompt hash, git commit, seed, condition, order and sample
-index (`src/judge.py`).
+index (`src/judge.py`). The runs resume from their checkpoints and skip calls already
+made, so 140 of the clean run's 18,900 calls come from the 8 September pilot. They
+are kept because their prompt hashes, seed, model and vLLM version match the main
+run; only the latency logging differed.
 
 ### Verdicts and labels
 
@@ -227,7 +241,16 @@ scored against the verdict it is a confidence in (D7; methods note
 - **Intervals.** 95% intervals come from a cluster bootstrap with B = 2,000:
   resample questions with replacement and keep all their items (`src/boot.py`).
   A row-level bootstrap would treat the 1,836 items as independent and give
-  intervals that are too narrow.
+  intervals that are too narrow. B = 2,000 is a conventional size for percentile
+  intervals, and it was checked on four headline intervals (D34):
+  - the RQ1 gap, the RQ2 order-swap AUROC, the RQ3b padding ΔAUROC and the
+    debiasing Δaccuracy;
+  - four other seeds, and B = 10,000.
+
+  No endpoint moved by more than 0.002, and none of the four crossed zero. The
+  resampling's own randomness therefore affects only the third decimal of an
+  interval's endpoints. The width of each interval is sampling uncertainty, which
+  more resamples do not reduce.
 - **Paired comparisons.** When the same items are scored two ways (clean vs
   padded, one verdict vs another, one feature set vs another), the interval is on
   the per-item difference, from a paired cluster bootstrap.
@@ -250,7 +273,7 @@ scored against the verdict it is a confidence in (D7; methods note
   signals: 40% of error–correct pairs are tied for stated confidence and 58% for
   self-consistency, against 21% for verdict probability and none for the
   order-swap signal.
-- **Many intervals, no correction.** The report computes about 200 intervals and
+- **Many intervals, no correction.** The report computes about 210 intervals and
   applies no multiple-comparison correction, so at a 5% level a few "significant"
   results among them are expected by chance. The ones that sit within a few
   thousandths of zero, and so are the likeliest, are flagged where they appear.
@@ -283,7 +306,14 @@ scored against the verdict it is a confidence in (D7; methods note
 ### Departures from the preregistration
 
 `PREREGISTRATION.md` fixed the questions, the confirmatory and exploratory split and
-the analysis settings before the full run. Five things differ from it.
+the analysis settings before the full run. It was settled in git commit `4dafc85`
+on 1 September 2026. The main clean run was launched from commit `73533c0` on
+14 September, and the padded run on 18 September. Two amendments came in between,
+both visible in the history. On 4 September, D4 widened what each
+call records. On 8 September, after the pilot calls, D25 recorded that constrained
+decoding inflates the verdict-token probability. Neither changed a hypothesis. The
+record is the repository's git history, not an external registry. Five things
+differ from it.
 
 - **RQ5's student is counted in calls, not prompts.** The plan set a
   "single-call, P1-only" student against a "3-call" ensemble, counting prompts. Every
@@ -314,10 +344,17 @@ the analysis settings before the full run. Five things differ from it.
   Every other meta-model conclusion is the same either way, including RQ4's
   headline and the transfer test, whose planned frozen-model version shows the same
   significant drop.
-- **Some checks were added.** Every meta-model AUROC has a permutation null (D33);
-  the tier ablation is repeated on all 1,819 items beside its planned agreed-items
-  population (D16); and auto-j's padding result is bounded for the calls that gave
-  no verdict (D31). Apart from the bucketed H4 test above, no planned comparison was
+- **Some checks were added.**
+  - Every meta-model AUROC has a permutation null (D33).
+  - The tier ablation is repeated on all 1,819 items beside its planned agreed-items
+    population (D16).
+  - auto-j's padding result is bounded for the calls that gave no verdict (D31).
+  - After a review of the presentation (D34), four more were added, each with its
+    reading rule written down before it ran:
+    - a confidence interval for the vacuum test's confidence gap;
+    - a bootstrap seed and resample-count check;
+    - a sensitivity check on the items with at least two votes;
+    - a convergence figure for RQ5's two-call model. Apart from the bucketed H4 test above, no planned comparison was
   dropped or replaced.
 
 ---
@@ -433,6 +470,14 @@ orders disagree, the two stated confidences pull toward 0.5 instead of both
 sitting near 0.95. `conf_sc` has no `verdict_bidir` row, because its sampled draws
 exist in AB order only.
 
+The two stated-confidence ECEs (0.192 and 0.077) are computed with different
+binnings. That follows from the data, not from a choice made for this comparison
+(D14). The AB confidence takes only 4 distinct values, so its ECE is exact, with
+one bin per value. The order-averaged confidence takes 16 values, so it gets 10
+equal-mass bins, of which 7 remain after duplicate edges are dropped. The two
+measures that need no bins, the overconfidence gap (0.192 → 0.038) and the Brier
+score (0.215 → 0.150), move the same way.
+
 **Debiasing by averaging both orders buys a real, statistically confirmed accuracy
 gain.** Accuracy moves from 0.757 to 0.792 going from `judge_verdict` to `verdict_bidir` — a difference that could just be noise if judged by eye from two separate CIs, so it was tested properly: a **paired** cluster bootstrap on the per-item accuracy difference (invariant 3 — same 1836 items scored two ways is not two independent samples) gives **+0.0354 [0.0177, 0.0531]**, a CI that excludes zero. Concretely: averaging both orders flips 157 items from wrong to right, and only 92 from right to wrong — a net gain of 65/1836 = 0.0354, matching the bootstrap exactly. The debiasing gain is real, not just directionally plausible.
 
@@ -451,7 +496,7 @@ both orders fixes the flipped items, not the overconfidence of the rest.
 
 **Corroborating evidence the false confidence is not just a calibration-curve
 artifact.** The vacuum test (methods notes) found the judge's mean `verbalized_conf` on
-pairs with *no real content difference to judge* (0.970 identical, 0.973 empty) was, if anything, slightly *higher* than on real items (0.949) — a judge that recognized "there is no basis for a decision here" should show measurably lower confidence on those degenerate pairs, and doesn't.
+pairs with *no real content difference to judge* (0.970 identical, 0.973 empty) was *higher* than on real items (0.949), by +0.021 [0.006, 0.033] and +0.023 [0.004, 0.040]. A judge that recognized "there is no basis for a decision here" should show measurably lower confidence on those degenerate pairs, and doesn't.
 RQ1's overconfidence finding and the vacuum test's false-confidence finding are two independent measurements pointing at the same underlying problem: the judge's stated confidence tracks something other than its actual likelihood of being right.
 
 **Caveat for `conf_lp`/`conf_bpe`'s `reliability`/`resolution` numbers specifically.**
@@ -1168,7 +1213,8 @@ of a separate, better kind of uncertainty, and it should not be read as one.
 **Convergence.** The all-signals model's 50 fold-fits are clean (no divergences,
 worst R-hat 1.008, lowest ESS 611). The two-call model's are mostly but not entirely
 clean: 8 of 50 fold-fits are flagged, all for divergences (16 in total, out of
-200,000 post-warmup draws), with worst R-hat 1.008 and lowest ESS 617. As with
+200,000 post-warmup draws), with worst R-hat 1.008 and lowest ESS 617 (figure
+`rq5_bayesian_convergence_two_call_qwen2.5_7b_instruct.png`). As with
 kev-8b's meta-model (RQ6), its three features are strongly correlated, and once
 standardized they give the posterior a ridge that NUTS occasionally steps off — a
 plausible reading, not one checked separately. The sampler is not tuned
@@ -1314,6 +1360,15 @@ provide close to "for free."
   much the reported gaps would move under a different seed's own posterior
   draw. Consistent with established project precedent; still a real,
   uncharacterized source of variance specific to this one result.
+- **The failed epistemic prediction may depend on where the probability is read.**
+  A prompt sits near 50/50 when its verdict flips with answer order. That happens
+  because `p_a`, read at the verdict token after the written reasoning, is close to
+  0 or 1 in each order. Constrained decoding is not the cause, because it leaves
+  this ratio intact (D25). By that point the reasoning has already committed the
+  model to an answer. A probability read before any reasoning, as SCOPE reads its
+  preference token, would be less extreme. There, disagreement between prompts could
+  register even near 50/50, and epistemic thresholding could do better. This was
+  not tested.
 
 ---
 
@@ -2142,6 +2197,22 @@ to the whole study.
    50/50 split had no majority label. The study therefore measures the judge on the
    clearer items. The real-world error rate, and the difficulty of flagging errors,
    are probably higher than reported.
+   - **The headline results hold on the multi-vote items.** On the 595 items with at
+     least two votes (D34), every signal is still overconfident:
+     - stated confidence +0.180 [0.139, 0.218];
+     - verdict probability +0.229 [0.187, 0.270];
+     - self-consistency +0.158 [0.121, 0.193];
+     - order-swap +0.094 [0.062, 0.123].
+
+     By point estimate, the signals rank errors in the same order as on the full
+     population, with order-swap first: AUROC 0.816, against 0.778 (verdict
+     probability), 0.664 (stated confidence) and 0.655 (self-consistency). No new
+     paired test was run on this subset. This subset is easier as well as cleaner
+     (accuracy 0.770, κ 0.538), so its numbers sit beside the full population's
+     rather than correcting them.
+   - **H4 rests on few split votes.** Only 31 of those 595 items have split votes,
+     and human consensus takes just three values. The consensus effect is measured
+     mostly as the difference between 564 unanimous items and those 31.
 
 3. **Few judges, each in one setup.** Qwen2.5-7B, the primary judge, was run with one
    main prompt and JSON-formatted output, and its confidence may depend on that
@@ -2156,7 +2227,11 @@ to the whole study.
    those, training included.
 
 4. **Only two manipulations.** The bias tests cover answer-order swapping and one
-   padding style, the repetitive list from Zheng et al. (2023). Real manipulation is
+   padding style, the repetitive list from Zheng et al. (2023), applied to both
+   answers at one level, about 2.9 times the prompt length. No dose–response was
+   measured: it is not known whether more or less padding would harm the signals
+   more or less. Padding only one answer, which would test whether the judge prefers
+   length, was not run either. Real manipulation is
    broader: flattery, appeals to authority, confident wording, prompt injection. The
    study shows that padding degrades the best signal; it does not show that any judge
    or signal is robust to the attacks it did not test.
@@ -2180,8 +2255,8 @@ Each extension below addresses one of the limitations above.
 
 2. **More manipulation types.** Add the attacks this study did not test, such as
    flattery, appeals to authority, confident wording and prompt injection, to see
-   whether the order-swap signal fails under them the way it does under padding
-   (limitation 4).
+   whether the order-swap signal fails under them the way it does under padding.
+   Run padding at several levels, and on one answer only (limitation 4).
 
 3. **Jev itself, and fairer setups.** Replace kev-8b with Jev, which Li et al. (2026)
    evaluated through its hosted API, or with one of the open decision models they
@@ -2273,11 +2348,16 @@ is a known post-mask upper bound, reported but not relied on here).
 
 **Result:**
 
-| | n | verdict split (A / B) | binomial p (two-sided, H0: 50/50) | mean `verbalized_conf` |
-|---|---|---|---|---|
-| Identical pairs | 40 | 72.5% / 27.5% | **0.0064** | 0.970 |
-| Empty pairs | 20 | 10.0% / 90.0% | **0.0004** | 0.973 |
-| *(real clean/P1 items, for comparison)* | 1,836 | — | — | 0.949 |
+| | n | verdict split (A / B) | binomial p (two-sided, H0: 50/50) | mean `verbalized_conf` | minus real items, 95% CI |
+|---|---|---|---|---|---|
+| Identical pairs | 40 | 72.5% / 27.5% | **0.0064** | 0.970 | +0.021 [0.006, 0.033] |
+| Empty pairs | 20 | 10.0% / 90.0% | **0.0004** | 0.973 | +0.023 [0.004, 0.040] |
+| *(real clean/P1 items, for comparison)* | 1,836 | — | — | 0.949 | — |
+
+The confidence gap is a cluster bootstrap (B = 2,000). The vacuum pairs were built
+from real questions and repeat some of them: 40 identical pairs come from 28
+questions and 20 empty pairs from 17. So the vacuum and real items are resampled
+together by question (D34).
 
 Parse rate: 60/60 (100%) - structured output held up cleanly even on this degenerate
 content.
@@ -2291,16 +2371,18 @@ content.
    current" isn't a single fixed positional preference - what nothing looks like to it
    depends on what kind of nothing it's shown.
 2. **False confidence.** Mean `verbalized_conf` on both vacuum types (0.970, 0.973) is
-   not lower than - if anything, slightly higher than - the real clean/P1 items'
-   mean (0.949). A judge that recognized "there is no real basis for a decision here"
+   higher than the real clean/P1 items' mean (0.949), by about 2 points, and both
+   intervals clear zero. A judge that recognized "there is no real basis for a decision here"
    should show measurably *lower* confidence on these degenerate pairs. It doesn't.
 
 Both findings matter for RQ1 (calibration) and RQ2 (whether confidence is informative
 about error): the judge's stated confidence does not distinguish a genuine, considered
 judgment from a coin flip forced by schema constraints and possibly-arbitrary
 positional preference. Sample sizes (n=40, n=20) are small by design (this is a
-sanity check, not a powered study) - treat the specific percentages as descriptive,
-not as a precise population estimate of the judge's true positional bias rate.
+sanity check, not a powered study), with no power target set in advance. They are
+enough for the two claims made here: both splits reject 50/50, and both confidence
+gaps clear zero. Treat the specific percentages as descriptive, not as a precise
+population estimate of the judge's true positional bias rate.
 
 Analysis script: `analysis/vacuum.py` (reads `runs/{model_slug}/vacuum.jsonl`, written by
 `src/vacuum_test.py`). Table: `vacuum_qwen2.5_7b_instruct.csv`.
