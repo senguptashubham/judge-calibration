@@ -82,7 +82,8 @@ three judges, and it is interactive in section 04 of the site.
      AUROC on padded ones. Combining the signals buys no robustness.
    - An abstention policy tuned on clean data would lose reliability with no
      accuracy-side warning.
-   - The other two judges' calibration holds up under the same attack.
+   - The other two judges' calibration holds up under the same attack (auto-j's
+     only among the calls it answered; see point 6).
 4. **A learned meta-model adds little or nothing over the best single signal.**
    - For Qwen, the best meta-model scores +0.014 to +0.019 AUROC above the best
      single signal, scored on the same held-out folds, and that edge is not

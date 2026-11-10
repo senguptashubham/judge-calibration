@@ -739,7 +739,7 @@ ECE shifts are numerically negative but not significant. The ECE interval is
 skewed (most bootstrap replicates fall below the point), and ECE itself moves with
 the bin count, so the finding was checked on two measures that use no bins: the
 paired change in the overconfidence gap, +0.031 [0.012, 0.051], and in the Brier
-score, +0.018 [0.005, 0.032]. Both worsen significantly, so the conclusion does
+score, +0.018 [0.005, 0.032] (`rq3_table_qwen2.5_7b_instruct.csv`). Both worsen significantly, so the conclusion does
 not rest on the binning. Read together with RQ3a:
 position bias barely moves confidence at all (a ~2pp gap); verbosity moves accuracy
 even less, but erodes exactly the signal — cross-order agreement — that RQ1/RQ2
@@ -1260,7 +1260,7 @@ existing `d_human` machinery, not new statistical infrastructure.*
 (`src/data.py`), so *high* `d_human` means *strong consensus* (votes near
 0% or 100% for one side), not disagreement; the disagreement zone is *low*
 `d_human`, near the 50/50 split. This matches D23's framing and H4's result
-(the predictor's edge grows with human *consensus*). The test is therefore:
+(the predictor's edge is larger where humans *agreed*). The test is therefore:
 does aleatoric correlate *negatively* with `d_human` (high aleatoric where
 consensus is weak)?
 

@@ -28,7 +28,7 @@ import pandas as pd
 from analysis.rq1 import CALIBRATION_FORM, SIGNALS, load_rq1_items
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
-from src.metrics import auroc_error, ece
+from src.metrics import auroc_error, brier, ece, overconfidence_gap
 from src.plots import judge_name, plot_confidence_gap, plot_verbosity_deltas
 
 RQ3B_SIGNALS = ["conf_verb", "conf_lp", "conf_bpe"]  # conf_sc dropped, D21
@@ -147,8 +147,19 @@ def compute_signal_rq3b_metrics(
         uncertainty = 1 - df[signal].to_numpy(dtype=float)
         return auroc_error(uncertainty, df[correct_col].to_numpy())
 
+    # Two calibration measures that use no bins, so a ΔECE finding can be
+    # checked against the binning (ECE moves with the bin count).
+    def _overconfidence_gap(df: pd.DataFrame) -> float:
+        return overconfidence_gap(df[calibration_col].to_numpy(dtype=float), df[correct_col].to_numpy())
+
+    def _brier(df: pd.DataFrame) -> float:
+        return brier(df[calibration_col].to_numpy(dtype=float), df[correct_col].to_numpy())
+
     result = {}
-    for name, fn in [("ece", _ece), ("accuracy", _accuracy), ("auroc", _auroc)]:
+    for name, fn in [
+        ("ece", _ece), ("accuracy", _accuracy), ("auroc", _auroc),
+        ("overconfidence_gap", _overconfidence_gap), ("brier", _brier),
+    ]:
         diff, ci_low, ci_high = paired_cluster_bootstrap(
             verbose_items, clean_items, fn, "question_id", n=2000, seed=seed
         )

@@ -235,11 +235,15 @@ def main_verbosity(config_path: str) -> None:
     table.to_csv(table_path, index=False)
     print(f"Wrote {len(table)} rows to {table_path}")
 
+    # The title states how much of the padded data is missing, read from the
+    # calls themselves so it cannot drift from the no-verdict table.
+    failures = no_verdict_table(pd.read_parquet(config.paths.calls_parquet))
+    worst = failures[failures["condition"] == "verbose"].sort_values("rate").iloc[-1]
     for dark in (False, True):
         plot_verbosity_deltas(
             [verbosity_panel(t, f"turn {turn}") for turn, t in table.groupby("turn", sort=True)],
             title=("Padding attack on auto-j-13b, among the calls it answered only "
-                   "(no-verdict calls, up to 39.8% of padded turn-2, are excluded;\n"
+                   f"(no-verdict calls, up to {worst['rate']:.1%} of padded turn {int(worst['turn'])}, are excluded;\n"
                    "over all padded items the error-detection change depends on how they are scored: "
                    "see the survivorship bounds)"),
             filename=f"rq7_verbosity_deltas_{config.model_slug}.png",

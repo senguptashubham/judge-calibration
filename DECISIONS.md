@@ -771,5 +771,14 @@ down before any of the checks were run.
   R-hat 1.008, lowest ESS 617. The figure is
   `rq5_bayesian_convergence_two_call_qwen2.5_7b_instruct.png`.
 
+**Also found in the final audit.** REPORT and README quote two bin-free checks on
+the padding result for `conf_bpe`:
+- the paired change in the overconfidence gap, +0.031 [0.012, 0.051];
+- the paired change in the Brier score, +0.018 [0.005, 0.032].
+
+No tracked code produced them. `analysis/rq3.py` now computes both deltas for every
+signal, with the same paired bootstrap as ΔECE. They reproduce exactly, and the
+table's existing columns are unchanged.
+
 Where: `src/perturb.py`, `src/vacuum_test.py`, `analysis/vacuum.py`,
-`analysis/rq5.py`.
+`analysis/rq3.py`, `analysis/rq5.py`.
