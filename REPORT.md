@@ -904,12 +904,14 @@ in-sample, which would bias the interaction before the CI method even
 matters); fit `correct ~ oof_score * d_human`; cluster-bootstrap (B=2000,
 refitting each resample) on the interaction coefficient.*
 
-**Result: interaction coefficient +2.3752 [1.6849, 3.0739] — the CI clears
-zero comfortably, H4 holds.** The predictor's edge genuinely grows with
-human consensus: judge error is learnable where humans agree (epistemic,
-reducible) and much less so where they don't (aleatoric, irreducible) — a
-clean positive result, in real contrast to the tier ablation's null finding
-above. `h4_interaction_qwen2.5_7b_instruct.png` has two panels, probability
+**Result: interaction coefficient +2.3752 [1.6849, 3.0739]. The CI clears
+zero, so H4 is supported.** The predictor ranks errors better where the humans
+agreed than where they split. That is consistent with the reading that the errors
+no signal catches sit where the label itself is uncertain, but it does not prove
+it. The contrast rests on 564 unanimous items against 31 split-vote items, from
+19 questions (below). The cluster bootstrap carries that thinness into the
+interval, and the interval still clears zero. It is a positive result,
+unlike the tier ablation's null finding above. `h4_interaction_qwen2.5_7b_instruct.png` has two panels, probability
 and log-odds, because the probability-space panel alone visually undersells
 the effect — sigmoid
 saturation compresses the slope difference exactly where most of the real
@@ -921,9 +923,9 @@ log-odds slope per unit of `d_human`, which runs only from 0.167 to 0.5 here, so
 across the observed range the slope grows by about 0.8. And the observed range is
 thin at one end: of the 595 items, 564 are unanimous (`d_human` = 0.5), 28 sit at
 0.167 and 3 at 0.25 (RQ2's human-disagreement section). The contested end of the
-interaction therefore rests on 31 items from 19 questions, which the cluster-bootstrap interval
-reflects but a reader of the figure, which draws a full line for each value,
-might not.
+interaction therefore rests on 31 items from 19 questions. The cluster-bootstrap
+interval reflects this. The figure draws a full fitted line for each value, so its
+legend gives each line's item count.
 
 ### Transfer test 1 — train on clean, test on verbose
 

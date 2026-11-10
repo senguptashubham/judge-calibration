@@ -92,9 +92,10 @@ three judges, and it is interactive in section 04 of the site.
      auto-j it adds a small amount on turn 1 (+0.018 [0.003, 0.033], borderline,
      and only when each cross-validation fold is scored separately) and nothing
      detectable on turn 2.
-   - The meta-model's edge does grow where humans agree (H4 interaction +2.38
-     [1.68, 3.07]), so errors are learnable where the ground truth is clear. This
-     rests on the 595 items with at least two votes, only 31 of them split.
+   - The meta-model's edge is larger where humans agreed (H4 interaction +2.38
+     [1.68, 3.07]). That is consistent with errors being learnable where the ground
+     truth is clear, but does not prove it. It rests on the 595 items with at least
+     two votes, only 31 of them with split votes.
 5. **Two calls instead of six, with no detectable loss.** On the two answer-order calls alone, a
    Bayesian meta-model costs a third of the 3-prompt ensemble's 6 calls. Its
    ranking of errors is not detectably worse when each cross-validation fold is

@@ -326,7 +326,11 @@ def compute_h4_interaction_curves(predictions_df: pd.DataFrame, n_grid: int = 10
     it where most data sits (high oof_score).
     """
     model = fit_h4_interaction_model(predictions_df)
-    d_human_values = sorted(predictions_df["d_human"].round(4).unique())
+    rounded = predictions_df["d_human"].round(4)
+    d_human_values = sorted(rounded.unique())
+    # How many items sit at each level, so the figure shows how little data
+    # the split-vote lines rest on.
+    n_items = [int((rounded == value).sum()) for value in d_human_values]
     oof_score_grid = np.linspace(0, 1, n_grid)
 
     predicted_curves = []
@@ -340,6 +344,7 @@ def compute_h4_interaction_curves(predictions_df: pd.DataFrame, n_grid: int = 10
         "oof_score": predictions_df["oof_score"].to_numpy(),
         "oof_score_grid": oof_score_grid,
         "d_human_values": d_human_values,
+        "n_items": n_items,
         "predicted_curves": predicted_curves,
         "log_odds_curves": log_odds_curves,
     }
@@ -358,7 +363,7 @@ def main_h4(config_path: str) -> None:
         f"[{result['ci_low']:.4f}, {result['ci_high']:.4f}]"
     )
     if result["ci_low"] > 0:
-        print("CI excludes 0 (positive): the predictor's edge grows with human consensus - supports H4.")
+        print("CI excludes 0 (positive): the predictor's edge is larger where humans agreed - supports H4.")
     elif result["ci_high"] < 0:
         print("CI excludes 0 (negative): the predictor's edge SHRINKS with human consensus - contradicts H4.")
     else:
@@ -374,6 +379,7 @@ def main_h4(config_path: str) -> None:
             oof_score=curves["oof_score"],
             oof_score_grid=curves["oof_score_grid"],
             d_human_values=curves["d_human_values"],
+            n_items=curves["n_items"],
             predicted_curves=curves["predicted_curves"],
             log_odds_curves=curves["log_odds_curves"],
             model_slug=config.model_slug,
@@ -1130,6 +1136,7 @@ def main_bayesian_comparison(config_path: str) -> None:
             flagged=np.array([fold_diag["flagged"] for fold_diag in all_diag]),
             n_divergences=np.array([fold_diag["n_divergences"] for fold_diag in all_diag]),
             model_slug=config.model_slug,
+            title=f"Bayesian model convergence ({judge_name(config.model_slug)}, all-signals model)",
             dark=dark,
         )
 

@@ -550,9 +550,10 @@ def plot_human_disagreement(
         ax.set_ylim(bin_y.min() - y_pad, bin_y.max() + y_pad)
         ax.set_xlabel("human consensus d_human (0.5 = unanimous)")
         ax.set_ylabel(ylabel)
-        ax.set_title(f"{ylabel}\nSpearman ρ = {rho:.3f} over all items", fontsize=10)
+        ax.set_title(f"{ylabel}\nSpearman ρ = {rho:.3f} over all {len(d_human_arr)} items", fontsize=10)
 
-    fig.suptitle(f"Judge behaviour vs. human consensus ({judge_name(model_slug)})")
+    fig.suptitle(f"Judge behaviour vs. human consensus ({judge_name(model_slug)}, "
+                 f"{len(d_human_arr)} items with ≥ 2 human votes)")
     return _save(fig, f"human_disagreement_{model_slug}.png")
 
 
@@ -715,9 +716,11 @@ def plot_confidence_gap(panels: list[dict], title: str, filename: str) -> Figure
                      "confidence when flipped − when stable\n(95% cluster-bootstrap CI)", colors=colors, hollow=hollow)
         ax.set_title(panel["title"])
     fig.suptitle(title)
-    fig.text(0.01, 0.01, "† built from the same two orders that define a flip, so a large gap is expected by construction",
+    fig.text(0.01, 0.01, "blue = confidence drops where the verdict flipped (the signal flags those errors); "
+             "red = it rises; hollow = CI includes 0\n"
+             "† built from the same two orders that define a flip, so a large gap is expected by construction",
              fontsize=7, color=_theme.note)
-    return _save(fig, filename, rect=(0, 0.04, 1, 1))
+    return _save(fig, filename, rect=(0, 0.07, 1, 1))
 
 
 @_dark_variant
@@ -879,12 +882,17 @@ def plot_h4_interaction(
     predicted_curves: list[np.ndarray],
     log_odds_curves: list[np.ndarray],
     model_slug: str,
+    n_items: list[int] | None = None,
 ) -> Figure:
     """H4: predicted P(correct) vs the predictor's OOF score, one curve
     per d_human level. Left: probability scale, with a rug of the real
     scores. Right: log-odds, where the model is linear and the interaction
     is simply the slope difference - on the probability scale, sigmoid
     saturation hides it where most real scores sit.
+
+    The curves are fitted lines, drawn across the whole score range even
+    where a level has few items, so the legend carries each level's item
+    count (`n_items`) and the title asks rather than asserts.
 
     Saved to results/figures/h4_interaction_{model_slug}.png.
     """
@@ -894,11 +902,15 @@ def plot_h4_interaction(
     ramp = LinearSegmentedColormap.from_list("ramp", [_theme.ramp_low, _theme.ink])
     colors = [ramp(i / max(len(d_human_values) - 1, 1)) for i in range(len(d_human_values))]
     markers = ["o", "s", "^", "D"]
+    labels = [
+        f"d_human = {value:.3f}" + (f" (n = {n_items[i]})" if n_items is not None else "")
+        for i, value in enumerate(d_human_values)
+    ]
 
     ax = axes[0]
-    for i, (color, d_human_value, curve) in enumerate(zip(colors, d_human_values, predicted_curves)):
+    for i, (color, label, curve) in enumerate(zip(colors, labels, predicted_curves)):
         ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, marker=markers[i % len(markers)], markevery=0.1,
-                label=f"d_human = {d_human_value:.3f}")
+                label=label)
     # Rug below the [0, 1] axis so it never overlaps the curves.
     ax.plot(oof_score, np.full_like(oof_score, -0.04), marker="|", linestyle="", color=_theme.ink, alpha=0.3,
             markersize=8, clip_on=False)
@@ -910,15 +922,16 @@ def plot_h4_interaction(
     ax.legend(loc="upper left", fontsize=9, title="human consensus (0.5 = unanimous)")
 
     ax = axes[1]
-    for i, (color, d_human_value, curve) in enumerate(zip(colors, d_human_values, log_odds_curves)):
+    for i, (color, label, curve) in enumerate(zip(colors, labels, log_odds_curves)):
         ax.plot(oof_score_grid, curve, color=color, linewidth=2.5, marker=markers[i % len(markers)], markevery=0.1,
-                label=f"d_human = {d_human_value:.3f}")
+                label=label)
     ax.set_xlim(0, 1)
     ax.set_xlabel("meta-model's out-of-fold P(correct)")
     ax.set_ylabel("log-odds of correct")
     ax.set_title("Log-odds scale (slopes undistorted)")
 
-    fig.suptitle("The meta-model's edge grows with human consensus (H4)")
+    fig.suptitle("Is the meta-model's edge larger where humans agreed? (H4, fitted lines)\n"
+                 "The split-vote lines are fitted from few items; read the interaction with its CI, not the lines")
     return _save(fig, f"h4_interaction_{model_slug}.png")
 
 
@@ -1059,8 +1072,13 @@ def plot_rq4_coefficients(
                  df["ci_high"].to_numpy(), "coefficient on standardized feature (> 0 = judge more likely right)",
                  colors=colors, markers=markers)
     ax.legend(handles=_family_legend_handles(sorted(df["family"].unique())), loc="lower right", fontsize=8)
-    ax.set_title(f"Which features predict judge error?\n{len(df)} of {len(features)} coefficients clear zero "
-                 f"(logistic regression, all tiers)", fontsize=10)
+    title = (f"Which features predict judge error?\n{len(df)} of {len(features)} coefficients clear zero "
+             f"(logistic regression, all tiers)")
+    # conf_ens = 1 - ens_entropy_total exactly, so the model splits one effect
+    # into two equal-and-opposite coefficients; say so wherever both appear.
+    if {"conf_ens", "ens_entropy_total"} <= set(df["feature"]):
+        title += "\nconf_ens and ens_entropy_total are one signal (conf_ens = 1 − total entropy), counted twice"
+    ax.set_title(title, fontsize=10)
     return _save(fig, f"rq4_coefficients_{model_slug}.png")
 
 
@@ -1250,8 +1268,10 @@ def plot_judge_comparison(panels: list[dict], filename: str = "judge_comparison.
         ax.set_title(panel["title"], fontsize=10)
     for ax in list(axes.flat)[len(panels):]:
         ax.set_visible(False)
-    fig.suptitle("Three judges, same items, same tests "
-                 "(95% cluster-bootstrap CIs; hollow = interval includes the dotted reference)")
+    # Each judge is scored on its own population (exclusions and splits differ),
+    # so the title must not suggest a like-for-like comparison.
+    fig.suptitle("Three judges, the same tests, each on its own items: read side by side, not as a ranking\n"
+                 "(95% cluster-bootstrap CIs per judge; hollow = interval includes the dotted reference)")
     return _save(fig, filename)
 
 
@@ -1261,6 +1281,10 @@ AUTO_ACCEPT_FIGURE_SIGNALS = {
     "kev-8b": ["conf_kev", "conf_kev_bpe_prob"],
     "auto-j-13b": ["conf_sc_autoj", "conf_sc_bpe_autoj_greedy_prob"],
 }
+
+# Legend names that need more than signal_label() gives: the meta-model reads
+# every signal and is scored on RQ4's smaller population, unlike the rest.
+AUTO_ACCEPT_FIGURE_LABELS = {"p_correct_bayesian": "Bayesian meta-model (all signals, 10 calls, N = 1,819)"}
 
 
 @_dark_variant
@@ -1288,7 +1312,8 @@ def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Fig
                 df = curves[(curves["judge"] == judge) & (curves["signal"] == signal) & (curves["condition"] == condition)]
                 if df.empty:
                     continue
-                label = signal_label(signal) + ("" if condition == "clean" else " (padded)")
+                name = AUTO_ACCEPT_FIGURE_LABELS.get(signal, signal_label(signal))
+                label = name + ("" if condition == "clean" else " (padded)")
                 axes[0][col].plot(df["threshold"], df["slip_through"], color=color, linestyle=linestyle, label=label)
                 axes[1][col].plot(df["threshold"], df["accepted_share"], color=color, linestyle=linestyle)
         for row in (0, 1):
@@ -1302,7 +1327,8 @@ def plot_auto_accept(curves: pd.DataFrame, threshold_marker: float = 0.9) -> Fig
         axes[1][col].set_xlabel("auto-accept when confidence ≥")
     axes[0][0].set_ylabel("share of WRONG verdicts accepted unreviewed")
     axes[1][0].set_ylabel("share of ALL verdicts accepted")
-    fig.suptitle("If you auto-accept confident verdicts, how many errors slip through - and how much do you accept?")
+    fig.suptitle("If you auto-accept confident verdicts, how many errors slip through - and how much do you accept?\n"
+                 "(post-hoc and descriptive; thresholds are illustrative, not tuned; auto-j: answered calls only)")
     return _save(fig, "auto_accept.png")
 
 

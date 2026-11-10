@@ -238,7 +238,10 @@ def main_verbosity(config_path: str) -> None:
     for dark in (False, True):
         plot_verbosity_deltas(
             [verbosity_panel(t, f"turn {turn}") for turn, t in table.groupby("turn", sort=True)],
-            title="Padding attack on auto-j-13b, among the calls it answered",
+            title=("Padding attack on auto-j-13b, among the calls it answered only "
+                   "(no-verdict calls, up to 39.8% of padded turn-2, are excluded;\n"
+                   "over all padded items the error-detection change depends on how they are scored: "
+                   "see the survivorship bounds)"),
             filename=f"rq7_verbosity_deltas_{config.model_slug}.png",
             dark=dark,
         )
