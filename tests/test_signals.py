@@ -209,6 +209,18 @@ def test_conf_sc_hand_computed():
     assert conf_sc(rows, k_sc=4) == pytest.approx(0.75)
 
 
+def test_conf_sc_failed_draw_counts_as_mismatch():
+    # D35: a sampled draw with no verdict stays in the denominator, 3/4 not 3/3.
+    rows = [
+        _call("AB", 0, verdict="A"),
+        _call("AB", 1, verdict=None),
+        _call("AB", 2, verdict="A"),
+        _call("AB", 3, verdict="A"),
+        _call("AB", 4, verdict="A"),
+    ]
+    assert conf_sc(rows, k_sc=4) == pytest.approx(0.75)
+
+
 def test_conf_sc_none_when_no_sampled_draws_exist():
     # clean/P1 only (D19, D21) - P2/P3/verbose rows have no sampled calls.
     rows = [_call("AB", 0, verdict="A"), _call("BA", 0, verdict="A")]

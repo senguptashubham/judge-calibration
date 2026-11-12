@@ -1074,10 +1074,15 @@ def plot_rq4_coefficients(
     ax.legend(handles=_family_legend_handles(sorted(df["family"].unique())), loc="lower right", fontsize=8)
     title = (f"Which features predict judge error?\n{len(df)} of {len(features)} coefficients clear zero "
              f"(logistic regression, all tiers)")
-    # conf_ens = 1 - ens_entropy_total exactly, so the model splits one effect
-    # into two equal-and-opposite coefficients; say so wherever both appear.
-    if {"conf_ens", "ens_entropy_total"} <= set(df["feature"]):
-        title += "\nconf_ens and ens_entropy_total are one signal (conf_ens = 1 − total entropy), counted twice"
+    # The four ensemble columns hold only two independent signals:
+    # conf_ens = 1 - total and total = aleatoric + epistemic, exactly. The
+    # model can move weight between them without changing a prediction, so
+    # no single one of their coefficients is identified; say so wherever two
+    # or more of them clear zero.
+    ensemble_columns = {"conf_ens", "ens_entropy_total", "ens_entropy_aleatoric", "ens_entropy_epistemic"}
+    if len(ensemble_columns & set(df["feature"])) >= 2:
+        title += ("\nconf_ens and the three ensemble entropies are two signals, not four "
+                  "(conf_ens = 1 − total, total = aleatoric + epistemic):\nread their coefficients as one family")
     ax.set_title(title, fontsize=10)
     return _save(fig, f"rq4_coefficients_{model_slug}.png")
 

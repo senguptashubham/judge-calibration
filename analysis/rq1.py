@@ -87,8 +87,8 @@ def compute_verdict_metrics(items: pd.DataFrame, correct_col: str, verdict_col: 
 
 def compute_signal_metrics(items: pd.DataFrame, signal: str, correct_col: str, n_bins: int, seed: int) -> dict:
     """The per-signal metrics: ECE, MCE, Brier, the decomposition's
-    reliability and resolution terms (each with its own CI), and the
-    overconfidence gap.
+    reliability and resolution terms (each with its own CI), the
+    overconfidence gap, and the ECE's effective bin count on the full data.
     """
     def _ece(df: pd.DataFrame) -> float:
         value, _ = ece(df[signal].to_numpy(), df[correct_col].to_numpy(), n_bins)
@@ -112,7 +112,7 @@ def compute_signal_metrics(items: pd.DataFrame, signal: str, correct_col: str, n
     def _overconfidence_gap(df: pd.DataFrame) -> float:
         return overconfidence_gap(df[signal].to_numpy(), df[correct_col].to_numpy())
 
-    return _bootstrap_battery(
+    metrics = _bootstrap_battery(
         items,
         {
             "ece": _ece,
@@ -124,6 +124,9 @@ def compute_signal_metrics(items: pd.DataFrame, signal: str, correct_col: str, n
         },
         seed,
     )
+    # The bins the full-data ECE, MCE and decomposition use (invariant 4).
+    _, metrics["ece_n_effective_bins"] = ece(items[signal].to_numpy(), items[correct_col].to_numpy(), n_bins)
+    return metrics
 
 
 def compute_verdict_gap(items: pd.DataFrame, seed: int) -> dict:

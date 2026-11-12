@@ -529,7 +529,9 @@ statistic**. Its data is built by `analysis/demo_bundle.py` → `analysis/site_d
 
 **Licensing and publishing.**
 
-- Code is under MIT; text and figures are under CC BY 4.0.
+- Code is under MIT; text and figures are under CC BY 4.0. `LICENSE` holds the
+  current terms, which since extend CC BY to the result tables and the site's
+  data, and record the judge models' own licences for their recorded outputs.
 - The site is published on GitHub Pages and as a Hugging Face Space.
 - The judge checkpoints are published as the Hugging Face dataset
   `shubhamsengupta/judge-calibration-runs`.
@@ -782,3 +784,89 @@ table's existing columns are unchanged.
 
 Where: `src/perturb.py`, `src/vacuum_test.py`, `analysis/vacuum.py`,
 `analysis/rq3.py`, `analysis/rq5.py`.
+
+### D35 — Edge cases recorded, and one fixed, after a follow-up audit
+A follow-up audit of the code against the invariants found four behaviours that had
+never been written down. One is fixed; the other three are kept, with the reason.
+
+1. **A zero-probability candidate in the CoT entropy (fixed).** `truncated_entropy`
+   computed 0 · log 0 directly when vLLM reported a top-K candidate at logprob −∞,
+   which gives NaN. It now drops those candidates, since p · log p → 0 as p → 0.
+   - **Where it happened:** 2 Qwen calls, both sampled draws truncated at the
+     512-token limit (parse failures). Their `cot_entropy_mean` was NaN and so was
+     left out of the item's `cot_entropy_mean_sampled_t07`; it is now finite and
+     included. That is one Tier C feature, on 2 of 1,904 items.
+   - **Result:** on those 2 items the feature moved from 0.871 to 0.688 and from
+     0.776 to 0.601; no other item column changed. Only the analyses that use Tier C
+     moved. The full-population ablation's AUROCs and their intervals shifted by at
+     most 0.0011, and the 37-feature coefficients by at most 0.048, well inside their
+     intervals. The same 8 coefficients clear zero. The all-tiers meta-model's ECE
+     moved from 0.0357 to 0.0335. Every core-tier, RQ5, RQ6 and RQ7
+     value, and `site/data/`, are unchanged (REPRODUCE, reruns after D35).
+2. **A failed sampled draw counts as a disagreement in a self-consistency rate
+   (kept).** In Qwen's `conf_sc` and auto-j's `conf_sc_autoj`, the denominator is
+   every sampled draw that ran, and a draw that produced no verdict does not match
+   the greedy one.
+   - **Why:** a judge that fails to reproduce its verdict has not confirmed it.
+     Leaving the draw out would score the item as more consistent than it was.
+   - **Exposure:** 2 of 7,616 sampled draws for each judge on clean. auto-j compares
+     raw labels, so a Tie matches a Tie, and a failure would match a failure only
+     when the greedy call failed too, which never happens on clean.
+   - **The order-swap proportions differ on purpose.** `conf_sc_bpe_autoj` is a
+     share of draws that chose `model_a`, so it is taken over the draws that gave
+     A or B; ties and failures have no place in it.
+3. **Held-out question intercepts share one random key within a repeat (kept).**
+   `predict_held_out` is seeded with the repeat's seed in every fold, so each fold
+   reuses the same standard-normal draws for its new questions' intercepts. Within a
+   fold the questions still get independent draws, the per-fold AUROC is computed
+   within a fold, and each prediction averages over 4,000 posterior draws. A
+   per-fold key would move every Bayesian result by Monte Carlo noise only, at the
+   cost of a full Bayesian rerun.
+4. **A permutation null uses one cross-validation split per shuffle (kept).** The
+   observed AUROC is a mean over 10 repeated splits; each null replicate is a single
+   split. The null therefore also carries split-to-split noise that the observed
+   mean averages away, so it is wider than strictly needed. That can only
+   understate an observed AUROC's percentile, never overstate it, and repeating
+   every shuffle 10 times would multiply the nulls' cost tenfold.
+
+The same audit found tables that did not yet carry what invariants 4–7 require. Each
+gains columns only; every existing column keeps its position and its values.
+
+5. **Every ECE table states its bin count (D14, invariant 4).** D14 says every table
+   prints `n_effective_bins`, but only RQ4's meta-model output did. It is now a
+   column, the full-data value, in `rq1_table`, `rq3_table`, `rq6_calibration`,
+   `rq6_verbosity`, `rq7_calibration`, `rq7_verbosity`, `rq7_survivorship`,
+   `rq4_bayesian_comparison` and `rq5_distillation`.
+6. **Accuracy always comes with κ (invariants 5 and 6).**
+   - The four padding tables (`rq3_table`, `rq6_verbosity`, `rq7_verbosity`,
+     `rq7_survivorship`) showed accuracy without κ. They gain κ on each side and
+     its paired cluster-bootstrap Δκ, from the same shared function. In
+     `rq7_survivorship`, κ is given for the answered-only rows only: a filled row
+     has no verdict, so κ is undefined there (REPORT, survivorship check).
+   - The RQ6 and RQ7 calibration tables reported ECE with neither accuracy nor κ.
+     Both are added, each with a cluster-bootstrap CI.
+   - The meta-model tables (`rq4_bayesian_comparison`, `rq5_distillation`) score the
+     ECE of a predicted P(judge wrong). The judge's accuracy and κ are the same for
+     every row there, so they add the signed counterpart of ECE instead:
+     `p_wrong_minus_error_rate`, the mean predicted P(wrong) minus the observed
+     error rate, positive when a model predicts more errors than occur.
+7. **The prompt-ensemble columns hold two signals, not four.** REPORT already noted
+   that `conf_ens = 1 − ens_entropy_total`. The audit found the second exact
+   identity, `ens_entropy_total = ens_entropy_aleatoric + ens_entropy_epistemic`
+   (D20's definition), so the four columns plus an intercept have rank 3. In the
+   RQ4 coefficient analysis, how weight is split among them is set by the
+   regularization, so no single coefficient in the family is identified. REPORT and
+   the coefficient figure's note now read the columns as one family; the 5 Tier A
+   coefficients clearing zero are three distinct signals, not five. Tier
+   comparisons and every AUROC are unaffected, because an exactly redundant column
+   changes no prediction.
+8. **The decoding-ablation loader moved to `src/` (invariant 7),** as D34 moved the
+   vacuum loader. `analysis/decoding_ablation.py` read `raw_output` itself, through
+   the production parser. `load_ablation_calls` now lives in
+   `src/ablation_decoding.py` and returns only the parsed fields.
+
+Where: `src/metrics.py::truncated_entropy`, `src/signals.py::conf_sc`,
+`src/autoj_signals.py`, `src/bayesian.py::predict_held_out`,
+`src/predictor.py::permutation_null`, `src/ablation_decoding.py`,
+`analysis/rq1.py`, `analysis/rq3.py`, `analysis/rq4.py`, `analysis/rq5.py`,
+`analysis/rq6.py`, `analysis/rq7.py`, `analysis/decoding_ablation.py`.

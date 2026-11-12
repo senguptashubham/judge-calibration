@@ -1,6 +1,8 @@
 # PREREGISTRATION.md
 
-Written before looking at any judge output (`CLAUDE.md` §7 commands for `src.judge` have not been run). Frozen at Gate 1, per `TASKS.md`.
+Written before looking at any judge output (the project brief's §7 commands for `src.judge` have not been run). Frozen at Gate 1, per `TASKS.md`.
+
+**Edit after freezing (12 November 2026):** four references to the project brief originally named its file, which is no longer in the repository; the brief as it stood when this document was frozen is in the git history at commit `0d3531b`. No other text changed.
 
 **Status of this document:** settled. D1's tie-policy comparison, the primary endpoint, the confirmatory/exploratory split, D2, and D3 were all reviewed and decided on 1 Sep 2026.
 
@@ -16,11 +18,11 @@ Written before looking at any judge output (`CLAUDE.md` §7 commands for `src.ju
 | RQ4 | Can a cheap supervised meta-model beat the best single signal at predicting judge error? | AUROC under repeated `StratifiedGroupKFold`, vs best-single-signal baseline and permutation null |
 | RQ5 | Does marginalizing over the judge prompt improve uncertainty quality, and does that survive distillation to single-call cost? | Ensemble vs single-call AUROC/ECE/entropy-quality gap; aleatoric-vs-`d_human` validation |
 
-RQ4 is the owner's own idea and RQ5 was added 31 Aug 2026 from professor feedback (`DECISIONS.md` D18–D24) — both are binding, not optional extensions (`CLAUDE.md` §1).
+RQ4 is the owner's own idea and RQ5 was added 31 Aug 2026 from professor feedback (`DECISIONS.md` D18–D24) — both are binding, not optional extensions (the project brief, §1).
 
 ## 2. Primary endpoint (decided)
 
-**RQ4's AUROC vs. the best-single-signal baseline (from RQ2), validated against a permutation null.** RQ4 is the culmination, not RQ2 — RQ2's signals and its AUROC(uncertainty → error) result are the *baseline RQ4 has to beat*, not the headline in their own right. `CLAUDE.md` flags RQ4 as "the owner's own idea... not optional... protect it" — the single strongest editorial signal in the project about what matters most — and it was designed from the outset so that every possible outcome is reportable (`PLAN.md` §2.2: "A ≈ best single signal," "B ≫ A," "C ≫ B," or "nothing beats the permutation null" are all a slide, none is a failed project). That makes it a *safer* choice for a primary endpoint, not a riskier one, since the evidentiary bar was deliberately built to survive a negative result. The primary endpoint decides slide #1 of the defense and the one-sentence framing of the abstract — it does not change what gets built (everything in RQ1–RQ5 is delivered regardless).
+**RQ4's AUROC vs. the best-single-signal baseline (from RQ2), validated against a permutation null.** RQ4 is the culmination, not RQ2 — RQ2's signals and its AUROC(uncertainty → error) result are the *baseline RQ4 has to beat*, not the headline in their own right. The project brief flags RQ4 as "the owner's own idea... not optional... protect it" — the single strongest editorial signal in the project about what matters most — and it was designed from the outset so that every possible outcome is reportable (`PLAN.md` §2.2: "A ≈ best single signal," "B ≫ A," "C ≫ B," or "nothing beats the permutation null" are all a slide, none is a failed project). That makes it a *safer* choice for a primary endpoint, not a riskier one, since the evidentiary bar was deliberately built to survive a negative result. The primary endpoint decides slide #1 of the defense and the one-sentence framing of the abstract — it does not change what gets built (everything in RQ1–RQ5 is delivered regardless).
 
 ## 3. Confirmatory vs exploratory (decided)
 
@@ -55,7 +57,7 @@ Full implementation and unit tests: `src/data.py::build_items()`, `tests/test_da
 
 ## 5. D2 — Label construction (decided)
 
-**Decision:** `human_label` (used from `items.parquet` onward, task 2.2) = `majority_label` from `build_items()`, restricted to items where `is_tie == False`. Items where `is_tie == True` are excluded from the judge-evaluation population entirely — there is no genuine human ground truth to score a forced-choice judge against when humans themselves couldn't converge on a winner (the judge is constrained to `{A, B}` with no tie option, `CLAUDE.md` §3, so it can never express agreement with a "tied" human verdict in the first place).
+**Decision:** `human_label` (used from `items.parquet` onward, task 2.2) = `majority_label` from `build_items()`, restricted to items where `is_tie == False`. Items where `is_tie == True` are excluded from the judge-evaluation population entirely — there is no genuine human ground truth to score a forced-choice judge against when humans themselves couldn't converge on a winner (the judge is constrained to `{A, B}` with no tie option, the project brief, §3, so it can never express agreement with a "tied" human verdict in the first place).
 
 **The ≥150-item fallback:** the concern this guards against is too few usable (non-tied) items to run the study meaningfully. Under D1's decision, **N non-tie = 1904** — comfortably clear of 150. The fallback is not triggered; no further action needed on this axis. (Had it been triggered, the intended contingency was reconsidering D3's augmentation option or relaxing the tie policy — noted for completeness, not needed here.)
 

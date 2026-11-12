@@ -58,7 +58,7 @@ from src.bayesian import (
     repeated_stratified_group_kfold_bayesian,
     summarize_diagnostics,
 )
-from src.metrics import auroc_error, brier, ece, get_bin_edges, per_fold_auroc_error
+from src.metrics import auroc_error, brier, ece, get_bin_edges, overconfidence_gap, per_fold_auroc_error
 from src.plots import (
     judge_name,
     plot_bayesian_convergence,
@@ -883,6 +883,8 @@ def main_calibration(config_path: str) -> None:
         f"ECE of P(judge is wrong) = {calibration['ece']:.4f} "
         f"(n_effective_bins={calibration['n_effective_bins']})"
     )
+    p_wrong_gap = overconfidence_gap(calibration["p_wrong"], calibration["is_wrong"])
+    print(f"Mean P(judge is wrong) - observed error rate = {p_wrong_gap:+.4f} (> 0: predicts more errors than occur)")
 
     plot_reliability_diagram(
         confidences=calibration["p_wrong"],
@@ -1052,9 +1054,9 @@ def main_bayesian_comparison(config_path: str) -> None:
     freq_p_wrong = 1 - freq["mean_oof_correct"]
     bayes_p_wrong = 1 - bayes["mean_oof_correct"]
 
-    freq_ece, _ = ece(freq_p_wrong, is_wrong, config.n_bins)
+    freq_ece, freq_bins = ece(freq_p_wrong, is_wrong, config.n_bins)
     freq_brier = brier(freq_p_wrong, is_wrong)
-    bayes_ece, _ = ece(bayes_p_wrong, is_wrong, config.n_bins)
+    bayes_ece, bayes_bins = ece(bayes_p_wrong, is_wrong, config.n_bins)
     bayes_brier = brier(bayes_p_wrong, is_wrong)
 
     bayes_pooled_wrong_draws = 1 - bayes["pooled_draws"]
@@ -1089,6 +1091,14 @@ def main_bayesian_comparison(config_path: str) -> None:
             },
         ]
     )
+    # Invariants 4 and 6: the ECE's bin count, and the signed gap of
+    # P(wrong) - mean predicted P(wrong) minus the observed error rate,
+    # positive when the model predicts more errors than occur. Appended
+    # last so the earlier columns keep their positions.
+    table["ece_n_effective_bins"] = [freq_bins, bayes_bins]
+    table["p_wrong_minus_error_rate"] = [
+        overconfidence_gap(freq_p_wrong, is_wrong), overconfidence_gap(bayes_p_wrong, is_wrong)
+    ]
     table_path = f"{config.paths.results_dir}/rq4_bayesian_comparison_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(table.to_string(index=False))

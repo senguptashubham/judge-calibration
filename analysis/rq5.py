@@ -51,7 +51,9 @@ from src.bayesian import posterior_predictive_entropy_decomposition, summarize_d
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap, paired_per_fold_bootstrap
 from src.config import Config
 from src.features import build_tier_a, build_two_call, load_rq4_population
-from src.metrics import aurc, auroc_error, ece, oracle_risk_coverage, per_fold_auroc_error, risk_coverage, threshold_sweep
+from src.metrics import (
+    aurc, auroc_error, ece, oracle_risk_coverage, overconfidence_gap, per_fold_auroc_error, risk_coverage, threshold_sweep,
+)
 from src.plots import (
     judge_name, plot_bayesian_convergence, plot_d_human_correlations, plot_risk_coverage, plot_rq5_distillation,
 )
@@ -165,9 +167,13 @@ def compute_ensemble_metrics(items: pd.DataFrame, n_bins: int, seed: int) -> dic
 
     p_wrong = 1 - items["conf_ens_prob"].to_numpy(dtype=float)
     is_wrong = 1 - items["correct"].astype(int).to_numpy()
-    ece_value, _ = ece(p_wrong, is_wrong, n_bins)
+    ece_value, n_effective_bins = ece(p_wrong, is_wrong, n_bins)
 
-    return {"auroc": auroc_point, "auroc_ci_low": auroc_low, "auroc_ci_high": auroc_high, "ece": ece_value}
+    return {
+        "auroc": auroc_point, "auroc_ci_low": auroc_low, "auroc_ci_high": auroc_high, "ece": ece_value,
+        "ece_n_effective_bins": n_effective_bins,
+        "p_wrong_minus_error_rate": overconfidence_gap(p_wrong, is_wrong),
+    }
 
 
 # Calls per item. The ensemble reads three prompts in both orders. The
@@ -191,7 +197,8 @@ def fit_distilled_model(
     """
     bayes = compute_bayesian_arm(population, seed, feature_builder=feature_builder)
     correct = population["correct"].astype(int).to_numpy()
-    ece_value, _ = ece(1 - bayes["mean_oof_correct"], 1 - correct, n_bins)
+    p_wrong = 1 - bayes["mean_oof_correct"]
+    ece_value, n_effective_bins = ece(p_wrong, 1 - correct, n_bins)
     epistemic_aurocs = [
         per_fold_auroc_error(e, correct, f) for e, f in zip(bayes["epistemic_by_repeat"], bayes["fold_ids"])
     ]
@@ -204,6 +211,8 @@ def fit_distilled_model(
         "epistemic_auroc": float(np.mean(epistemic_aurocs)),
         "epistemic_auroc_pooled_draws": auroc_error(pooled_epistemic, correct),
         "ece": ece_value,
+        "ece_n_effective_bins": n_effective_bins,
+        "p_wrong_minus_error_rate": overconfidence_gap(p_wrong, 1 - correct),
         "uncertainty_by_repeat": [1 - p for p in bayes["oof_by_repeat"]],
         "epistemic_by_repeat": bayes["epistemic_by_repeat"],
         "fold_ids": bayes["fold_ids"],
@@ -226,9 +235,15 @@ def main_distillation(config_path: str) -> None:
     ensemble = compute_ensemble_metrics(population, config.n_bins, config.seed)
 
     rows, gaps, plotted = [], [], []
+    # Invariants 4 and 6 for each row's ECE, appended as the table's last
+    # columns so the earlier ones keep their positions.
+    calibration_extras = {
+        "ensemble_3prompt": {k: ensemble[k] for k in ("ece_n_effective_bins", "p_wrong_minus_error_rate")}
+    }
     for name, (feature_builder, n_calls) in DISTILLED_MODELS.items():
         print(f"Fitting {name} ({n_calls} calls, D8 10x5 repeated CV - ~7 min)...")
         fit = fit_distilled_model(population, feature_builder, config.n_bins, config.seed)
+        calibration_extras[name] = {k: fit[k] for k in ("ece_n_effective_bins", "p_wrong_minus_error_rate")}
         folds = fit["fold_ids"]
         n_repeats = len(folds)
 
@@ -313,6 +328,8 @@ def main_distillation(config_path: str) -> None:
         },
     )
     table = pd.DataFrame.from_records(rows)
+    for column in ("ece_n_effective_bins", "p_wrong_minus_error_rate"):
+        table[column] = table["model"].map(lambda m: calibration_extras[m][column])
     table_path = f"{config.paths.results_dir}/rq5_distillation_{config.model_slug}.csv"
     table.to_csv(table_path, index=False)
     print(table.to_string(index=False))

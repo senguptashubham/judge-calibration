@@ -3,9 +3,9 @@ change the parse rate or the judge's verdict? (D25)
 
 `python -m analysis.decoding_ablation --config configs/run.yaml`
 
-Reads {runs_dir}/ablation_decoding.jsonl (src/ablation_decoding.py) and
-scores every row with the production parser, parse.py::
-parse_verdict_and_confidence(), unmodified. Reports the parse rate per
+Reads the parsed ablation calls (src/ablation_decoding.py::load_ablation_calls),
+which score every row with the production parser,
+parse.py::parse_verdict_and_confidence(), unmodified. Reports the parse rate per
 decoding mode and, among items where both modes parsed, the fraction with
 identical verdicts. Plain proportions, no CI: a 100-item limitations
 check, not a core RQ.
@@ -14,26 +14,11 @@ Writes results/ablation_decoding_{model_slug}.csv (parse-rate table).
 """
 
 import argparse
-import json
 
 import pandas as pd
 
+from src.ablation_decoding import load_ablation_calls
 from src.config import Config
-from src.parse import parse_verdict_and_confidence
-
-
-def load_ablation_calls(checkpoint_path: str) -> pd.DataFrame:
-    """ablation_decoding.jsonl -> one row per (item, decoding_mode), with
-    parse_verdict_and_confidence() merged in.
-    """
-    records = []
-    with open(checkpoint_path, "r", encoding="utf-8") as f:
-        for line in f:
-            row = json.loads(line)
-            record = dict(row)
-            record.update(parse_verdict_and_confidence(row["raw_output"]))
-            records.append(record)
-    return pd.DataFrame.from_records(records)
 
 
 def compute_parse_rates(calls: pd.DataFrame) -> pd.DataFrame:

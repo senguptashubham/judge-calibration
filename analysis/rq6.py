@@ -34,7 +34,7 @@ from analysis.rq3 import (
 from src.bayesian import permutation_null_bayesian, repeated_stratified_group_kfold_bayesian, summarize_diagnostics
 from src.boot import cluster_bootstrap, paired_per_fold_bootstrap
 from src.judge_kev import KevConfig
-from src.metrics import auroc_error, brier, ece, overconfidence_gap
+from src.metrics import auroc_error, brier, cohens_kappa, ece, overconfidence_gap
 from src.plots import (
     plot_bayesian_convergence,
     plot_confidence_gap,
@@ -102,13 +102,15 @@ def load_rq6_paired_items(items_parquet: str) -> tuple[pd.DataFrame, pd.DataFram
 def compute_signal_calibration(
     items: pd.DataFrame, signal: str, n_bins: int, seed: int, calibration_col: str | None = None
 ) -> dict:
-    """ECE, Brier, overconfidence gap, and AUROC for one signal, each with a
-    cluster-bootstrap CI - RQ1's recipe. The caller must already have
-    filtered `items` to this signal's non-null rows.
+    """ECE, Brier, overconfidence gap, AUROC, accuracy and Cohen's kappa for
+    one signal, each with a cluster-bootstrap CI - RQ1's recipe - plus the
+    ECE's effective bin count on the full data (invariants 4-6). The caller
+    must already have filtered `items` to this signal's non-null rows.
 
     ECE, Brier and the gap use `calibration_col` (default: `signal`), AUROC
     uses `signal`: an entropy signal ranks errors but needs its probability
-    form for calibration (signals.py::prob_on_verdict).
+    form for calibration (signals.py::prob_on_verdict). Accuracy and kappa
+    score `judge_verdict` against `human_label` on the same rows.
     """
     calibration_col = calibration_col or signal
 
@@ -126,12 +128,22 @@ def compute_signal_calibration(
         uncertainty = 1 - df[signal].to_numpy(dtype=float)
         return auroc_error(uncertainty, df["correct"].to_numpy())
 
+    def _accuracy(df: pd.DataFrame) -> float:
+        return df["correct"].astype(float).mean()
+
+    def _kappa(df: pd.DataFrame) -> float:
+        return cohens_kappa(df["judge_verdict"].to_numpy(), df["human_label"].to_numpy())
+
     result = {}
-    for name, fn in [("ece", _ece), ("brier", _brier), ("overconfidence_gap", _overconfidence_gap), ("auroc", _auroc)]:
+    for name, fn in [
+        ("ece", _ece), ("brier", _brier), ("overconfidence_gap", _overconfidence_gap), ("auroc", _auroc),
+        ("accuracy", _accuracy), ("kappa", _kappa),
+    ]:
         point, ci_low, ci_high = cluster_bootstrap(items, fn, "question_id", n=2000, seed=seed)
         result[name] = point
         result[f"{name}_ci_low"] = ci_low
         result[f"{name}_ci_high"] = ci_high
+    _, result["ece_n_effective_bins"] = ece(items[calibration_col].to_numpy(), items["correct"].to_numpy(), n_bins)
     return result
 
 
@@ -152,8 +164,10 @@ def main_calibration(config_path: str) -> None:
             )
             rows.append({"regime": regime, "signal": signal, "n": len(regime_items), **metrics})
             print(
-                f"  {regime}/{signal}: ECE={metrics['ece']:.4f} "
-                f"[{metrics['ece_ci_low']:.4f}, {metrics['ece_ci_high']:.4f}], "
+                f"  {regime}/{signal}: accuracy={metrics['accuracy']:.4f}, kappa={metrics['kappa']:.4f}, "
+                f"ECE={metrics['ece']:.4f} "
+                f"[{metrics['ece_ci_low']:.4f}, {metrics['ece_ci_high']:.4f}] "
+                f"({metrics['ece_n_effective_bins']} bins), "
                 f"overconfidence_gap={metrics['overconfidence_gap']:.4f} "
                 f"[{metrics['overconfidence_gap_ci_low']:.4f}, {metrics['overconfidence_gap_ci_high']:.4f}], "
                 f"AUROC={metrics['auroc']:.4f} [{metrics['auroc_ci_low']:.4f}, {metrics['auroc_ci_high']:.4f}]"

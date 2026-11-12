@@ -16,10 +16,15 @@ def truncated_entropy(logprobs: npt.ArrayLike) -> float:
     tokens, and discarding the mass outside them systematically
     *underestimates* the true entropy. Hence "truncated" in every name that
     uses it - never call it predictive entropy.
+
+    A candidate reported at logprob -inf has p = 0 and contributes nothing,
+    since p * log(p) -> 0 as p -> 0. It is dropped before the sum, because
+    computing 0 * log(0) directly gives NaN.
     """
     logprobs_arr = np.asarray(logprobs, dtype=float)
     probs = np.exp(logprobs_arr)
     probs = probs / probs.sum()
+    probs = probs[probs > 0]
     return float(-np.sum(probs * np.log(probs)))
 
 
@@ -205,7 +210,7 @@ def mce(
 
 
 def brier(confidences: npt.ArrayLike, correct: npt.ArrayLike) -> float:
-    """Brier score: BS = mean((confidence_i - correct_i)^2), lower is better.
+    """Brier (1950) score: BS = mean((confidence_i - correct_i)^2), lower is better.
 
     A strictly proper scoring rule - a judge minimizes it only by reporting
     its true probability of being correct, which accuracy doesn't reward.
@@ -235,7 +240,9 @@ def brier_decomposition(
 
     The reconstruction equals brier() exactly only for discrete signals;
     for quantile-binned continuous ones it is close but not exact
-    (within-bin variation is lost to binning).
+    (within-bin variation is lost to binning; Stephenson et al., 2008,
+    name this gap as two extra within-bin components that this function
+    does not compute).
 
     Returns (reliability, resolution, uncertainty).
     """

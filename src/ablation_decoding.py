@@ -9,6 +9,9 @@ Writes {runs_dir}/ablation_decoding.jsonl, one row per (item,
 decoding_mode). Both arms are later scored by the unmodified strict parser
 in parse.py - whether free-form text still satisfies it is exactly what
 the parse rate measures.
+
+`load_ablation_calls()` is the parsing step for this checkpoint, kept in
+src/ so analysis code never reads raw model output (invariant 7).
 """
 
 import argparse
@@ -20,9 +23,29 @@ import pandas as pd
 
 from src.config import Config
 from src.judge import VERDICT_SCHEMA, CallSpec, _build_prompts, git_sha, load_full_items_df
+from src.parse import parse_verdict_and_confidence
 from src.prompts import prompt_hash
 
 DECODING_MODES = ("constrained", "free_form")
+
+
+def load_ablation_calls(checkpoint_path: str | Path) -> pd.DataFrame:
+    """ablation_decoding.jsonl -> one row per (item, decoding_mode): the
+    item_id, the decoding_mode, and the production parser's verdict,
+    confidence and failure fields. The raw output itself is not returned.
+    """
+    records = []
+    with open(checkpoint_path, "r", encoding="utf-8") as f:
+        for line in f:
+            row = json.loads(line)
+            records.append(
+                {
+                    "item_id": row["item_id"],
+                    "decoding_mode": row["decoding_mode"],
+                    **parse_verdict_and_confidence(row["raw_output"]),
+                }
+            )
+    return pd.DataFrame.from_records(records)
 
 
 def sample_ablation_items(config: Config, n_items: int) -> pd.DataFrame:

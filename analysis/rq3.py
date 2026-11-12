@@ -28,7 +28,7 @@ import pandas as pd
 from analysis.rq1 import CALIBRATION_FORM, SIGNALS, load_rq1_items
 from src.boot import cluster_bootstrap, paired_cluster_bootstrap
 from src.config import Config
-from src.metrics import auroc_error, brier, ece, overconfidence_gap
+from src.metrics import auroc_error, brier, cohens_kappa, ece, overconfidence_gap
 from src.plots import judge_name, plot_confidence_gap, plot_verbosity_deltas
 
 RQ3B_SIGNALS = ["conf_verb", "conf_lp", "conf_bpe"]  # conf_sc dropped, D21
@@ -124,15 +124,20 @@ def compute_signal_rq3b_metrics(
     n_bins: int,
     seed: int,
     calibration_col: str | None = None,
+    verdict_col: str | None = "judge_verdict",
 ) -> dict:
     """Paired cluster-bootstrap deltas (verbose - clean) in ECE, accuracy,
-    and AUROC for one signal, plus each side's real value. A positive ΔECE
-    means worse calibration under verbose; a negative ΔAUROC means the
-    signal is less informative about errors.
+    AUROC, the overconfidence gap, Brier and Cohen's kappa for one signal,
+    plus each side's real value and each side's ECE bin count (invariants
+    4-6). A positive ΔECE means worse calibration under verbose; a negative
+    ΔAUROC means the signal is less informative about errors.
 
     ECE is computed on `calibration_col` (default: `signal` itself), AUROC
     on `signal` - an entropy signal ranks errors but needs its probability
-    form for calibration (rq1.CALIBRATION_FORM).
+    form for calibration (rq1.CALIBRATION_FORM). Kappa scores `verdict_col`
+    against `human_label`; pass verdict_col=None where a side has rows with
+    no verdict (rq7's survivorship fills), since kappa needs a label on
+    every row and the kappa columns are then left out.
     """
     calibration_col = calibration_col or signal
 
@@ -155,11 +160,18 @@ def compute_signal_rq3b_metrics(
     def _brier(df: pd.DataFrame) -> float:
         return brier(df[calibration_col].to_numpy(dtype=float), df[correct_col].to_numpy())
 
-    result = {}
-    for name, fn in [
+    def _kappa(df: pd.DataFrame) -> float:
+        return cohens_kappa(df[verdict_col].to_numpy(), df["human_label"].to_numpy())
+
+    metric_fns = [
         ("ece", _ece), ("accuracy", _accuracy), ("auroc", _auroc),
         ("overconfidence_gap", _overconfidence_gap), ("brier", _brier),
-    ]:
+    ]
+    if verdict_col is not None:
+        metric_fns.append(("kappa", _kappa))
+
+    result = {}
+    for name, fn in metric_fns:
         diff, ci_low, ci_high = paired_cluster_bootstrap(
             verbose_items, clean_items, fn, "question_id", n=2000, seed=seed
         )
@@ -168,6 +180,11 @@ def compute_signal_rq3b_metrics(
         result[f"delta_{name}_verbose_minus_clean"] = diff
         result[f"delta_{name}_ci_low"] = ci_low
         result[f"delta_{name}_ci_high"] = ci_high
+
+    for side, df in [("clean", clean_items), ("verbose", verbose_items)]:
+        _, result[f"ece_n_effective_bins_{side}"] = ece(
+            df[calibration_col].to_numpy(), df[correct_col].to_numpy(), n_bins
+        )
 
     return result
 

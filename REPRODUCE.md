@@ -11,7 +11,7 @@ the second half was checked from a fresh clone, as described below.
 ## What you need
 
 - Python 3.11.
-- The judge checkpoints in `runs/`, about 1.6 GB. They are gitignored, so a clone does not include them. They are published as the Hugging Face dataset [`shubhamsengupta/judge-calibration-runs`](https://huggingface.co/datasets/shubhamsengupta/judge-calibration-runs) under CC BY 4.0. See [Getting the checkpoints](#getting-the-checkpoints).
+- The judge checkpoints in `runs/`, about 1.6 GB. They are gitignored, so a clone does not include them. They are published as the Hugging Face dataset [`shubhamsengupta/judge-calibration-runs`](https://huggingface.co/datasets/shubhamsengupta/judge-calibration-runs) under CC BY 4.0, and the auto-j outputs in them also stay under the Llama 2 Community License (see [LICENSE](LICENSE)). See [Getting the checkpoints](#getting-the-checkpoints).
 - The MT-Bench human judgments (`lmsys/mt_bench_human_judgments`). `src.data` downloads them from Hugging Face on the first run. `analysis.demo_bundle` then reads them offline from the local cache.
 
 ## Getting the checkpoints
@@ -155,3 +155,12 @@ Because the NUTS seeds are fixed, the Bayesian results came out bit-identical on
 - **Figure wording:** titles and legends were brought in line with the report's current stance. Each figure's own task was rerun: `rq4` (`h4`, `calibration`, `bayesian_comparison`), `rq3`, `human_disagreement`, `rq6`/`rq7` (`position_swap`, and `verbosity` for rq7) and `auto_accept`. Only figure files changed; every CSV is byte-identical.
 - **Padding tables:** the RQ3 table gained the bin-free padding deltas (overconfidence gap, Brier) that REPORT quotes. So did the three tables built with the same function (`rq6_verbosity`, `rq7_verbosity`, `rq7_survivorship`). Every existing column is unchanged. The auto-j padding figure's title now reads its no-verdict rate from the data rather than from a fixed number.
 - **Three-judge figure:** `analysis.compare_judges` was rerun after a title correction. The old title, "same items", wrongly implied the three judges share a population. Only `judge_comparison.png` and its dark copy changed; `judge_comparison.csv` is byte-identical.
+
+**Reruns after D35 (12 November 2026).** The full CPU command sequence, from `src.signals` to `analysis.site_data`, was rerun in place on the original machine. Every step exited with code 0.
+- **Values that moved:** the CoT-entropy fix changed one Tier C feature on 2 items. That moved `rq4_ablation_null_full` and `rq4_ablation_progression_full` by at most 0.0011, and `rq4_coefficients` by at most 0.048. The same 8 of 37 coefficients clear zero. The all-tiers meta-model's out-of-fold ECE moved from 0.0357 to 0.0335 and its pooled AUROC from 0.7986 to 0.7989. The RQ4 coefficient figures and the meta-model reliability diagram were redrawn.
+- **Columns added, existing values unchanged:**
+  - a bin count on nine tables;
+  - κ and Δκ on the four padding tables;
+  - accuracy and κ on `rq6_calibration` and `rq7_calibration`;
+  - `p_wrong_minus_error_rate` on `rq4_bayesian_comparison` and `rq5_distillation`.
+- **What stayed the same:** every other tracked output was byte-identical, including `site/data/`. `pytest` passed in full (327 tests, with the browser tests excluded). A fresh-clone run was not repeated.

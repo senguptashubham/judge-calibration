@@ -42,6 +42,14 @@ def test_truncated_entropy_hand_computed_renormalizes_truncated_mass():
     assert truncated_entropy(logprobs) == pytest.approx(expected)
 
 
+def test_truncated_entropy_zero_probability_candidate_contributes_nothing():
+    # A top-K candidate with logprob -inf has p = 0, and 0 * log 0 = 0 by
+    # the limit, so the result equals the entropy without that candidate.
+    logprobs = [np.log(0.6), np.log(0.4), -np.inf]
+    expected = -(0.6 * np.log(0.6) + 0.4 * np.log(0.4))
+    assert truncated_entropy(logprobs) == pytest.approx(expected)
+
+
 def test_ece_reference():
     # CONTRIBUTING.md sec 5's hand-computed case: two bins,
     # (conf 0.9, acc 0.75, weight 0.4) and (conf 0.6, acc 0.33, weight 0.6)

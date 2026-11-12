@@ -22,12 +22,32 @@ SOFTWARE.
 
 ---
 
-The code in this repository is licensed under the MIT License above. The
-written material and figures (REPORT.md, README.md, results/figures/ and the
-text of the site in site/) are licensed under Creative Commons Attribution 4.0
-International (CC BY 4.0): https://creativecommons.org/licenses/by/4.0/
+The code in this repository is licensed under the MIT License above.
 
-Third-party material keeps its own licence: the MT-Bench human judgments data
-(CC BY 4.0), the fonts in site/fonts/ (SIL Open Font License 1.1, licence texts
-alongside), and the judge models whose recorded outputs appear here (see
-README.md).
+The written material, figures and result tables are licensed under Creative
+Commons Attribution 4.0 International (CC BY 4.0):
+https://creativecommons.org/licenses/by/4.0/
+This covers REPORT.md, README.md, DECISIONS.md, REPRODUCE.md, CONTRIBUTING.md,
+PREREGISTRATION.md, GLOSSARY.md, docs/ (except the third-party figure listed
+below), results/figures/, the tables in results/*.csv, and the text and data
+of the site in site/.
+
+The judges' recorded outputs, published as the Hugging Face dataset
+shubhamsengupta/judge-calibration-runs and shown in the site's data, are
+released under CC BY 4.0 to the extent the author holds rights in them. They
+remain subject to the licences of the models that produced them:
+- Qwen2.5-7B-Instruct and kev-8b: Apache License 2.0;
+- auto-j-13b: built on Llama 2 and released by its authors under the Llama 2
+  Community License. That licence forbids using Llama 2's outputs to improve
+  any other large language model, except Llama 2 and its derivative works
+  (section 1.b.v). Anyone reusing the auto-j outputs must follow it.
+
+Third-party material keeps its own licence:
+- the MT-Bench human judgments data, including the questions and answers it
+  contains (CC BY 4.0; Zheng et al., 2023). The padded answers are a
+  modification made for this study;
+- docs/glossary/scope_figure1.png, Figure 1 of Badshah, Emami and Sajjad,
+  "SCOPE: Selective Conformal Optimized Pairwise LLM Judging" (2026),
+  arXiv:2602.13110, CC BY 4.0;
+- the fonts in site/fonts/ (SIL Open Font License 1.1, licence texts
+  alongside).

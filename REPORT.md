@@ -795,7 +795,7 @@ on all items, but neither interval excludes zero: the data allow a gain of up to
 about 0.03–0.05 and rule out a loss larger than about 0.01. Surface features (Tier
 B) add nothing detectable on either population. Token-level features (Tier C) add
 nothing on the agreed items and make the model slightly but significantly worse on
-all items (−0.006 to −0.009). The coefficient analysis agrees: of 37 features in a
+all items (−0.006 to −0.010). The coefficient analysis agrees: of 37 features in a
 model containing all three tiers, only 8 have a coefficient whose CI clears zero,
 and **none of Tier C's 13 is among them.**
 
@@ -867,10 +867,10 @@ same progression was run on the full base (`rq4_ablation_progression_full_qwen2.
 |---|---|---|---|
 | logreg | A − baseline | +0.0139 | [−0.0005, 0.0296] |
 | logreg | B − A | −0.0046 | [−0.0161, 0.0075] |
-| logreg | C − B | **−0.0057** | **[−0.0104, −0.0008]** |
+| logreg | C − B | **−0.0055** | **[−0.0103, −0.0006]** |
 | histgbm | A − baseline | +0.0038 | [−0.0087, 0.0167] |
 | histgbm | B − A | +0.0067 | [−0.0022, 0.0170] |
-| histgbm | C − B | **−0.0094** | **[−0.0162, −0.0034]** |
+| histgbm | C − B | **−0.0102** | **[−0.0170, −0.0040]** |
 
 The picture is the same with one addition. Tier A logistic regression again sits
 just above the best signal, with an interval that only just reaches zero.
@@ -998,11 +998,13 @@ together (not one call per feature, which would both refit ~37× more than
 necessary and wrongly treat correlated features' bootstrap draws as
 independent).*
 
-**Calibration: ECE 0.0357 (10 effective bins) on the out-of-fold predictions
-averaged over the 10 repeats, whose AUROC is 0.7986** (this pools fold models, so
-it is not comparable with the per-fold AUROCs above) — reasonably
-well-calibrated, with the reliability curve sitting a little below the
-diagonal (mild overconfidence about `P(wrong)`) in the 0.4–0.7 range.
+**Calibration: ECE 0.0335 (10 effective bins) on the out-of-fold predictions
+averaged over the 10 repeats, whose AUROC is 0.7989** (this pools fold models, so
+it is not comparable with the per-fold AUROCs above) — well calibrated, with the
+reliability curve close to the diagonal throughout: slightly above it below 0.4
+(it predicts a few fewer errors than occur), on it near 0.55, and below it only in
+the top bin, around 0.7 (more errors predicted than occur). On average the two
+balance: mean predicted `P(wrong)` minus the observed error rate is +0.0006.
 
 **Coefficients: 8 of 37 have a CI excluding zero — 5/8 in Tier A, 3/16 in
 Tier B, 0/13 in Tier C.** This complements the tier ablation rather than
@@ -1010,12 +1012,17 @@ repeating it. A coefficient measures whether a feature carries weight in a model
 fit to all the data; the ablation measures whether adding a whole tier improves
 ranking on held-out questions. Three Tier B features carry real weight in-sample,
 yet the tier adds nothing detectable out of sample, so whatever they encode
-largely overlaps what Tier A already has. The individual features: `conf_verb`, `conf_sc`, `conf_ens`
-(and its exact algebraic mirror, `ens_entropy_total` — the pair is
-perfectly collinear, `conf_ens = 1 - ens_entropy_total`, so standardization
-splits one real effect into two equal-and-opposite coefficients, not two
-independent findings), and `ens_entropy_aleatoric` carry real, non-zero
-weight from Tier A. From Tier B: `abs_len_diff`, `longer_is_chosen`, and
+largely overlaps what Tier A already has. The individual features from Tier A:
+`conf_verb`, `conf_sc`, and three members of the prompt-ensemble family, `conf_ens`,
+`ens_entropy_total` and `ens_entropy_aleatoric`. Those three are not three findings.
+The four ensemble columns hold only two independent signals, because two identities
+hold exactly: `conf_ens = 1 − ens_entropy_total`, and `ens_entropy_total =
+ens_entropy_aleatoric + ens_entropy_epistemic`. The data cannot tell the members
+apart, so how the weight is split among them is set by the regularization, not by
+the evidence, and no single coefficient in the family can be read on its own. The
+equal-and-opposite `conf_ens`/`ens_entropy_total` pair is the visible sign of this.
+What the coefficients support is that the ensemble family carries weight, alongside
+`conf_verb` and `conf_sc`: three distinct Tier A signals, not five. From Tier B: `abs_len_diff`, `longer_is_chosen`, and
 `category_reasoning` (negative — the `reasoning` category's own dummy). From
 Tier C: **nothing** — not one of the 13 CoT/token-distribution features
 clears zero, at the coefficient level, exactly matching the tier-level
@@ -1599,8 +1606,9 @@ why that one was excluded entirely rather than just noted). D22's proper
 - the flagged fits above are the cost of that correlation, not a failure
 of it. The check also
 never interprets individual coefficients (unlike this project's own
-`conf_ens`/`ens_entropy_total` collinearity, D20, where that really would
-have split one effect into two misleading numbers) — it only compares
+prompt-ensemble columns, D20, where `conf_ens = 1 − ens_entropy_total` and
+`ens_entropy_total = ens_entropy_aleatoric + ens_entropy_epistemic` really do
+split one effect into several misleading numbers) — it only compares
 holistic AUROC, a comparison correlated features don't invalidate. Two
 signals built from largely overlapping information having limited
 independent value to combine is the expected, coherent outcome, not a
@@ -2499,6 +2507,9 @@ entropy AURCs are not affected: those signals have almost no exact ties.
 
 - Badshah, S., Emami, A. and Sajjad, H. (2026). SCOPE: selective conformal
   optimized pairwise LLM judging. ICML 2026. arXiv:2602.13110.
+- Brier, G. W. (1950). Verification of forecasts expressed in terms of
+  probability. Monthly Weather Review 78(1), 1–3.
+  doi:10.1175/1520-0493(1950)078<0001:VOFEIT>2.0.CO;2.
 - Forman, G. and Scholz, M. (2010). Apples-to-apples in cross-validation studies:
   pitfalls in classifier performance measurement. ACM SIGKDD Explorations
   Newsletter 12(1), 49–57. doi:10.1145/1882471.1882479.
@@ -2512,12 +2523,18 @@ entropy AURCs are not affected: those signals have almost no exact ties.
   judge for evaluating alignment (auto-j). ICLR 2024. arXiv:2310.05470.
 - Li, Y., Miao, Y., Krishnan, R. and Padman, R. (2026). JEV-as-a-Judge: accept
   when confident, escalate when unsure. arXiv:2609.26550.
+- Murphy, A. H. (1973). A new vector partition of the probability score. Journal
+  of Applied Meteorology 12(4), 595–600.
+  doi:10.1175/1520-0450(1973)012<0595:ANVPOT>2.0.CO;2.
 - Norman, J. D., Rivera, M. U. and Hughes, D. A. (2026). Reliability without
   validity: a systematic, large-scale evaluation of LLM-as-a-judge models across
   agreement, consistency, and bias. arXiv:2606.19544.
 - Shi, L., Ma, C., Liang, W., Diao, X., Ma, W. and Vosoughi, S. (2025). Judging
   the judges: a systematic study of position bias in LLM-as-a-judge. IJCNLP-AACL
   2025. arXiv:2406.07791.
+- Stephenson, D. B., Coelho, C. A. S. and Jolliffe, I. T. (2008). Two extra
+  components in the Brier score decomposition. Weather and Forecasting 23(4),
+  752–757. doi:10.1175/2007WAF2006116.1.
 - Tian, Z., Han, Z., Chen, Y., Xu, H., Yang, X., Xuan, R., Wang, H. and Liao, L.
   (2025). Overconfidence in LLM-as-a-judge: diagnosis and confidence-driven
   solution. AAAI 2026. arXiv:2508.06225.

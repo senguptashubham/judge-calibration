@@ -193,7 +193,9 @@ def verdict_bidir_autoj(rows: list[dict], k_sc: int) -> str | None:
 def conf_sc_autoj(rows: list[dict], k_sc: int) -> float | None:
     """Fraction of the k_sc sampled AB calls whose raw `pred_label` equals
     the greedy AB call's - D6's conf_sc. All calls share the AB frame, so no
-    translation is needed, and Tie==Tie counts as agreement. None on
+    translation is needed, and Tie==Tie counts as agreement. A parse
+    failure (-1) stays in the denominator and so counts as a mismatch
+    against a real verdict, as in signals.py::conf_sc (D35). None on
     verbose, where no sampled draws exist.
     """
     canonical = _find_call(rows, "AB", 0)

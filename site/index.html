@@ -3,7 +3,8 @@
   Do LLM Judges Know When They're Wrong?
   Built by Shubham Sengupta - https://github.com/senguptashubham - https://www.linkedin.com/in/senguptashubham/
   Source: https://github.com/senguptashubham/judge-calibration
-  Code MIT, text and figures CC BY 4.0 (c) 2026 Shubham Sengupta. Keep this credit when reusing.
+  Code MIT; text, figures and data CC BY 4.0 (c) 2026 Shubham Sengupta. Keep this credit when reusing.
+  The judges' recorded outputs also stay under their models' licences; see LICENSE in the source repository.
 -->
 <html lang="en">
 <head>
@@ -263,8 +264,8 @@
     <p class="byline">Built by <b>Shubham Sengupta</b> &middot; <a href="https://github.com/senguptashubham">GitHub</a> &middot;
       <a href="https://www.linkedin.com/in/senguptashubham/">LinkedIn</a></p>
     <p>Source, full report and data build: <a href="https://github.com/senguptashubham/judge-calibration">github.com/senguptashubham/judge-calibration</a>.
-      Code under the MIT licence; text and figures under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>,
-      &copy; 2026 Shubham Sengupta.</p>
+      Code under the MIT licence; text, figures and data under <a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>,
+      &copy; 2026 Shubham Sengupta, except where noted below.</p>
     <ul>
       <li><b>Comparisons and human votes:</b>
         <a href="https://huggingface.co/datasets/lmsys/mt_bench_human_judgments">lmsys/mt_bench_human_judgments</a>,
@@ -274,8 +275,11 @@
       <li><b>Judges:</b>
         <a href="https://huggingface.co/Qwen/Qwen2.5-7B-Instruct">Qwen2.5-7B-Instruct</a> (Apache-2.0),
         <a href="https://huggingface.co/jaredpalmer/kev-8b">kev-8b</a> (Apache-2.0),
-        <a href="https://huggingface.co/GAIR/autoj-13b-GPTQ-4bits">auto-j-13b, GPTQ 4-bit</a> (Llama 2 based; Li et al.,
-        <i>Generative Judge for Evaluating Alignment</i>, ICLR 2024). Only their recorded outputs appear here.
+        <a href="https://huggingface.co/GAIR/autoj-13b-GPTQ-4bits">auto-j-13b, GPTQ 4-bit</a> (Li et al.,
+        <i>Generative Judge for Evaluating Alignment</i>, ICLR 2024; built on Llama 2, under the
+        <a href="https://ai.meta.com/llama/license/">Llama 2 Community License</a>). Only their recorded outputs appear
+        here, and they stay under each model's licence: auto-j's may not be used to improve another large language model
+        other than Llama 2 and its derivatives.
         kev-8b is an open stand-in, and its results are not results about any commercial system.</li>
       <li><b>Order-swap signal:</b> Bidirectional Preference Entropy, from Badshah, Emami and Sajjad,
         <a href="https://arxiv.org/abs/2602.13110"><i>SCOPE: Selective Conformal Optimized Pairwise LLM Judging</i></a>

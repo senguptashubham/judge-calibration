@@ -32,7 +32,9 @@ colorTo: red
 sdk: static
 app_file: index.html
 pinned: false
-license: mit
+license: other
+license_name: mit-and-cc-by-4.0
+license_link: {REPO_URL}/blob/main/LICENSE
 short_description: Do LLM judges know when they're wrong? Try to trick them.
 tags:
   - llm-as-a-judge
@@ -62,9 +64,14 @@ Nothing is generated live.
 
 **Licences:**
 - **Code:** MIT.
-- **Text and figures:** CC BY 4.0.
-- **Data:** [lmsys/mt_bench_human_judgments](https://huggingface.co/datasets/lmsys/mt_bench_human_judgments),
-  CC BY 4.0 (Zheng et al., NeurIPS 2023).
+- **Text, figures and data:** CC BY 4.0, except where noted below.
+- **Comparisons and human votes:** [lmsys/mt_bench_human_judgments](https://huggingface.co/datasets/lmsys/mt_bench_human_judgments),
+  CC BY 4.0 (Zheng et al., NeurIPS 2023). Padded answers are a modification made for this study.
+- **Judges' recorded outputs:** also stay under each model's licence: Qwen2.5-7B-Instruct and kev-8b
+  Apache-2.0; auto-j-13b is built on Llama 2, and under the
+  [Llama 2 Community License](https://ai.meta.com/llama/license/) its outputs may not be used to improve
+  another large language model other than Llama 2 and its derivatives.
+- **Full terms:** [LICENSE]({REPO_URL}/blob/main/LICENSE).
 - **Fonts:** Inter and JetBrains Mono, SIL OFL 1.1 (licence texts in `fonts/`).
 """
 

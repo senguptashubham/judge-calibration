@@ -85,6 +85,11 @@ def conf_sc(rows: list[dict], k_sc: int) -> float | None:
     """Fraction of the k_sc sampled AB verdicts that match the canonical
     greedy verdict. Sampling only exists for (clean, P1) (D19, D21), so
     this is None everywhere else rather than a fabricated 0 or 1.
+
+    A sampled draw that produced no verdict stays in the denominator and
+    counts as a mismatch: the judge failed to reproduce its verdict, and
+    dropping the draw would score the item as more consistent than it was
+    (D35).
     """
     canonical = _find_call(rows, "AB", 0)
     if canonical is None:

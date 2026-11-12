@@ -310,10 +310,13 @@ GitHub's "Cite this repository" button gives the same in APA and BibTeX
 ## License and credits
 
 - **Code:** [MIT](LICENSE), © 2026 Shubham Sengupta.
-- **Text and figures** (`REPORT.md`, this README, `results/figures/`, the
-  site's writing): [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/),
+- **Text, figures and result tables** (`REPORT.md`, this README, the other
+  Markdown documents, `docs/`, `results/figures/`, `results/*.csv`, the site's
+  writing and data): [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/),
   © 2026 Shubham Sengupta. Reuse is welcome with credit to the author and a link to this
-  repository.
+  repository. The glossary's SCOPE diagram is Figure 1 of Badshah, Emami and
+  Sajjad (2026, [arXiv:2602.13110](https://arxiv.org/abs/2602.13110)), used
+  under its CC BY 4.0 licence.
 - **Data:** the comparisons and human votes are
   [`lmsys/mt_bench_human_judgments`](https://huggingface.co/datasets/lmsys/mt_bench_human_judgments),
   licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/), from Zheng
@@ -321,13 +324,19 @@ GitHub's "Cite this repository" button gives the same in APA and BibTeX
   2023). The site shows the questions and answers as published; the padded
   answers are a modification made for this study. The judges' raw outputs
   ([`judge-calibration-runs`](https://huggingface.co/datasets/shubhamsengupta/judge-calibration-runs))
-  are released under the same licence.
+  are released under CC BY 4.0 as far as the author holds rights in them, and
+  stay subject to the licences of the judges that produced them (below).
 - **Judges:**
   [Qwen2.5-7B-Instruct](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct) (Apache-2.0),
   [kev-8b](https://huggingface.co/jaredpalmer/kev-8b) (Apache-2.0) and
   [auto-j-13b GPTQ 4-bit](https://huggingface.co/GAIR/autoj-13b-GPTQ-4bits)
-  (Llama 2 based; Li et al., *Generative Judge for Evaluating Alignment*, ICLR
-  2024). Only their recorded outputs are shown.
+  (Li et al., *Generative Judge for Evaluating Alignment*, ICLR 2024), built on
+  Llama 2 and released under the
+  [Llama 2 Community License](https://ai.meta.com/llama/license/). That licence
+  forbids using its outputs to improve any other large language model, except
+  Llama 2 and its derivatives (§1.b.v), so the same applies to auto-j's recorded
+  outputs here. Only the judges' recorded outputs are shown; no weights are
+  redistributed.
 - **Fonts on the site:** [Inter](https://github.com/rsms/inter) and
   [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), both under the
   SIL Open Font License 1.1 (licence texts in `site/fonts/`).

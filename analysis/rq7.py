@@ -129,8 +129,10 @@ def main_calibration(config_path: str) -> None:
             )
             rows.append({"turn": turn, "signal": signal, "n": len(signal_items), **metrics})
             print(
-                f"  turn={turn}/{signal} (n={len(signal_items)}): ECE={metrics['ece']:.4f} "
-                f"[{metrics['ece_ci_low']:.4f}, {metrics['ece_ci_high']:.4f}], "
+                f"  turn={turn}/{signal} (n={len(signal_items)}): "
+                f"accuracy={metrics['accuracy']:.4f}, kappa={metrics['kappa']:.4f}, ECE={metrics['ece']:.4f} "
+                f"[{metrics['ece_ci_low']:.4f}, {metrics['ece_ci_high']:.4f}] "
+                f"({metrics['ece_n_effective_bins']} bins), "
                 f"overconfidence_gap={metrics['overconfidence_gap']:.4f} "
                 f"[{metrics['overconfidence_gap_ci_low']:.4f}, {metrics['overconfidence_gap_ci_high']:.4f}], "
                 f"AUROC={metrics['auroc']:.4f} [{metrics['auroc_ci_low']:.4f}, {metrics['auroc_ci_high']:.4f}]"
@@ -342,8 +344,11 @@ def main_survivorship(config_path: str) -> None:
         ]
 
         for name, clean_t, verbose_t, filled in populations:
+            # A filled row has no verdict, so kappa is defined only on the
+            # answered items (see REPORT, survivorship check).
+            verdict_col = "judge_verdict" if name == "answered_only" else None
             metrics = compute_signal_rq3b_metrics(
-                clean_t, verbose_t, signal, "correct", config.n_bins, config.seed, prob_col
+                clean_t, verbose_t, signal, "correct", config.n_bins, config.seed, prob_col, verdict_col
             )
             rows.append({"turn": turn, "population": name, "n": len(clean_t), "n_filled": filled, **metrics})
             print(
